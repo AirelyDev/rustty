@@ -34,6 +34,12 @@
 #     shard           the runner takes `--shard K/N` (G-VALGRIND): in a parallel
 #                     run it is split into CI_VALGRIND_SHARDS heavy units.
 #     scope=<how>     what `--changed-since` passes to the gate (see below).
+#     tier=<t>        REQUIRED, exactly once: `parity` (the gate exists because
+#                     Rustty tracks the Ghostty oracle) or `product` (generic
+#                     project CI); ci.sh's registry comment has the rule. Not a
+#                     lock. `--tier T` runs only tier T's gates and names the
+#                     others as skipped; ci_registry_check refuses an entry with
+#                     no tier, two, or an unknown one (exit 2).
 #
 # --jobs 1 runs the gates through ci.sh's streaming `run_gate`, in registry
 # order, exactly as before; --jobs N (N > 1) runs this scheduler. Bash 3.2
@@ -74,7 +80,7 @@ trait_mutex() {
   local IFS=,
   for t in $1; do
     case "$t" in
-      -|shard|exclusive|after=*|scope=*) ;;
+      -|shard|exclusive|after=*|scope=*|tier=*) ;;
       dir=*) echo "dir:${t#dir=}" ;;
       *) echo "$t" ;;
     esac
@@ -267,6 +273,7 @@ ci_scope_table() {
     case "${GS_STATE[$i]}" in
       out) printf '  %-12s scoped out — %s\n' "${GS_ID[$i]}" "${GS_NOTE[$i]}" ;;
       skip) printf '  %-12s skipped by --fast\n' "${GS_ID[$i]}" ;;
+      tier) printf '  %-12s skipped by --tier %s\n' "${GS_ID[$i]}" "$CI_TIER" ;;
       *) if [ "${GS_NARROWED[$i]}" = 1 ]; then
            printf '  %-12s narrowed — %s%s\n' "${GS_ID[$i]}" "${GS_NOTE[$i]}" "${GS_ARGS[$i]:+ (args: ${GS_ARGS[$i]})}"
          else printf '  %-12s full run%s\n' "${GS_ID[$i]}" "${GS_NOTE[$i]:+ — ${GS_NOTE[$i]}}"; fi ;;
@@ -317,6 +324,12 @@ ci_target_dir() {  # ci_target_dir NAME -> the path, created with its marker
   local d="$CI_TARGET_ROOT/$1"
   if [ ! -d "$d" ]; then mkdir -p "$d" && : > "$d/$CI_TARGET_MARK"; fi
   echo "$d"
+}
+ci_rc_word() {  # ci_rc_word RC -> why a gate's dir is kept
+  case "$1" in ''|*[!0-9]*) echo "ended with no recorded exit code"; return 0 ;; esac
+  if [ "$1" -eq 3 ]; then echo "ended BLOCKED (exit 3)"
+  elif [ "$1" -ge 128 ]; then echo "was killed (exit $1)"
+  else echo "ended RED (exit $1)"; fi
 }
 ci_prune_target() {  # ci_prune_target NAME
   local name="$1" d
@@ -375,10 +388,38 @@ ci_collect() {
       WARN) WARNINGS+=("${GS_TEXT[$i]}") ;;
       FAIL) HARD_FAILURES+=("${GS_TEXT[$i]}") ;;
       SKIP) SKIPPED_GATES+=("${GS_ID[$i]}") ;;
+      TIER) TIER_SKIPPED+=("${GS_ID[$i]} (${GS_TIER[$i]})") ;;
       SCOPED) SCOPED_GATES+=("${GS_TEXT[$i]}") ;;
       OUT) SCOPED_OUT+=("${GS_TEXT[$i]}") ;;
     esac
   done
+}
+
+# ---- the registry check -------------------------------------------------------
+# ci_registry_check — every GATE_REGISTRY entry is ID|KIND|RES|TRAITS|runner,
+# with a dispatched KIND, a known RES and exactly one valid tier. Prints each
+# bad entry; returns 1 when any is bad. ci.sh calls it before the cargo steps
+# (a malformed registry must not cost a cargo build first) and ci_plan again.
+tier_scan() {  # tier_scan TRAITS -> TS_N (how many tier= tokens), TS_VAL (the last)
+  local t
+  local IFS=,
+  TS_N=0; TS_VAL=""
+  for t in $1; do case "$t" in tier=*) TS_N=$((TS_N + 1)); TS_VAL="${t#tier=}" ;; esac; done
+}
+ci_registry_check() {
+  local entry gid gkind gres gtraits grun ntier tier bad=0
+  for entry in "${GATE_REGISTRY[@]}"; do
+    IFS='|' read -r gid gkind gres gtraits grun <<< "$entry"
+    case "$gres" in light|heavy) ;; *) echo "ci.sh: registry entry '$gid' has RES '$gres' (want light|heavy)" >&2; bad=1 ;; esac
+    in_words "$gkind" "$CI_PHASES" || { echo "ci.sh: registry entry '$gid' has KIND '$gkind', which no dispatch phase runs (known: $CI_PHASES)" >&2; bad=1; }
+    if [ -z "$gtraits" ] || [ -z "$grun" ]; then echo "ci.sh: registry entry '$gid' is not ID|KIND|RES|TRAITS|runner" >&2; bad=1; continue; fi
+    tier_scan "$gtraits"; ntier="$TS_N"; tier="$TS_VAL"
+    if [ "$ntier" -eq 0 ]; then echo "ci.sh: registry entry '$gid' has no tier= trait (want exactly one of tier=parity, tier=product)" >&2; bad=1
+    elif [ "$ntier" -gt 1 ]; then echo "ci.sh: registry entry '$gid' has $ntier tier= traits (want exactly one)" >&2; bad=1
+    else case "$tier" in parity|product) ;; *) echo "ci.sh: registry entry '$gid' has tier '$tier' (want parity|product)" >&2; bad=1 ;; esac
+    fi
+  done
+  return "$bad"
 }
 
 # ---- the plan ----------------------------------------------------------------
@@ -389,13 +430,12 @@ ci_plan() {
   local entry gid gkind gres gtraits grun n=0 phase i k nsh
   GS_ID=(); GS_KIND=(); GS_RES=(); GS_TRAITS=(); GS_RUN=(); GS_CAT=(); GS_TEXT=()
   GS_NARROWED=(); GS_NOTE=(); GS_ENV=(); GS_ARGS=(); GS_LEFT=(); GS_T0=(); GS_RCS=(); GS_STATE=()
-  GS_UNITS=(); GS_UNITLIST=(); GS_MUTEX=(); GS_AFTER=()
+  GS_UNITS=(); GS_UNITLIST=(); GS_MUTEX=(); GS_AFTER=(); GS_TIER=(); GS_FINAL_RC=()
   CI_ORDER=()
+  ci_registry_check || exit 2
   for entry in "${GATE_REGISTRY[@]}"; do
     IFS='|' read -r gid gkind gres gtraits grun <<< "$entry"
-    case "$gres" in light|heavy) ;; *) echo "ci.sh: registry entry '$gid' has RES '$gres' (want light|heavy)" >&2; exit 2 ;; esac
-    in_words "$gkind" "$CI_PHASES" || { echo "ci.sh: registry entry '$gid' has KIND '$gkind', which no dispatch phase runs (known: $CI_PHASES)" >&2; exit 2; }
-    [ -n "$gtraits" ] && [ -n "$grun" ] || { echo "ci.sh: registry entry '$gid' is not ID|KIND|RES|TRAITS|runner" >&2; exit 2; }
+    GS_TIER[n]="$(trait_val "$gtraits" tier)"
     GS_ID[$n]="$gid"; GS_KIND[$n]="$gkind"; GS_RES[$n]="$gres"; GS_TRAITS[$n]="$gtraits"; GS_RUN[$n]="$grun"
     GS_NARROWED[$n]=0; GS_NOTE[$n]=""; GS_ENV[$n]=""; GS_ARGS[$n]=""; GS_LEFT[$n]=0; GS_RCS[$n]=""; GS_STATE[$n]=pending
     GS_UNITS[$n]=0; GS_UNITLIST[$n]=""
@@ -414,6 +454,8 @@ ci_plan() {
   U_GATE=(); U_LABEL=(); U_XARGS=(); U_STATE=(); U_PID=(); U_T0=()
   local u=0
   for i in ${CI_ORDER[@]+"${CI_ORDER[@]}"}; do
+    # --tier: the other tier's gates are not run (named as skipped, exit 4).
+    if [ "$CI_TIER" != all ] && [ "${GS_TIER[$i]}" != "$CI_TIER" ]; then GS_STATE[i]=tier; continue; fi
     if skip_in_fast "${GS_ID[$i]}"; then GS_STATE[$i]=skip; continue; fi
     ci_gate_scope "${GS_TRAITS[$i]}" "${GS_RUN[$i]}"
     GS_NOTE[$i]="$SC_NOTE"; GS_ENV[$i]="$SC_ENV"; GS_ARGS[$i]="$SC_ARGS"
@@ -496,7 +538,7 @@ ci_unit_ready() {  # 0 when unit U may start now
   for dep in ${GS_AFTER[$i]}; do
     for di in ${CI_ORDER[@]+"${CI_ORDER[@]}"}; do
       [ "${GS_ID[$di]}" = "$dep" ] || continue
-      case "${GS_STATE[$di]}" in done|skip|out) ;; *) return 1 ;; esac
+      case "${GS_STATE[$di]}" in done|skip|out|tier) ;; *) return 1 ;; esac
     done
   done
   [ "${GS_MUTEX[$i]}" != " " ] || return 0
@@ -534,6 +576,7 @@ ci_gate_finish() {  # print gate I whole, classify it, record timings, prune
     esac
   done
   ci_classify "$i" "$rc" "$log"
+  GS_FINAL_RC[i]="$rc"
   echo "   (gate ${GS_ID[$i]}: ${secs}s)"
   ci_timing_row "${GS_ID[$i]}" "${GS_KIND[$i]}" "$rc" "$secs"
   GS_STATE[$i]="done"
@@ -543,6 +586,22 @@ ci_gate_finish() {  # print gate I whole, classify it, record timings, prune
       case "${GS_STATE[$other]}" in pending|running) ;; *) continue ;; esac
       [ "$(trait_val "${GS_TRAITS[$other]}" dir 2>/dev/null)" = "$dirname" ] && return 0
     done
+    # And only when every gate that used it ended GREEN (rc 0, i.e. all of its
+    # units rc 0). A RED, killed or BLOCKED gate is the one about to be rerun,
+    # and its build is the thing the rerun wants: in P8, killing G-VALGRIND's
+    # shards ended the gate and pruned ci-targets/valgrind, which the rerun
+    # then rebuilt from nothing.
+    local kept=""
+    for other in ${CI_ORDER[@]+"${CI_ORDER[@]}"}; do
+      [ "${GS_STATE[$other]}" = "done" ] || continue
+      [ "$(trait_val "${GS_TRAITS[$other]}" dir 2>/dev/null)" = "$dirname" ] || continue
+      [ "${GS_FINAL_RC[$other]:-}" = 0 ] && continue
+      kept="$kept${kept:+, }${GS_ID[$other]} $(ci_rc_word "${GS_FINAL_RC[$other]}")"
+    done
+    if [ -n "$kept" ]; then
+      echo "   (--prune-targets: kept $CI_TARGET_ROOT/$dirname: $kept; a rerun reuses its build)"
+      return 0
+    fi
     ci_prune_target "$dirname" || true
   fi
 }
@@ -550,10 +609,11 @@ ci_run_parallel() {
   local u i nrun nheavy progressed rcv fg
   CI_RUNNING=(); U_RC=(); U_END=(); U_RCF=()
   local scan=1 last_scan=0
-  # --fast / --changed-since lines first, in order: they run nothing.
+  # --fast / --tier / --changed-since lines first, in order: they run nothing.
   for i in ${CI_ORDER[@]+"${CI_ORDER[@]}"}; do
     case "${GS_STATE[$i]}" in
       skip) echo "### gate ${GS_ID[$i]}  [SKIPPED by --fast]"; GS_CAT[$i]=SKIP; ci_timing_row "${GS_ID[$i]}" "${GS_KIND[$i]}" skipped 0 ;;
+      tier) echo "### gate ${GS_ID[$i]}  [SKIPPED by --tier $CI_TIER: a ${GS_TIER[$i]} gate]"; GS_CAT[i]=TIER; ci_timing_row "${GS_ID[$i]}" "${GS_KIND[$i]}" skipped 0 ;;
       out) echo "### gate ${GS_ID[$i]}  [SCOPED OUT by --changed-since: ${GS_NOTE[$i]}]"; GS_CAT[$i]=OUT; GS_TEXT[$i]="${GS_ID[$i]} — ${GS_NOTE[$i]}"; ci_timing_row "${GS_ID[$i]}" "${GS_KIND[$i]}" scoped-out 0 ;;
     esac
   done
@@ -667,7 +727,11 @@ ci_on_signal() {
 #      tooling change is a full run (exit 0); SCOPED-GREEN vs plain BLOCKED.
 #      Control: the scoped banner removed (the run falls through to PASS).
 #   G  --fast still exits 4 and names its skips, serial and parallel.
-#   H  --prune-targets deletes only marked dirs under target/ci-targets.
+#   H  --prune-targets deletes only marked dirs under target/ci-targets, and
+#      only when every gate using the dir ended GREEN: a RED, a killed
+#      (rc >= 128) and a BLOCKED gate each keep theirs, with the reason, as
+#      does a dir shared by a RED and a GREEN gate. Control: a prune that
+#      ignores the verdict deletes the RED gate's dir.
 #   K  the heavy-start disk floor with a stubbed df: 1 GB free runs heavy
 #      gates one at a time, 100 GB in parallel. Control: floor check dropped.
 #   M  a wrapper killed before it records its rc is RED (exit 2), never a
@@ -676,6 +740,18 @@ ci_on_signal() {
 #      kinds run (exclusive PERF-FENCE/ARMED last, alone, in order). Control:
 #      a fixture registry with an unknown KIND fails the check and ci.sh
 #      refuses it (exit 2).
+#   T  tiers: every entry of the REAL GATE_REGISTRY has exactly one valid
+#      tier (parity|product); a fixture entry with none, two or an unknown one
+#      makes ci.sh refuse the registry (exit 2) before any gate or cargo step
+#      runs, each with a control that drops that check. --tier product runs
+#      no parity gate and --tier parity no product gate or cargo step, serial
+#      and parallel, each exiting 4 with the skips named and no PASS banner;
+#      the real registry's plan under each tier is the same split. Controls:
+#      the plan's tier filter dropped (a parity gate runs under --tier
+#      product); the tier banner dropped (the run reads PASS, exit 0).
+#   X  G-REL-LAT, the real registry entry: `exclusive`, and in a fixture run
+#      with its real KIND|RES|TRAITS it overlaps no other gate. Control: the
+#      same entry without `exclusive` runs beside the others.
 #   I  the harness: a mutation whose target no longer exists is a FAIL, and
 #      the fixture it leaves exits 99 (never a stale copy from a past run).
 CST_PASS=0; CST_FAIL=0; CST_BLOCKED=0
@@ -746,7 +822,11 @@ while [ "$#" -gt 0 ]; do
 done
 echo "S vg$k" >> "$root/events"
 echo "shard $k/$n jobs $j crates:${crates:- <default>} CTD=${CARGO_TARGET_DIR:-unset}"
-sleep 1
+# Staggered so the LAST shard to finish is shard N, deterministically: arm D's
+# control (the gate takes the last-finishing shard's rc) must see a green last
+# shard. With one fixed sleep the red shard 2 sometimes finished last on a
+# loaded host, and the control went unnoticed by chance.
+sleep "0.$((k * 3))"
 echo "E vg$k" >> "$root/events"
 [ "$(cat "$root/vg_fail" 2>/dev/null)" = "$k" ] && { echo "G-VALGRIND RED: shard $k"; exit 1; }
 echo "G-VALGRIND GREEN (shard $k/$n)"
@@ -822,9 +902,9 @@ ci_self_test() {
   echo "=== G-CI-SELF :: ci.sh's scheduler, scoping and sharding, on copies of ci.sh ==="
 
   # A — the serial order.
-  R='H1|HARD|light|-|bash $GATES/fake.sh H1 0 0
-P1|PROGRESS|light|-|bash $GATES/fake.sh P1 0 0
-H2|HARD|heavy|-|bash $GATES/fake.sh H2 0 0'
+  R='H1|HARD|light|tier=product|bash $GATES/fake.sh H1 0 0
+P1|PROGRESS|light|tier=product|bash $GATES/fake.sh P1 0 0
+H2|HARD|heavy|tier=product|bash $GATES/fake.sh H2 0 0'
   cst_make order "$R"; cst_run order --jobs 1
   h="$(cst_headers)"
   if [ "$CST_RC" = 0 ] && [ "$h" = "H1 H2 P1 " ] && cst_has "CI RESULT: PASS" \
@@ -838,10 +918,10 @@ H2|HARD|heavy|-|bash $GATES/fake.sh H2 0 0'
   else cst_bad "A control: a phase-less dispatch went unnoticed"; fi
 
   # B — a RED in a parallel batch.
-  R='B1|HARD|light|-|bash $GATES/fake.sh B1 0 1
-B2|HARD|light|-|bash $GATES/fake.sh B2 1 1
-B3|PROGRESS|light|-|bash $GATES/fake.sh B3 0 1
-B4|HARD|light|-|bash $GATES/fake.sh B4 3 1 BLOCKED: fixture reason'
+  R='B1|HARD|light|tier=product|bash $GATES/fake.sh B1 0 1
+B2|HARD|light|tier=product|bash $GATES/fake.sh B2 1 1
+B3|PROGRESS|light|tier=product|bash $GATES/fake.sh B3 0 1
+B4|HARD|light|tier=product|bash $GATES/fake.sh B4 3 1 BLOCKED: fixture reason'
   cst_make red "$R"; cst_run red --jobs 4
   local whole=1 g
   for g in B1 B2 B3 B4; do
@@ -862,16 +942,16 @@ B4|HARD|light|-|bash $GATES/fake.sh B4 3 1 BLOCKED: fixture reason'
   else cst_bad "B control: the rc capture mutation went unnoticed"; fi
 
   # C — heavy cap, locks, dirs, after=.
-  R='V1|HARD|heavy|-|bash $GATES/fake.sh V1 0 1
-V2|HARD|heavy|-|bash $GATES/fake.sh V2 0 1
-V3|HARD|heavy|-|bash $GATES/fake.sh V3 0 1
-V4|HARD|heavy|-|bash $GATES/fake.sh V4 0 1
-L1|HARD|light|tgt|bash $GATES/fake.sh L1 0 1
-L2|HARD|light|tgt|bash $GATES/fake.sh L2 0 1
-D1|PROGRESS|light|dir=shared|bash $GATES/fake.sh D1 0 1
-D2|PROGRESS|light|dir=shared|bash $GATES/fake.sh D2 0 1
-A1|HARD|light|-|bash $GATES/fake.sh A1 0 1
-A2|HARD|light|after=A1|bash $GATES/fake.sh A2 0 0'
+  R='V1|HARD|heavy|tier=product|bash $GATES/fake.sh V1 0 1
+V2|HARD|heavy|tier=product|bash $GATES/fake.sh V2 0 1
+V3|HARD|heavy|tier=product|bash $GATES/fake.sh V3 0 1
+V4|HARD|heavy|tier=product|bash $GATES/fake.sh V4 0 1
+L1|HARD|light|tgt,tier=product|bash $GATES/fake.sh L1 0 1
+L2|HARD|light|tgt,tier=product|bash $GATES/fake.sh L2 0 1
+D1|PROGRESS|light|dir=shared,tier=product|bash $GATES/fake.sh D1 0 1
+D2|PROGRESS|light|dir=shared,tier=product|bash $GATES/fake.sh D2 0 1
+A1|HARD|light|tier=product|bash $GATES/fake.sh A1 0 1
+A2|HARD|light|after=A1,tier=product|bash $GATES/fake.sh A2 0 0'
   cst_make cap "$R"; cst_run cap --jobs 8 --heavy-cap 2
   local mh; mh="$(cst_events cap maxpar V1 V2 V3 V4)"
   if [ "$CST_RC" = 0 ] && [ "$mh" = 2 ] && ! cst_events cap overlap L1 L2 && ! cst_events cap overlap D1 D2 \
@@ -893,9 +973,9 @@ A2|HARD|light|after=A1|bash $GATES/fake.sh A2 0 0'
 
   # K — the heavy-start disk floor, with a stubbed df (the host's disk never
   # decides this arm; every other fixture runs with the floor at 0).
-  R='V1|HARD|heavy|-|bash $GATES/fake.sh V1 0 1
-V2|HARD|heavy|-|bash $GATES/fake.sh V2 0 1
-V3|HARD|heavy|-|bash $GATES/fake.sh V3 0 1'
+  R='V1|HARD|heavy|tier=product|bash $GATES/fake.sh V1 0 1
+V2|HARD|heavy|tier=product|bash $GATES/fake.sh V2 0 1
+V3|HARD|heavy|tier=product|bash $GATES/fake.sh V3 0 1'
   local k
   for k in disk disk-mut; do
     if [ "$k" = disk ]; then cst_make disk "$R"
@@ -921,8 +1001,8 @@ V3|HARD|heavy|-|bash $GATES/fake.sh V3 0 1'
   # M — a wrapper that dies before recording its rc is RED, not a hang.
   if command -v perl >/dev/null 2>&1; then
     printf '#!/bin/sh\nexec perl -e '"'"'alarm shift; exec @ARGV or die'"'"' "$@"\n' > "$CST_BASE/watchdog.sh"; chmod +x "$CST_BASE/watchdog.sh"
-    R='W1|HARD|light|-|bash $GATES/killwrap.sh
-W2|HARD|light|-|bash $GATES/fake.sh W2 0 0'
+    R='W1|HARD|light|tier=product|bash $GATES/killwrap.sh
+W2|HARD|light|tier=product|bash $GATES/fake.sh W2 0 0'
     for k in deadwrap deadwrap-mut; do
       if [ "$k" = deadwrap ]; then cst_make deadwrap "$R"
       else CST_MUT_FILE=ci_sched.sh CST_MUT_OLD='      elif ci_pid_gone "${U_PID[$u]}" && [ ! -s "$rcf" ]; then' CST_MUT_NEW='      elif false; then' cst_make deadwrap-mut "$R"; fi
@@ -940,7 +1020,7 @@ W2|HARD|light|-|bash $GATES/fake.sh W2 0 0'
   fi
 
   # D — sharding.
-  R='G-VALGRIND|HARD|heavy|dir=valgrind,shard,scope=args|bash $GATES/check_valgrind.sh'
+  R='G-VALGRIND|HARD|heavy|dir=valgrind,shard,scope=args,tier=product|bash $GATES/check_valgrind.sh'
   cst_make shard "$R"; echo 2 > "$CST_BASE/shard/vg_fail"
   CST_ENV="CI_VALGRIND_SHARDS=3" cst_run shard --jobs 4 --heavy-cap 3
   if [ "$CST_RC" = 1 ] && cst_has "X G-VALGRIND (exit 1)" && cst_has "--- G-VALGRIND[2/3]" && cst_has "shard 3/3" \
@@ -974,8 +1054,8 @@ W2|HARD|light|-|bash $GATES/fake.sh W2 0 0'
   cst_scope_e2e
 
   # G — --fast keeps its exit 4 and names what it skipped.
-  R='G6|PROGRESS|heavy|-|bash $GATES/fake.sh G6 0 0
-K1|HARD|light|-|bash $GATES/fake.sh K1 0 0'
+  R='G6|PROGRESS|heavy|tier=product|bash $GATES/fake.sh G6 0 0
+K1|HARD|light|tier=product|bash $GATES/fake.sh K1 0 0'
   cst_make fast "$R"
   for h in 1 3; do
     cst_run fast --fast --jobs "$h"
@@ -985,8 +1065,8 @@ K1|HARD|light|-|bash $GATES/fake.sh K1 0 0'
   done
 
   # H — --prune-targets.
-  R='P1|HARD|light|dir=pruneme|bash $GATES/fake.sh P1 0 0
-P2|HARD|light|dir=second|bash $GATES/fake.sh P2 0 0'
+  R='P1|HARD|light|dir=pruneme,tier=product|bash $GATES/fake.sh P1 0 0
+P2|HARD|light|dir=second,tier=product|bash $GATES/fake.sh P2 0 0'
   cst_make prune "$R"
   local tr="$CST_BASE/prune/target/ci-targets"
   mkdir -p "$tr/handmade"
@@ -1002,16 +1082,42 @@ P2|HARD|light|dir=second|bash $GATES/fake.sh P2 0 0'
   if [ -d "$tr/handmade" ] && [ "$(printf '%s\n' "$CST_OUT" | grep -c '^rc=1$')" = 3 ] && cst_has "no $CI_TARGET_MARK"; then
     cst_ok "H control: an unmarked dir, a non-plain name and a foreign root are each refused"
   else cst_bad "H prune refusals"; fi
+  # Only a GREEN gate's dir goes. KS kills itself (SIGTERM: rc 143, as a unit
+  # killed from outside records); S1 (RED) and S2 (GREEN) share one dir.
+  # shellcheck disable=SC2016  # $GATES expands in the fixture's ci.sh
+  R='PG|HARD|light|dir=green,tier=product|bash $GATES/fake.sh PG 0 0
+PR|HARD|light|dir=red,tier=product|bash $GATES/fake.sh PR 1 0
+KS|HARD|light|dir=killed,tier=product|bash $GATES/killself.sh
+PB|HARD|light|dir=blocked,tier=product|bash $GATES/fake.sh PB 3 0 BLOCKED: fixture
+S1|HARD|light|dir=shared,tier=product|bash $GATES/fake.sh S1 1 0
+S2|HARD|light|dir=shared,tier=product|bash $GATES/fake.sh S2 0 0'
+  for k in keep keep-mut; do
+    # shellcheck disable=SC2016  # the scheduler's code, literally
+    if [ "$k" = keep ]; then cst_make keep "$R"
+    else CST_MUT_FILE=ci_sched.sh CST_MUT_OLD='      [ "${GS_FINAL_RC[$other]:-}" = 0 ] && continue' CST_MUT_NEW='      continue' cst_make keep-mut "$R"; fi
+    printf '#!/usr/bin/env bash\nkill -TERM $$\nsleep 5\n' > "$CST_BASE/$k/.port/tools/gates/killself.sh"
+  done
+  cst_run keep --jobs 4 --prune-targets
+  tr="$CST_BASE/keep/target/ci-targets"
+  if [ "$CST_RC" = 1 ] && [ ! -d "$tr/green" ] && [ -f "$tr/red/$CI_TARGET_MARK" ] && [ -d "$tr/killed" ] && [ -d "$tr/blocked" ] && [ -d "$tr/shared" ] \
+     && cst_has "(--prune-targets: deleted $tr/green)" && cst_has "kept $tr/red: PR ended RED (exit 1)" \
+     && cst_has "kept $tr/killed: KS was killed (exit 143)" && cst_has "kept $tr/blocked: PB ended BLOCKED (exit 3)" \
+     && cst_has "kept $tr/shared: S1 ended RED (exit 1)"; then
+    cst_ok "H --prune-targets deletes only the GREEN gate's dir; RED, killed (143), BLOCKED and a RED+GREEN shared dir are kept, each with its reason"
+  else cst_bad "H prune after a non-GREEN gate (exit $CST_RC)"; fi
+  cst_run keep-mut --jobs 4 --prune-targets
+  if [ ! -d "$CST_BASE/keep-mut/target/ci-targets/red" ]; then cst_ok "H control: a prune that ignores the verdict deletes the RED gate's dir, noticed"
+  else cst_bad "H control: a verdict-blind prune went unnoticed"; fi
 
   # J — every registry kind is dispatched (G8b/G8 sat unrun for months), and
   # exclusive gates run last and alone.
   if cst_kinds_visited "$ROOT/.port/tools/ci.sh"; then cst_ok "J every KIND in the real GATE_REGISTRY is a dispatch phase ($(cst_kinds_list "$ROOT/.port/tools/ci.sh"))"
   else CST_OUT="$(cst_kinds_list "$ROOT/.port/tools/ci.sh")"; cst_bad "J a KIND in the real GATE_REGISTRY is not dispatched"; fi
-  R='H1|HARD|light|-|bash $GATES/fake.sh H1 0 1
-PF|PERF-FENCE|heavy|exclusive|bash $GATES/fake.sh PF 0 1
-AR|ARMED|heavy|after=PF,exclusive|bash $GATES/fake.sh AR 0 0
-P1|PROGRESS|light|-|bash $GATES/fake.sh P1 0 1
-H2|HARD|heavy|-|bash $GATES/fake.sh H2 0 1'
+  R='H1|HARD|light|tier=product|bash $GATES/fake.sh H1 0 1
+PF|PERF-FENCE|heavy|exclusive,tier=product|bash $GATES/fake.sh PF 0 1
+AR|ARMED|heavy|after=PF,exclusive,tier=product|bash $GATES/fake.sh AR 0 0
+P1|PROGRESS|light|tier=product|bash $GATES/fake.sh P1 0 1
+H2|HARD|heavy|tier=product|bash $GATES/fake.sh H2 0 1'
   cst_make kinds "$R"; cst_run kinds --jobs 1; h="$(cst_headers)"
   if [ "$CST_RC" = 0 ] && [ "$h" = "H1 H2 P1 PF AR " ]; then cst_ok "J --jobs 1 runs every kind: HARD, PROGRESS, PERF-FENCE, ARMED ($h)"
   else cst_bad "J --jobs 1 kinds (exit $CST_RC, order '$h')"; fi
@@ -1024,8 +1130,8 @@ H2|HARD|heavy|-|bash $GATES/fake.sh H2 0 1'
   cst_run kinds-mut --jobs 4
   if ! cst_events kinds-mut before H1 PF || ! cst_events kinds-mut before P1 PF; then cst_ok "J control: a dropped exclusive wait starts PERF-FENCE beside other gates, noticed"
   else cst_bad "J control: a dropped exclusive wait went unnoticed"; fi
-  cst_make kinds-bad 'H1|HARD|light|-|bash $GATES/fake.sh H1 0 0
-B1|BOGUS|light|-|bash $GATES/fake.sh B1 0 0'
+  cst_make kinds-bad 'H1|HARD|light|tier=product|bash $GATES/fake.sh H1 0 0
+B1|BOGUS|light|tier=product|bash $GATES/fake.sh B1 0 0'
   if ! cst_kinds_visited "$CST_BASE/kinds-bad/.port/tools/ci.sh"; then
     cst_run kinds-bad --jobs 1
     if [ "$CST_RC" = 2 ] && cst_has "KIND 'BOGUS', which no dispatch phase runs"; then
@@ -1033,12 +1139,18 @@ B1|BOGUS|light|-|bash $GATES/fake.sh B1 0 0'
     else cst_bad "J control: ci.sh ran a registry with an unknown KIND (exit $CST_RC)"; fi
   else CST_OUT=""; cst_bad "J control: an unknown KIND went unnoticed"; fi
 
+  # T — the parity/product tier on every entry, and --tier.
+  cst_tier_arms
+
+  # X — G-REL-LAT runs with nothing beside it.
+  cst_exclusive_arms
+
   # I — the harness itself: a mutation whose target is gone must not run a
   # stale copy (it happened: a refactor removed a target and an old fixture
   # kept the arm green).
   local nf
   nf="$( (CST_FAIL=0; CST_MUT_FILE=ci_sched.sh CST_MUT_OLD='no such scheduler text' CST_MUT_NEW=x \
-          cst_make broken 'X1|HARD|light|-|bash $GATES/fake.sh X1 0 0' >/dev/null 2>&1; echo "$CST_FAIL") )"
+          cst_make broken 'X1|HARD|light|tier=product|bash $GATES/fake.sh X1 0 0' >/dev/null 2>&1; echo "$CST_FAIL") )"
   cst_run broken --jobs 1
   if [ "$nf" = 1 ] && [ "$CST_RC" = 99 ] && cst_has "FIXTURE BROKEN"; then cst_ok "I a mutation target that is gone fails the arm and leaves a fixture that exits 99"
   else cst_bad "I fail-closed fixture (counted $nf, exit $CST_RC)"; fi
@@ -1048,6 +1160,128 @@ B1|BOGUS|light|-|bash $GATES/fake.sh B1 0 0'
   [ "$CST_BLOCKED" -eq 0 ] || { echo "G-CI-SELF BLOCKED: an arm could not run (above)"; return 3; }
   echo "G-CI-SELF GREEN"
   return 0
+}
+
+# X: the real G-REL-LAT entry's KIND|RES|TRAITS on a fake runner, beside
+# light, heavy and slow gates; it must overlap none of them.
+cst_exclusive_arms() {
+  local entry spec="" gid gkind gres gtraits grun R o k bad
+  for entry in "${GATE_REGISTRY[@]}"; do
+    IFS='|' read -r gid gkind gres gtraits grun <<< "$entry"
+    [ "$gid" = G-REL-LAT ] && spec="$gkind|$gres|$gtraits"
+  done
+  if [ -z "$spec" ]; then CST_OUT=""; cst_bad "X the real GATE_REGISTRY has no G-REL-LAT entry"; return; fi
+  if trait_has "${spec##*|}" exclusive; then cst_ok "X the real G-REL-LAT entry is exclusive ($spec)"
+  else CST_OUT="$spec"; cst_bad "X the real G-REL-LAT entry is not exclusive"; fi
+  for k in lat lat-mut; do
+    o="$spec"
+    [ "$k" = lat-mut ] && o="$(printf '%s' "$spec" | sed -e 's/,exclusive//' -e 's/exclusive,//')"
+    R="A1|HARD|light|tier=product|bash \$GATES/fake.sh A1 0 1
+LAT|$o|bash \$GATES/fake.sh LAT 0 1
+A2|HARD|heavy|tier=product|bash \$GATES/fake.sh A2 0 2
+A3|PROGRESS|light|tier=parity|bash \$GATES/fake.sh A3 0 1
+A4|HARD|light|tier=product|bash \$GATES/fake.sh A4 0 0"
+    cst_make "$k" "$R"; cst_run "$k" --jobs 4 --heavy-cap 2
+    bad=""
+    for o in A1 A2 A3 A4; do cst_events "$k" overlap LAT "$o" && bad="$bad $o"; done
+    if [ "$k" = lat ]; then
+      if [ "$CST_RC" = 0 ] && [ -z "$bad" ] && cst_events lat before A2 LAT && cst_has "+ LAT"; then
+        cst_ok "X --jobs 4: the G-REL-LAT entry runs alone, after the 2 s heavy gate, beside nothing"
+      else cst_bad "X G-REL-LAT alone (exit $CST_RC, overlapped:$bad)"; fi
+    elif [ -n "$bad" ]; then cst_ok "X control: the same entry without exclusive runs beside$bad, noticed"
+    else cst_bad "X control: a non-exclusive G-REL-LAT entry went unnoticed"; fi
+  done
+}
+
+# T: tiers. cst_tier_ran NAME: the ids a fixture run started, sorted.
+cst_tier_ran() { sed -n 's/^S //p' "$CST_BASE/$1/events" | sort | tr '\n' ' '; }
+cst_tier_arms() {
+  local R e np=0 nq=0 nbad=0 entry gid gkind gres gtraits grun k h want ran mold mnew
+  # T1: the real registry, through the same check ci.sh runs before the cargo steps.
+  for entry in "${GATE_REGISTRY[@]}"; do
+    IFS='|' read -r gid gkind gres gtraits grun <<< "$entry"
+    tier_scan "$gtraits"
+    if [ "$TS_N" != 1 ]; then nbad=$((nbad + 1)); continue; fi
+    case "$TS_VAL" in parity) np=$((np + 1)) ;; product) nq=$((nq + 1)) ;; *) nbad=$((nbad + 1)) ;; esac
+  done
+  if CST_OUT="$( (ci_registry_check) 2>&1)" && [ "$nbad" = 0 ] && [ $((np + nq)) = "${#GATE_REGISTRY[@]}" ] && [ "$np" -gt 0 ] && [ "$nq" -gt 0 ]; then
+    cst_ok "T every real registry entry (${#GATE_REGISTRY[@]}) has exactly one valid tier: $np parity, $nq product"
+  else cst_bad "T the real registry's tiers ($np parity, $nq product, $nbad bad of ${#GATE_REGISTRY[@]})"; fi
+  # T2: a missing, a doubled and an unknown tier are each refused (exit 2)
+  # before anything runs; each control drops exactly that check.
+  for k in none dup bogus; do
+    # shellcheck disable=SC2016  # the scheduler's code, literally
+    case "$k" in
+      none) e='-'; want="has no tier= trait"; mold='if [ "$ntier" -eq 0 ]; then'; mnew='if false; then' ;;
+      dup) e='tier=product,tier=parity'; want="has 2 tier= traits"; mold='elif [ "$ntier" -gt 1 ]; then'; mnew='elif false; then' ;;
+      bogus) e='tier=oracle'; want="has tier 'oracle'"; mold='else case "$tier" in parity|product) ;;'; mnew='else case "$tier" in *) ;;' ;;
+    esac
+    R="T1|HARD|light|tier=product|bash \$GATES/fake.sh T1 0 0
+TB|HARD|light|$e|bash \$GATES/fake.sh TB 0 0"
+    cst_make "tier-$k" "$R"; cst_run "tier-$k" --jobs 1
+    if [ "$CST_RC" = 2 ] && cst_has "registry entry 'TB' $want" && [ ! -s "$CST_BASE/tier-$k/events" ] && ! cst_has "cargo fmt --check"; then
+      cst_ok "T a fixture entry with tier '$e' is refused (exit 2) before any cargo step or gate"
+    else cst_bad "T tier '$e' (exit $CST_RC)"; fi
+    CST_MUT_FILE=ci_sched.sh CST_MUT_OLD="$mold" CST_MUT_NEW="$mnew" cst_make "tier-$k-mut" "$R"; cst_run "tier-$k-mut" --jobs 1
+    # Noticed by the arm's own condition: the run is not refused, or not for
+    # this reason. (A dropped no-tier check still exits 2, through the
+    # unknown-value check on the empty tier: defence in depth, but the arm
+    # names the reason, so it sees the check is gone.)
+    if [ "$CST_RC" != 2 ] || ! cst_has "registry entry 'TB' $want"; then
+      cst_ok "T control: without the '$k' check the arm notices (exit $CST_RC$(cst_has "registry entry 'TB'" && echo ', refused for another reason'))"
+    else cst_bad "T control: a dropped '$k' tier check went unnoticed"; fi
+  done
+  # T3/T4: --tier runs one tier, never a PASS.
+  # shellcheck disable=SC2016  # $GATES expands in the fixture's ci.sh
+  R='PA|HARD|light|tier=parity|bash $GATES/fake.sh PA 0 0
+QA|HARD|light|tier=product|bash $GATES/fake.sh QA 0 0
+PB|PROGRESS|heavy|tier=parity|bash $GATES/fake.sh PB 0 0
+QB|HARD|heavy|tgt,tier=product|bash $GATES/fake.sh QB 0 0'
+  cst_make tiers "$R"
+  for h in 1 3; do
+    cst_run tiers --tier product --jobs "$h"; ran="$(cst_tier_ran tiers)"
+    if [ "$CST_RC" = 4 ] && [ "$ran" = "QA QB " ] && cst_has "TIER-SUBSET GREEN (--tier product)" && cst_has "    - PA (parity)" \
+       && cst_has "    - PB (parity)" && cst_has "[SKIPPED by --tier product: a parity gate]" && ! cst_has "CI RESULT: PASS"; then
+      cst_ok "T --tier product --jobs $h: ran only $ran(no parity gate), exit 4, the parity gates named, no PASS banner"
+    else cst_bad "T --tier product --jobs $h (exit $CST_RC, ran '$ran')"; fi
+    cst_run tiers --tier parity --jobs "$h"; ran="$(cst_tier_ran tiers)"
+    if [ "$CST_RC" = 4 ] && [ "$ran" = "PA PB " ] && cst_has "TIER-SUBSET GREEN (--tier parity)" && cst_has "    - QA (product)" \
+       && cst_has "    - cargo fmt --check (product)" && cst_has "### cargo test --workspace  [SKIPPED by --tier parity: a product step]" && ! cst_has "CI RESULT: PASS"; then
+      cst_ok "T --tier parity --jobs $h: ran only $ran(no product gate, every cargo step named skipped), exit 4, no PASS banner"
+    else cst_bad "T --tier parity --jobs $h (exit $CST_RC, ran '$ran')"; fi
+  done
+  cst_run tiers --jobs 3; ran="$(cst_tier_ran tiers)"
+  if [ "$CST_RC" = 0 ] && [ "$ran" = "PA PB QA QB " ] && cst_has "CI RESULT: PASS"; then cst_ok "T no --tier (all): every gate runs, exit 0"
+  else cst_bad "T --tier all (exit $CST_RC, ran '$ran')"; fi
+  cst_run tiers --tier oracle
+  if [ "$CST_RC" = 2 ] && cst_has "--tier wants product, parity or all"; then cst_ok "T --tier oracle is a usage error (exit 2)"
+  else cst_bad "T --tier oracle (exit $CST_RC)"; fi
+  # shellcheck disable=SC2016  # the scheduler's code, literally
+  CST_MUT_FILE=ci_sched.sh CST_MUT_OLD='if [ "$CI_TIER" != all ] && [ "${GS_TIER[$i]}" != "$CI_TIER" ]; then GS_STATE[i]=tier; continue; fi' \
+    CST_MUT_NEW=':' cst_make tiers-mut "$R"
+  cst_run tiers-mut --tier product --jobs 3; ran="$(cst_tier_ran tiers-mut)"
+  case " $ran" in *" PA "*) cst_ok "T control: a dropped tier filter runs the parity gate PA under --tier product, noticed" ;;
+    *) cst_bad "T control: a dropped tier filter went unnoticed (ran '$ran')" ;; esac
+  CST_MUT_FILE=ci.sh CST_MUT_OLD=$'if [ "$CI_TIER" != all ]; then\n  # The --fast convention (exit 4)' \
+    CST_MUT_NEW=$'if false; then\n  # The --fast convention (exit 4)' cst_make tiers-bmut "$R"
+  cst_run tiers-bmut --tier product --jobs 3
+  if [ "$CST_RC" = 0 ] && cst_has "CI RESULT: PASS"; then cst_ok "T control: without the tier banner a --tier product run reads PASS (exit 0), noticed"
+  else cst_bad "T control: a dropped tier banner went unnoticed (exit $CST_RC)"; fi
+  # T5: the real registry's plan under each tier (no gate runs).
+  local t out
+  for t in product parity; do
+    out="$( (CI_TIER="$t" ci_plan >/dev/null 2>&1 || { echo "plan-failed"; exit 0; }
+             r=0; o=0; bad=""
+             for i in ${CI_ORDER[@]+"${CI_ORDER[@]}"}; do
+               if [ "${GS_STATE[$i]}" = tier ]; then o=$((o + 1)); [ "${GS_TIER[$i]}" = "$t" ] && bad="$bad ${GS_ID[$i]}"
+               else r=$((r + 1)); [ "${GS_TIER[$i]}" = "$t" ] || bad="$bad ${GS_ID[$i]}"; fi
+             done
+             echo "run=$r out=$o bad=$bad") )"
+    case "$out" in
+      "run="*" bad=") cst_ok "T the real registry planned under --tier $t: ${out% bad=} (every planned gate is $t, every skipped one is not)" ;;
+      *) CST_OUT="$out"; cst_bad "T the real registry under --tier $t" ;;
+    esac
+  done
 }
 
 # E: the classification and closure on the real workspace metadata.
@@ -1156,11 +1390,11 @@ cst_e2e_revert() { ( cd "$CST_BASE/e2e" && git checkout -q -- . ) >/dev/null 2>&
 
 cst_scope_e2e() {
   local R d="$CST_BASE/e2e"
-  R='G6|PROGRESS|heavy|scope=env:G6_ONLY|bash $GATES/fake.sh G6 0 0
-G6c|PROGRESS|heavy|scope=crate:a|bash $GATES/fake.sh G6c 0 0
-GC|HARD|heavy|scope=crate:c|bash $GATES/fake.sh GC 0 0
-G-VALGRIND|HARD|heavy|scope=args|bash $GATES/check_valgrind.sh
-K1|HARD|light|-|bash $GATES/fake.sh K1 0 0'
+  R='G6|PROGRESS|heavy|scope=env:G6_ONLY,tier=product|bash $GATES/fake.sh G6 0 0
+G6c|PROGRESS|heavy|scope=crate:a,tier=product|bash $GATES/fake.sh G6c 0 0
+GC|HARD|heavy|scope=crate:c,tier=product|bash $GATES/fake.sh GC 0 0
+G-VALGRIND|HARD|heavy|scope=args,tier=product|bash $GATES/check_valgrind.sh
+K1|HARD|light|tier=product|bash $GATES/fake.sh K1 0 0'
   cst_e2e_setup "$R" || { CST_OUT=""; cst_bad "F could not build the fixture repository"; return; }
   printf '// changed\n' >> "$d/crates/a/src/lib.rs"
   cst_run e2e --changed-since HEAD --jobs 3
@@ -1205,9 +1439,9 @@ K1|HARD|light|-|bash $GATES/fake.sh K1 0 0'
   cst_e2e_revert
   # I2: every narrowed gate answers a plain BLOCKED and nothing is scoped out
   # (crate:a runs in full), so no gate is classified SCOPED: still exit 5.
-  local R2='G6|PROGRESS|heavy|scope=env:G6_ONLY|bash $GATES/fake.sh G6 3 0 BLOCKED: no miri
-G6c|PROGRESS|heavy|scope=crate:a|bash $GATES/fake.sh G6c 0 0
-K1|HARD|light|-|bash $GATES/fake.sh K1 0 0'
+  local R2='G6|PROGRESS|heavy|scope=env:G6_ONLY,tier=product|bash $GATES/fake.sh G6 3 0 BLOCKED: no miri
+G6c|PROGRESS|heavy|scope=crate:a,tier=product|bash $GATES/fake.sh G6c 0 0
+K1|HARD|light|tier=product|bash $GATES/fake.sh K1 0 0'
   cst_e2e_setup "$R2"; printf '// changed\n' >> "$d/crates/a/src/lib.rs"
   cst_run e2e --changed-since HEAD --jobs 3
   if [ "$CST_RC" = 5 ] && cst_has "0 long gate(s) ran only the change scope, 0 had nothing in it" && ! cst_has "CI RESULT: PASS"; then
