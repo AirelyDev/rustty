@@ -11800,8 +11800,11 @@ environment notes are in V23.
   two copies (`this=0x1`). Ghostty bundles the same 11.0.0 but exports its whole API (603 symbols), so Pango
   uses its copy consistently and does not crash (checked with the pin build on the VM). Fix: `--exclude-libs,ALL`
   for the `rustty` package and `rustty-apprt`'s tests on Linux and FreeBSD, so each side keeps its own copy (0
-  exported). Latent on Linux (Fedora's libraries happened to be compatible); the Linux re-validation is owed
-  (rvm unreachable on 2026-10-11).
+  exported). Latent on Linux (Fedora's libraries happened to be compatible). Re-validated on rvm (Fedora 44
+  aarch64, pinned 1.93.1): 0 exported, still ET_EXEC; `rustty-apprt` gtk suite 163 passed, 0 failed; live
+  `first_light`, `window_live`, `input_focus` and both DMA-BUF KATs under `RUSTTY_REQUIRE_DMABUF=1` pass;
+  clippy `-D warnings` clean for the changed crates (`gtk` and `gtk,wayland,x11`). That clippy run caught
+  the N555 wrapper placed after `render_surface.rs`'s test module (`items_after_test_module`); moved.
 - **N558 (FIXED, test): `walk_finds_the_share_tree_above_the_executable` (port-added) built a `share/` tree;
   the walk looks for `local/share` on FreeBSD (`resourcesdir.zig:103`).**
 - **N559 (FIXED): the CLI's errno-name table had no FreeBSD arm, so error messages printed bare numbers** (3

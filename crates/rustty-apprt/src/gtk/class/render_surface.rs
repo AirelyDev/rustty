@@ -629,57 +629,6 @@ pub fn texture_top_in_widget(flip: bool, bounds: TextureBounds, css_h: f32) -> f
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{texture_bounds, texture_top_in_widget, TextureBounds};
-    use crate::gtk::scale::{snap_offset, CssPoint};
-
-    /// UD357: at 1.25x a widget whose surface origin is 47 CSS px down sits at
-    /// device 58.75; the snap moves it by +0.2 CSS px to device 59. The flipped
-    /// OpenGL texture must land there too. The reference's transform puts its
-    /// top at `-0.2` (device 58.5, a half pixel off); `render_surface_zig_bounds`
-    /// is that transform, kept as the fail-first witness.
-    #[test]
-    fn flipped_texture_lands_on_the_snapped_origin() {
-        let scale = 1.25;
-        let origin = CssPoint {
-            x: snap_offset(47.0, scale),
-            y: snap_offset(47.0, scale),
-        };
-        let css_h = 400.0 / scale as f32;
-
-        let top = texture_top_in_widget(true, texture_bounds(true, origin, 0.0, css_h), css_h);
-        let device_top = (47.0 + f64::from(top)) * scale;
-        assert!(
-            (device_top - device_top.round()).abs() < 1e-4,
-            "flipped texture top at device {device_top}"
-        );
-
-        // The reference's transform (the pre-fix port): half a device pixel off.
-        let reference = render_surface_zig_bounds(origin, css_h);
-        let top = texture_top_in_widget(true, reference, css_h);
-        let device_top = (47.0 + f64::from(top)) * scale;
-        assert!(
-            ((device_top - device_top.floor()) - 0.5).abs() < 1e-4,
-            "reference transform lands at device {device_top}"
-        );
-
-        // Unflipped (Metal-style): the origin is the reference's.
-        let b = texture_bounds(false, origin, 0.0, css_h);
-        assert_eq!(texture_top_in_widget(false, b, css_h), origin.y as f32);
-    }
-
-    /// `render_surface.zig:193-205` verbatim: translate(0, css_h), scale(1, -1),
-    /// then the texture at the snapped origin.
-    fn render_surface_zig_bounds(origin: CssPoint, css_h: f32) -> TextureBounds {
-        TextureBounds {
-            translate: (0.0, css_h),
-            x: origin.x as f32,
-            y: origin.y as f32,
-        }
-    }
-}
-
 // The texture builder the reference calls on every platform
 // (`render_surface.zig:321`, `gdk.DmabufTextureBuilder.new()`). gtk4-rs exposes
 // `gdk::DmabufTextureBuilder` on Linux only, although GTK exports the C API on
@@ -786,6 +735,57 @@ mod dmabuf_builder {
             // SAFETY: `self.0` is live.
             unsafe { ffi::gdk_dmabuf_texture_builder_set_stride(self.0, plane, stride) };
             self
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{texture_bounds, texture_top_in_widget, TextureBounds};
+    use crate::gtk::scale::{snap_offset, CssPoint};
+
+    /// UD357: at 1.25x a widget whose surface origin is 47 CSS px down sits at
+    /// device 58.75; the snap moves it by +0.2 CSS px to device 59. The flipped
+    /// OpenGL texture must land there too. The reference's transform puts its
+    /// top at `-0.2` (device 58.5, a half pixel off); `render_surface_zig_bounds`
+    /// is that transform, kept as the fail-first witness.
+    #[test]
+    fn flipped_texture_lands_on_the_snapped_origin() {
+        let scale = 1.25;
+        let origin = CssPoint {
+            x: snap_offset(47.0, scale),
+            y: snap_offset(47.0, scale),
+        };
+        let css_h = 400.0 / scale as f32;
+
+        let top = texture_top_in_widget(true, texture_bounds(true, origin, 0.0, css_h), css_h);
+        let device_top = (47.0 + f64::from(top)) * scale;
+        assert!(
+            (device_top - device_top.round()).abs() < 1e-4,
+            "flipped texture top at device {device_top}"
+        );
+
+        // The reference's transform (the pre-fix port): half a device pixel off.
+        let reference = render_surface_zig_bounds(origin, css_h);
+        let top = texture_top_in_widget(true, reference, css_h);
+        let device_top = (47.0 + f64::from(top)) * scale;
+        assert!(
+            ((device_top - device_top.floor()) - 0.5).abs() < 1e-4,
+            "reference transform lands at device {device_top}"
+        );
+
+        // Unflipped (Metal-style): the origin is the reference's.
+        let b = texture_bounds(false, origin, 0.0, css_h);
+        assert_eq!(texture_top_in_widget(false, b, css_h), origin.y as f32);
+    }
+
+    /// `render_surface.zig:193-205` verbatim: translate(0, css_h), scale(1, -1),
+    /// then the texture at the snapped origin.
+    fn render_surface_zig_bounds(origin: CssPoint, css_h: f32) -> TextureBounds {
+        TextureBounds {
+            translate: (0.0, css_h),
+            x: origin.x as f32,
+            y: origin.y as f32,
         }
     }
 }
