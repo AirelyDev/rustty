@@ -2,7 +2,8 @@
 # check_perf_fence.sh — GATE G8b (paired same-session perf fence) [R5]
 #
 # DoP id:  G8b (companion to G8; DEFINITION_OF_PARITY §1 perf axis)
-# Reads:   the pinned oracle bench binary (~/rustty-oracle-artifacts, checked
+# Reads:   the pinned oracle bench binary (~/rustty-oracle-artifacts or
+#          $RUSTTY_ORACLE_ARTIFACTS, checked
 #          against ws10_suite.py's ORACLE_SHA256) + the four corpora (BOTH
 #          UNTRACKED; the corpora live in the shared checkout only), a candidate
 #          rustty-bench, and optionally the stored entry binary in .perf-bins/.
@@ -37,8 +38,11 @@
 #              no metrics file exists for G8. Its own reason line says so.
 #   other      a crash or a kill of the harness: RED, never BLOCKED.
 #   3 BLOCKED  measurement substrate absent (oracle binary / corpora missing --
-#              they are untracked and live only in the shared checkout, so this
-#              is the normal state inside a fresh worktree or on CI).
+#              they are untracked: the corpora live only in the main checkout,
+#              which ws10_suite.py derives from git so a linked worktree finds
+#              them too, and the oracle binary in ~/rustty-oracle-artifacts or
+#              $RUSTTY_ORACLE_ARTIFACTS; so this is the normal state on a fresh
+#              clone or on CI).
 #
 # Usage:
 #   check_perf_fence.sh [--build] [--rust PATH] [--self PATH]

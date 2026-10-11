@@ -29,7 +29,16 @@ BENCH = sys.argv[1]
 RESULTS = sys.argv[2]
 N = int(sys.argv[3]) if len(sys.argv) > 3 else 7
 
-COR = "/Users/gael/projects/rustty/.port/phase-0/baseline/corpora"
+# The corpora are untracked and live only in the MAIN checkout. It is derived
+# the way ws10_suite.py (G8b) derives it -- `_gatelib.main_checkout`, git's
+# common dir with GIT_* removed -- so this runs from the main checkout or any
+# linked worktree, wherever the clone lives (it used to be a literal path to
+# one developer's checkout).
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "..", "tools", "gates"))
+import _gatelib  # noqa: E402
+COR = os.path.join(_gatelib.main_checkout(_gatelib.RUSTTY_ROOT),
+                   ".port/phase-0/baseline/corpora")
 UTF8 = os.path.join(COR, "utf8.bin")
 ASCII = os.path.join(COR, "ascii.bin")
 OSCP = os.path.join(COR, "osc-parser.bin")

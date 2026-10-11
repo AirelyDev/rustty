@@ -16,8 +16,13 @@
 #
 # ARMING: the gate arms itself the moment the port driver exists —
 #   PORT_DRIVER="${RUSTTY_VT_DRIVER:-$HARNESS/bin/vt_driver_port}"
-# (build it with `.port/phase-0/harness/build_port_driver.sh`). While it does
-# NOT exist, the gate runs in progress mode: it executes the harness self-test
+# An auto run BUILDS any missing driver first (ensure_drivers: the reference
+# driver, the port driver and the leg-B example binaries, with
+# `.port/phase-0/harness/build_{ref,port}_driver.sh`), so a fresh clone or
+# worktree arms instead of BLOCKing on the untracked `harness/bin/`. A driver
+# that cannot be built here is BLOCKED (exit 3), a port that does not link is
+# RED; see ensure_drivers. With RUSTTY_VT_DRIVER naming a driver that does
+# NOT exist (or under --progress), the gate runs in progress mode: it executes the harness self-test
 # (gate_empty_divergence.sh) which PROVES the harness correctly detects total
 # divergence against the empty port, and exits 0 (harness wired, port empty) —
 # it does NOT fabricate a parity green. Once armed, a present-but-diverging
@@ -38,6 +43,9 @@
 #   run_differential.sh --self-test-oracle  # hermetic: the staleness guard BLOCKS on
 #                                       # an absent or off-pin oracle, and GIT_* cannot
 #                                       # move its HEAD check (run by G-ORACLE-SH-SELF)
+#   run_differential.sh --self-test-build   # hermetic: missing drivers are built,
+#                                       # an unbuildable one BLOCKS, a port link
+#                                       # failure is RED (stub builders; no cargo)
 #   RUSTTY_VT_DRIVER=/path/to/bin run_differential.sh   # point at the port driver
 #
 # Exit 0 = GREEN (real) or HARNESS-WIRED (progress); non-zero = RED / BLOCKED.
@@ -66,6 +74,7 @@ case "${1:-}" in
   --self-test) MODE="self-test" ;;
   --print-oracle) MODE="print-oracle" ;;
   --self-test-oracle) MODE="self-test-oracle" ;;
+  --self-test-build) MODE="self-test-build" ;;
   "" )         MODE="auto" ;;
   *) echo "run_differential.sh: unknown arg '${1:-}'" >&2; exit 2 ;;
 esac
@@ -170,6 +179,95 @@ enforce_driver_source_fresh() {
       exit 3
       ;;
   esac
+}
+
+# ---------------------------------------------------------------------------
+# Build the drivers G4 needs when they are missing (CI hygiene A, 2026-10-10).
+# `harness/bin/` is untracked build output, so a fresh clone or worktree has no
+# drivers at all; until this step G4 BLOCKED there ("reference driver not
+# built") until someone ran the two builders by hand (Phase 8 did). Now an
+# auto run builds what is missing, with the same scripts, before arming:
+#   * vt_driver_ref     <- build_ref_driver.sh  (the oracle's libghostty-vt.a)
+#   * vt_driver_port + bin/cvt/<case>  <- build_port_driver.sh  (cargo build of
+#     rustty-vt-c, release-safe, then the link). Rebuilt when the port driver
+#     OR any leg-B example binary named by a golden is missing. Skipped when
+#     RUSTTY_VT_DRIVER names a driver of the caller's own: that run is the
+#     caller's to set up, and leg B still reports a missing example as RED.
+# Only MISSING drivers are built. Freshness of a present binary is not tracked
+# (nothing records what it was built from); the staleness guard above only
+# proves the driver SOURCE still compiles against the pinned headers.
+# Outcomes, all decided before any leg runs:
+#   built / nothing to build  -> return 0, and the gate arms as before
+#   cannot build here         -> BLOCKED (exit 3) with the builder's reason:
+#                                not macOS (both builders link Mach-O with
+#                                ld64 and Apple frameworks), CI_SKIP_CARGO=1
+#                                for the port build, a builder failing on a
+#                                missing prerequisite (the oracle's linkable
+#                                libghostty-vt.a, a compiler, the header, no
+#                                staticlib), or a builder that "succeeds" and
+#                                leaves no driver behind. Never a pass.
+#   the PORT fails to link    -> RED (exit 1): build_port_driver.sh exit 13 is
+#                                "every input is present and the port's
+#                                staticlib does not link (or exports no ABI)",
+#                                a port finding, not a missing substrate.
+# The port build runs with CARGO_TARGET_DIR unset, because the builder probes
+# <root>/target for the staticlib (as G8b's --build does).
+# Logs: $DIAG_DIR/.build_{ref,port}_driver.log.
+# ---------------------------------------------------------------------------
+g4_host_os() { uname -s; }  # a function so the self-test can stand in another host
+
+ensure_drivers() {
+  local need_ref=0 need_port=0 golden log rc t0 why
+  [ -x "$REF_DRIVER" ] || need_ref=1
+  if [ -z "${RUSTTY_VT_DRIVER:-}" ]; then
+    [ -x "$PORT_DRIVER" ] || need_port=1
+    for golden in "$CORPUS"/*.golden; do
+      [ -e "$golden" ] || continue
+      [ -x "$HARNESS/bin/cvt/$(basename "${golden%.golden}")" ] || need_port=1
+    done
+  fi
+  [ "$need_ref$need_port" = "00" ] && return 0
+  mkdir -p "$DIAG_DIR"
+  if [ "$(g4_host_os)" != "Darwin" ]; then
+    echo "BLOCKED: G4 drivers are missing and cannot be built on $(g4_host_os): build_ref_driver.sh / build_port_driver.sh link Mach-O (ld64 -alias_list, Apple frameworks). This is NOT a pass."
+    exit 3
+  fi
+  if [ "$need_ref" = "1" ]; then
+    log="$DIAG_DIR/.build_ref_driver.log"
+    echo "--- building the missing reference driver (build_ref_driver.sh; log: $log) ---"
+    t0="$SECONDS"; rc=0
+    bash "$HARNESS/build_ref_driver.sh" >"$log" 2>&1 || rc=$?
+    if [ "$rc" != "0" ] || [ ! -x "$REF_DRIVER" ]; then
+      why="$(grep -E 'ERROR|BLOCKED' "$log" | head -1 || true)"
+      echo "BLOCKED: G4 could not build the reference driver (build_ref_driver.sh exit $rc): ${why:-no driver at $REF_DRIVER}"
+      sed 's/^/    | /' "$log" | tail -8
+      exit 3
+    fi
+    echo "    built $REF_DRIVER in $((SECONDS - t0))s"
+  fi
+  if [ "$need_port" = "1" ]; then
+    if [ "${CI_SKIP_CARGO:-0}" = "1" ]; then
+      echo "BLOCKED: G4's port driver or a leg-B example binary is missing and CI_SKIP_CARGO=1 forbids the cargo build that makes them (build_port_driver.sh). This is NOT a pass."
+      exit 3
+    fi
+    log="$DIAG_DIR/.build_port_driver.log"
+    echo "--- building the missing port driver + c-vt examples (build_port_driver.sh; log: $log) ---"
+    t0="$SECONDS"; rc=0
+    env -u CARGO_TARGET_DIR bash "$HARNESS/build_port_driver.sh" >"$log" 2>&1 || rc=$?
+    why="$(grep -E 'ERROR|BLOCKED' "$log" | head -1 || true)"
+    if [ "$rc" = "13" ]; then
+      echo "RED: the port does not link into G4's driver (build_port_driver.sh exit 13): ${why:-see $log}"
+      sed 's/^/    | /' "$log" | tail -12
+      exit 1
+    fi
+    if [ "$rc" != "0" ] || [ ! -x "$PORT_DRIVER" ]; then
+      echo "BLOCKED: G4 could not build the port driver (build_port_driver.sh exit $rc): ${why:-no driver at $PORT_DRIVER}"
+      sed 's/^/    | /' "$log" | tail -8
+      exit 3
+    fi
+    why="$(grep -E '^OK: built [0-9]+/' "$log" | sed 's/^OK: built //; s/ port-side.*//' || true)"
+    echo "    built $PORT_DRIVER (+ ${why:-0/?} c-vt examples) in $((SECONDS - t0))s"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -465,6 +563,8 @@ open(p, "wb").write(bytes(data))' "$tmpg"
   fi
   # 7. The oracle-handling arms (also run alone by G-ORACLE-SH-SELF).
   run_self_test_oracle || ok=0
+  # 8. The driver auto-build arms (also run alone: --self-test-build).
+  run_self_test_build || ok=0
   if [ "$ok" = "1" ]; then echo "SELF-TEST: PASS"; return 0; else echo "SELF-TEST: FAIL"; return 1; fi
 }
 
@@ -625,6 +725,184 @@ run_self_test_oracle() {
   echo "G4 ORACLE SELF-TEST: FAIL"; return 1
 }
 
+# ---------------------------------------------------------------------------
+# Hermetic self-test of ensure_drivers (CI hygiene A). In-process arms run it in
+# a subshell against a stub harness whose two builders record their calls and
+# exit as told; the end-to-end arms run a COPY of this gate in a fixture
+# checkout (fixture oracle at its pin, stub builders, one fixture, one golden):
+#   b1  both drivers missing, builders succeed -> built (ref, then port), rc 0;
+#       the port build runs with CARGO_TARGET_DIR unset
+#   b2  everything present                      -> nothing built, rc 0
+#   b3  only a leg-B example binary missing     -> port builder only, rc 0
+#   b4  ref builder fails (exit 11)             -> BLOCKED 3 with its reason;
+#       the port builder never runs
+#   b5  ref builder exits 0 but leaves no driver -> BLOCKED 3
+#   b6  port builder fails on a prerequisite (12) -> BLOCKED 3
+#   b7  port builder exit 13 (the port does not link) -> RED 1
+#   b8  not macOS                               -> BLOCKED 3, nothing built
+#   b9  CI_SKIP_CARGO=1 with the port missing   -> BLOCKED 3, no port build
+#   b10 RUSTTY_VT_DRIVER names the caller's own driver -> port side not built
+#   e1  copy, fresh checkout (no bin/)          -> builds both, then GREEN (0)
+#   e2  copy, the reference lib unbuildable     -> BLOCKED 3, never GREEN
+#   e3  control: e1 with the `ensure_drivers` call removed from the copy is
+#       NOT green (the pre-fix BLOCKED), so e1 is what proves the build step
+# ---------------------------------------------------------------------------
+run_self_test_build() {
+  echo "--- G4 driver auto-build (hermetic) ---"
+  local ok=1 tmp h rc out
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/g4_build.XXXXXX")" || { echo "  FAIL: mktemp"; return 1; }
+  # stub_harness DIR REF_RC REF_MAKES PORT_RC PORT_MAKES: builders that log a
+  # call line, make their outputs when *_MAKES=1, and exit *_RC.
+  stub_harness() {
+    rm -rf "$1"; mkdir -p "$1/bin" "$1/corpus"
+    printf 'hi\n' >"$1/corpus/c-one.golden"
+    cat >"$1/build_ref_driver.sh" <<STUB
+echo ref >>"$1/calls"
+if [ "$3" = 1 ]; then mkdir -p "$1/bin"; printf '#!/bin/sh\ncat\n' >"$1/bin/vt_driver_ref"; chmod +x "$1/bin/vt_driver_ref"; fi
+[ "$2" = 0 ] || echo "ERROR: stub reference build failed"
+exit $2
+STUB
+    cat >"$1/build_port_driver.sh" <<STUB
+echo "port CTD=\${CARGO_TARGET_DIR-unset}" >>"$1/calls"
+if [ "$5" = 1 ]; then
+  mkdir -p "$1/bin/cvt"
+  printf '#!/bin/sh\ncat\n' >"$1/bin/vt_driver_port"; chmod +x "$1/bin/vt_driver_port"
+  printf '#!/bin/sh\necho hi\n' >"$1/bin/cvt/c-one"; chmod +x "$1/bin/cvt/c-one"
+  echo "OK: built 1/1 port-side cvt example binaries into $1/bin/cvt (0 failed)"
+fi
+[ "$4" = 0 ] || echo "build_port_driver: BLOCKED — stub port build failed"
+exit $4
+STUB
+  }
+  # b_run HOST [NAME=VALUE...]: ensure_drivers against $h; sets rc / out.
+  # (Inside `$( )` bash drops `set -e`, so these arms do not see a silent
+  # errexit death; e1-e2 run the real gate under `set -e` and do.)
+  b_run() {
+    rc=0
+    out="$(b_inner "$@" 2>&1)" || rc=$?
+  }
+  b_inner() { # the gate's paths as function locals, so nothing leaks out
+    local host="$1" HARNESS="$h" REF_DRIVER="$h/bin/vt_driver_ref" \
+      PORT_DRIVER="$h/bin/vt_driver_port" CORPUS="$h/corpus" DIAG_DIR="$h/diag" _a
+    shift
+    unset RUSTTY_VT_DRIVER CI_SKIP_CARGO
+    export CARGO_TARGET_DIR="$tmp/elsewhere"
+    for _a in "$@"; do export "${_a?}"; done
+    eval "g4_host_os() { echo $host; }"
+    ensure_drivers
+  }
+  b_arm() { # b_arm LABEL WANT_RC WANT_CALLS [WANT_SUBSTRING]
+    local calls=""
+    [ ! -f "$h/calls" ] || calls="$(tr '\n' ' ' <"$h/calls" | sed 's/ $//')"
+    if [ "$rc" = "$2" ] && [ "$calls" = "$3" ] && [[ "$out" == *"${4:-}"* ]]; then
+      echo "  ok   $1 (rc=$rc, builders: ${calls:-none})"
+    else
+      echo "  FAIL $1: rc=$rc (want $2), builders [${calls}] (want [$3]), output must contain [${4:-}]"
+      printf '%s\n' "$out" | sed 's/^/       | /'; ok=0
+    fi
+  }
+  h="$tmp/h"
+  stub_harness "$h" 0 1 0 1; b_run Darwin
+  b_arm "b1. both missing => built" 0 "ref port CTD=unset" "built $h/bin/vt_driver_port (+ 1/1 c-vt examples)"
+  [ -x "$h/bin/vt_driver_ref" ] && [ -x "$h/bin/vt_driver_port" ] || { echo "  FAIL b1. the drivers are not there afterwards"; ok=0; }
+  rm -f "$h/calls"; b_run Darwin
+  b_arm "b2. everything present => nothing built" 0 ""
+  rm -f "$h/calls" "$h/bin/cvt/c-one"; b_run Darwin
+  b_arm "b3. a leg-B example missing => port builder only" 0 "port CTD=unset"
+  stub_harness "$h" 11 0 0 1; b_run Darwin
+  b_arm "b4. ref builder fails => BLOCKED" 3 "ref" "BLOCKED: G4 could not build the reference driver (build_ref_driver.sh exit 11): ERROR: stub reference build failed"
+  stub_harness "$h" 0 0 0 1; b_run Darwin
+  b_arm "b5. ref builder leaves no driver => BLOCKED" 3 "ref" "no driver at $h/bin/vt_driver_ref"
+  stub_harness "$h" 0 1 12 0; b_run Darwin
+  b_arm "b6. port builder prerequisite missing => BLOCKED" 3 "ref port CTD=unset" "build_port_driver.sh exit 12"
+  stub_harness "$h" 0 1 13 0; b_run Darwin
+  b_arm "b7. the port does not link (exit 13) => RED" 1 "ref port CTD=unset" "RED: the port does not link"
+  stub_harness "$h" 0 1 0 1; b_run Linux
+  b_arm "b8. not macOS => BLOCKED, nothing built" 3 "" "cannot be built on Linux"
+  stub_harness "$h" 0 1 0 1; printf '#!/bin/sh\ncat\n' >"$h/bin/vt_driver_ref"; chmod +x "$h/bin/vt_driver_ref"
+  b_run Darwin CI_SKIP_CARGO=1
+  b_arm "b9. CI_SKIP_CARGO=1 => BLOCKED, no port build" 3 "" "CI_SKIP_CARGO=1"
+  rm -f "$h/calls"; b_run Darwin RUSTTY_VT_DRIVER="$tmp/callers-own-driver"
+  b_arm "b10. RUSTTY_VT_DRIVER set => port side not built" 0 ""
+
+  # e1-e3: a copy of this gate, end to end, in a fixture checkout.
+  local co pin copy_rc copy_out
+  co="$tmp/e2e/rustty"
+  mkdir -p "$co/.port/tools/gates" "$co/.port/phase-0/harness/fixtures" \
+    "$co/.port/phase-0/harness/ref_driver" "$co/.port/phase-0/corpora/cvt"
+  if ! { cp "$GATES_DIR/_oracle_root.sh" "$co/.port/tools/gates/" &&
+    cp "$REPO_ROOT/.port/tools/parity_names.env" "$co/.port/tools/" &&
+    cp "$HARNESS/comparator.py" "$co/.port/phase-0/harness/" &&
+    printf 'hello\r\n' >"$co/.port/phase-0/harness/fixtures/one.vt" &&
+    printf 'int g4_build_selftest;\n' >"$co/.port/phase-0/harness/ref_driver/vt_driver.c" &&
+    printf 'hi\n' >"$co/.port/phase-0/corpora/cvt/c-one.golden" &&
+    printf '0\n' >"$co/.port/phase-0/corpora/cvt/c-one.exit" &&
+    rustty_fixture_git -C "$co" init -q >/dev/null 2>&1 &&
+    pin="$(rustty_fixture_repo "$tmp/e2e/ghostty" README "e2e oracle")" &&
+    mkdir -p "$tmp/e2e/ghostty/zig-out/include" &&
+    printf '%s\n' "$pin" >"$co/.port/tools/gates/ORACLE_PIN"; }; then
+    echo "  FAIL e1-e3. could not build the fixture checkout"; rm -rf "$tmp"; return 1
+  fi
+  # e_copy REF_RC [DROP_ENSURE]: a fresh bin/, this gate copied with the host
+  # pinned to macOS (and, for the control, without the ensure_drivers call).
+  e_copy() {
+    local hh="$co/.port/phase-0/harness"
+    rm -rf "${hh:?}/bin" "${hh:?}/results"
+    stub_harness "$tmp/e2e/stub" "$1" 1 0 1
+    sed "s#$tmp/e2e/stub#$hh#g" "$tmp/e2e/stub/build_ref_driver.sh" >"$hh/build_ref_driver.sh"
+    sed "s#$tmp/e2e/stub#$hh#g" "$tmp/e2e/stub/build_port_driver.sh" >"$hh/build_port_driver.sh"
+    "$PY" - "$GATES_DIR/run_differential.sh" "$co/.port/tools/gates/run_differential.sh" "${2:-}" <<'PYEOF'
+import sys
+s = open(sys.argv[1]).read()
+old = "g4_host_os() { uname -s; }" + "  # a function"  # split: matches the definition only
+assert s.count(old) == 1
+s = s.replace(old, "g4_host_os() { echo Darwin; }  # a function")
+if sys.argv[3]:
+    call = "\n  GUARD_DONE=1\n  ensure_drivers\n"
+    assert s.count(call) == 1
+    s = s.replace(call, "\n  GUARD_DONE=1\n")
+open(sys.argv[2], "w").write(s)
+PYEOF
+    copy_rc=0
+    copy_out="$(e_env "${BASH:-bash}" "$co/.port/tools/gates/run_differential.sh" 2>&1)" || copy_rc=$?
+  }
+  e_env() ( # the copy's environment: from outside the fixture, no GIT_*, no overrides
+    cd "$tmp" || exit 1
+    for _v in $(compgen -e); do
+      case "$_v" in GIT_*) unset "$_v" ;; esac
+    done
+    unset RUSTTY_VT_DRIVER CI_SKIP_CARGO
+    "$@"
+  )
+  e_copy 0
+  if [ "$copy_rc" = "0" ] && [[ "$copy_out" == *"GREEN: byte-exact"* ]] &&
+    [[ "$copy_out" == *"/e2e/rustty/.port/phase-0/harness/bin/vt_driver_ref in "* ]] &&
+    [[ "$copy_out" == *"/e2e/rustty/.port/phase-0/harness/bin/vt_driver_port (+ 1/1 c-vt examples) in "* ]]; then
+    echo "  ok   e1. copy in a fresh checkout: both drivers built, then GREEN (rc=0)"
+  else
+    echo "  FAIL e1. copy in a fresh checkout gave rc=$copy_rc, want 0 GREEN after building both drivers:"
+    printf '%s\n' "$copy_out" | sed 's/^/       | /'; ok=0
+  fi
+  e_copy 11
+  if [ "$copy_rc" = "3" ] && [[ "$copy_out" == *"BLOCKED: G4 could not build the reference driver"* ]] &&
+    [[ "$copy_out" != *GREEN* ]]; then
+    echo "  ok   e2. copy, reference lib unbuildable => BLOCKED (rc=3)"
+  else
+    echo "  FAIL e2. copy with an unbuildable reference gave rc=$copy_rc, want 3 BLOCKED:"
+    printf '%s\n' "$copy_out" | sed 's/^/       | /'; ok=0
+  fi
+  e_copy 0 drop-ensure
+  if [ "$copy_rc" != "0" ] && [[ "$copy_out" != *"GREEN: byte-exact"* ]]; then
+    echo "  ok   control e3. without the ensure_drivers call the fresh checkout is not GREEN (rc=$copy_rc); e1 requires 0"
+  else
+    echo "  FAIL control e3. a copy without ensure_drivers still went GREEN (rc=$copy_rc): e1 proves nothing"
+    printf '%s\n' "$copy_out" | sed 's/^/       | /'; ok=0
+  fi
+  rm -rf "$tmp"
+  if [ "$ok" = "1" ]; then echo "G4 BUILD SELF-TEST: PASS"; return 0; fi
+  echo "G4 BUILD SELF-TEST: FAIL"; return 1
+}
+
 if [ "$MODE" = "self-test" ]; then
   run_self_test
   exit $?
@@ -633,19 +911,33 @@ if [ "$MODE" = "self-test-oracle" ]; then
   run_self_test_oracle
   exit $?
 fi
+if [ "$MODE" = "self-test-build" ]; then
+  run_self_test_build
+  exit $?
+fi
 
 # ---------------------------------------------------------------------------
 # REAL (armed) gate: the port driver exists — run both legs, byte-exact.
 # Any diff is RED (exit 1). gate_empty_divergence.sh is NOT run here: its
 # assert-100%-divergence contract is only meaningful against an empty port.
 # ---------------------------------------------------------------------------
+# An auto run first checks the driver source against the pinned oracle (the
+# guard BLOCKs on an absent or off-pin oracle), then builds whatever driver is
+# missing (ensure_drivers), so a fresh clone or worktree arms instead of
+# BLOCKing on untracked build output.
+GUARD_DONE=0
+if [ "$MODE" = "auto" ]; then
+  enforce_driver_source_fresh
+  GUARD_DONE=1
+  ensure_drivers
+fi
 if [ "$MODE" = "auto" ] && [ -x "$PORT_DRIVER" ]; then
   echo "--- REAL differential gate (port driver: $PORT_DRIVER) ---"
   if [ ! -x "$REF_DRIVER" ]; then
     echo "BLOCKED: reference driver missing ($REF_DRIVER); run build_ref_driver.sh"
     exit 3
   fi
-  enforce_driver_source_fresh
+  [ "$GUARD_DONE" = "1" ] || enforce_driver_source_fresh
   fail=0
   run_fixture_leg "$PORT_DRIVER" || fail=1
   run_cvt_golden_leg || fail=1
@@ -668,7 +960,7 @@ fi
 echo "--- PROGRESS mode: port driver not armed for this run ($PORT_DRIVER) ---"
 echo "    G4 cannot be parity-GREEN without the port driver; running the"
 echo "    harness self-test (proves the comparator detects total divergence)."
-enforce_driver_source_fresh
+[ "$GUARD_DONE" = "1" ] || enforce_driver_source_fresh
 if [ -x "$HARNESS/gate_empty_divergence.sh" ]; then
   if RUSTTY_VT_DRIVER="/nonexistent/empty-port-stub" bash "$HARNESS/gate_empty_divergence.sh"; then
     echo "HARNESS-WIRED (port empty): comparator self-test PASS; G4 in progress mode"

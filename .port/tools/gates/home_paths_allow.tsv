@@ -1,0 +1,3 @@
+# G-HOMEPATH allowlist (check_home_paths.py): path<TAB>literal<TAB>reason.
+# One row per (file, literal). A row that matches nothing is RED (stale).
+xtask/src/patchelf.rs	/home/u	unit-test fixture: a synthetic rustup toolchain path shaped like a Linux home dir, the RUNPATH the patchelf rewrite must strip; not a real machine path

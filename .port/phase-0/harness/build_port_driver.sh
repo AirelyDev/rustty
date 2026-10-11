@@ -42,7 +42,18 @@ HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # made a worktree's G4 compare the MAIN checkout's port, and wrote its build
 # there; the same fix as .port/tools/miri-run.sh).
 RUSTTY_ROOT="${RUSTTY_ROOT:-$(cd "$HARNESS_DIR/../../.." && pwd)}"
-GHOSTTY="${GHOSTTY:-/Users/gael/projects/ghostty}"
+# The read-only oracle: `ghostty` beside the MAIN checkout of THIS script's
+# repository, from the shared resolver (_oracle_root.sh), exactly as
+# build_ref_driver.sh and G4's staleness guard locate it. R5: no environment
+# override (the retired `GHOSTTY` default was a literal path to one developer's
+# machine) and `GIT_*` cannot redirect it. `--print-oracle` prints it and exits.
+# shellcheck source=.port/tools/gates/_oracle_root.sh
+. "$HARNESS_DIR/../../tools/gates/_oracle_root.sh" || { echo "ERROR: cannot source _oracle_root.sh" >&2; exit 12; }
+GHOSTTY="$(rustty_oracle_root "$(cd "$HARNESS_DIR/../../.." && pwd)")"
+if [ "${1:-}" = "--print-oracle" ]; then
+  printf '%s\n' "$GHOSTTY"
+  exit 0
+fi
 OUT="$HARNESS_DIR/bin/vt_driver_port"
 CVT_OUT_DIR="$HARNESS_DIR/bin/cvt"
 
