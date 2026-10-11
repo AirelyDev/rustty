@@ -12,7 +12,12 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
-const WASM = `${ROOT}/target/wasm32-unknown-unknown/release/rustty_vt_c.wasm`;
+// cargo's real target dir. The calling gate (A5) passes `cargo metadata`'s
+// answer, which honours CARGO_TARGET_DIR, as RUSTTY_TARGET_DIR. A literal
+// `${ROOT}/target` read a different (stale or absent) library whenever
+// ci.sh set CARGO_TARGET_DIR (G-TGTDIR arm 3).
+const TARGET = process.env.RUSTTY_TARGET_DIR || `${ROOT}/target`;
+const WASM = `${TARGET}/wasm32-unknown-unknown/release/rustty_vt_c.wasm`;
 const INCDIR = `${ROOT}/include`;
 const CC =
   (() => {
@@ -116,7 +121,7 @@ execFileSync(CC, [
   "-I",
   INCDIR,
   "-L",
-  `${ROOT}/target/release`,
+  `${TARGET}/release`,
   "-lrustty_vt_c",
   runnerC,
   "-o",
@@ -128,8 +133,8 @@ const MANIFEST = JSON.parse(
     // (N486, P7-W24).
     env: {
       ...process.env,
-      DYLD_LIBRARY_PATH: `${ROOT}/target/release`,
-      LD_LIBRARY_PATH: `${ROOT}/target/release`,
+      DYLD_LIBRARY_PATH: `${TARGET}/release`,
+      LD_LIBRARY_PATH: `${TARGET}/release`,
     },
   }).toString(),
 );

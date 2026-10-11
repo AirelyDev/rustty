@@ -1274,6 +1274,9 @@ GATE_REGISTRY=(
   # harness: a crash, a usage error and a fence RED stay RED; only the
   # dedicated pre-measurement load check is BLOCKED (and measures nothing).
   # Control: the reviewed blanket remap turns the crash BLOCKED. Seconds.
+  # CI hygiene E: plus Fence 2's entry arms (main-checkout lookup from a
+  # worktree, no entry / no manifest BLOCKED, sha mismatch RED, --store-entry),
+  # each with a control that reverts its fix.
   "G8b-SELF|HARD|light|tier=parity|bash $GATES/check_perf_fence.sh --self-test"
   # G8b — the real perf regression fence (paired, same-session, vs a stored
   # binary). BLOCKS (2/3) rather than passing when the box is loaded or the
@@ -1282,6 +1285,9 @@ GATE_REGISTRY=(
   # present, G8b first runs every size label's `rustty_build` from BASELINE.json
   # (the release-fast bench and rustty-gen, the vt-c release libraries; nothing
   # earlier in this script builds them), so G8 never measures a stale artifact.
+  # Fence 2's entry is the MAIN checkout's .perf-bins/ binary, checked against
+  # its manifest; with none, Fence 1 still runs and writes the metrics but G8b
+  # is BLOCKED (exit 3), never GREEN on Fence 1 alone. ci.sh never stores one.
   "G8b|PERF-FENCE|heavy|tgt,exclusive,tier=parity|bash $GATES/check_perf_fence.sh --build --emit-metrics $PERF_METRICS"
   # G8 is ARMED once G8b has emitted that metrics file; with no substrate
   # present G8b BLOCKs, the file is absent, and G8 falls back to progress mode.

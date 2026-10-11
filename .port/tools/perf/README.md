@@ -134,8 +134,40 @@ provisional run.)
 
 ### Fence 2 — SELF ("no self-regression") — **this is the real gate**
 
-Candidate vs a **stored entry binary** (`.perf-bins/`), again measured
-alternately in one process. Bands: **+5%** strict configs, **+15%** short ones.
+Candidate vs a **stored entry binary**, again measured alternately in one
+process. Bands: **+5%** strict configs, **+15%** short ones.
+
+#### The entry binary and its manifest
+
+- **Where.** `<main>/.perf-bins/rustty-bench-ws10-entry-RF`, where `<main>` is
+  the MAIN checkout. `check_perf_fence.sh` derives it with
+  `_gatelib.main_checkout`, the same helper `ws10_suite.py` uses for the
+  corpora, so a linked worktree finds it too. `--self PATH` overrides it (its
+  manifest is `PATH.json`). `.perf-bins/` is git-ignored.
+- **The manifest** `rustty-bench-ws10-entry-RF.json` sits beside it: commit
+  SHA, clean/dirty flag, sha256, UTC date, the build command and the rustc
+  version. G8b prints it before measuring, so the output says what the
+  candidate was fenced against.
+- **How to store.** `check_perf_fence.sh --store-entry` builds the candidate
+  as `--build` does (or reuses `target/release-fast/rustty-bench` with
+  `--no-build`), prints the manifest it replaces, then writes the binary and
+  the manifest (temp file, then rename). It refuses a dirty tree unless
+  `--allow-dirty`, and never measures.
+- **Verdicts.** A binary whose sha256 is not its manifest's is **RED**: the
+  stored binary is not what it claims to be. A binary with no readable
+  manifest is **BLOCKED** ("re-store it"). No binary is **BLOCKED** (exit 3)
+  with a reason line saying Fence 2 did not run and how to store one. In
+  both BLOCKED cases Fence 1 still runs and `--emit-metrics` is still
+  written, so G8 keeps its input. Any RED wins: Fence 1 RED with no entry is
+  exit 1, not 3.
+- **Policy.** Store or refresh the entry only on purpose, at a phase
+  close-out after a GREEN perf verdict, so the next cycle is fenced against
+  it. Never automatically: ci.sh never stores one.
+
+Until CI hygiene E (2026-10-10) Fence 2 had never run in any checkout. The
+lookup was relative to the current directory (a worktree's own, empty
+`.perf-bins/`), nothing stored an entry, and a missing entry only printed a
+NOTE, so G8b could be GREEN on Fence 1 alone.
 
 Fence 2 exists because **Fence 1 and G8 both miss self-regression.** rustty is
 7–60% faster than the oracle, and an oracle-relative fence spends that whole
@@ -195,8 +227,14 @@ python3 .port/tools/perf/ws10_suite.py \
     --rust target/release-fast/rustty-bench -n 9 \
     --emit-metrics /tmp/ws10-metrics.json
 
-# Both fences (the ci.sh-facing wrapper picks up .perf-bins/ automatically):
-.port/tools/gates/check_perf_fence.sh
+# Both fences (the ci.sh-facing wrapper finds the main checkout's .perf-bins/
+# from any worktree; no entry there is BLOCKED, exit 3):
+.port/tools/gates/check_perf_fence.sh --build
+
+# Store the candidate as Fence 2's entry (on purpose, at a phase close-out
+# after a GREEN perf verdict; refuses a dirty tree unless --allow-dirty):
+.port/tools/gates/check_perf_fence.sh --store-entry            # builds first
+.port/tools/gates/check_perf_fence.sh --store-entry --no-build # reuses the binary
 
 # Verdict logic self-test (no subprocesses, no substrate needed):
 python3 .port/tools/perf/ws10_suite.py --self-test
