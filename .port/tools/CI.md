@@ -365,6 +365,8 @@ bash .port/tools/ci.sh                          # parallel (--jobs auto), every 
 bash .port/tools/ci.sh --jobs 1                 # the serial run, in registry order
 bash .port/tools/ci.sh --changed-since <rev>    # fix verification (exit 5)
 bash .port/tools/ci.sh --changed-since <rev> --print-scope   # the scope only
+bash .port/tools/ci.sh --tier product           # only the product gates (exit 4)
+bash .port/tools/ci.sh --tier parity            # only the parity gates (exit 4)
 ```
 
 | flag | effect |
@@ -373,7 +375,8 @@ bash .port/tools/ci.sh --changed-since <rev> --print-scope   # the scope only
 | `--heavy-cap N` | At most N heavy gates run at once (default 2, never more than `--jobs`). A heavy gate also waits while another one runs and the checkout's volume has less than `CI_MIN_FREE_GB` (15) free. |
 | `--changed-since <rev>` | The long gates run only the crates changed since `<rev>` and their reverse dependents. Every other gate runs in full. |
 | `--print-scope` | With `--changed-since`: print the scope and each long gate's decision, then exit 6. It runs no gate, so it is never a verdict. |
-| `--prune-targets` | Deletes each per-gate target dir under `target/ci-targets/` once the last gate using it ends. |
+| `--prune-targets` | Deletes each per-gate target dir under `target/ci-targets/` once the last gate using it ends, if every gate that used it ended GREEN. Never `target/debug`. |
+| `--tier product\|parity\|all` | Runs only that tier's gates (default `all`). See "Parity and product tiers" below. |
 | `--sccache` | Sets `RUSTC_WRAPPER=sccache` when sccache is on PATH. Without sccache the run is unchanged. |
 
 **What every run writes.** Each cargo step and gate prints its wall-clock
@@ -398,7 +401,7 @@ run overwrites both.
   | 0 | PASS. Only a full run can exit 0. |
   | 1 | FAIL |
   | 2 | usage error |
-  | 4 | `--fast` subset green |
+  | 4 | `--fast` or `--tier` subset green |
   | 5 | narrowed green |
   | 6 | `--print-scope` (ran no gate) |
 
@@ -414,12 +417,15 @@ run overwrites both.
 
   Exits 4 and 5 print a NOT-A-RELEASE-GATE banner instead of
   `CI RESULT: PASS`, and name what was skipped or narrowed and why.
-  `--fast` and `--changed-since` do not combine.
+  `--fast` and `--changed-since` do not combine. `--tier` combines with
+  either, and the run then exits 4.
 
 ### How gates are scheduled
 
 Each registry entry declares what it needs:
 `"<id>|<HARD|PROGRESS>|<light|heavy>|<traits>|<runner>"`. Nothing is inferred.
+The traits always include exactly one `tier=parity` or `tier=product` (see
+"Parity and product tiers" below).
 
 - **heavy**: Miri, the sanitizers, Valgrind, release / clean-clone /
   feature-matrix builds, G4, G5 and G8. `--heavy-cap` bounds them.
@@ -447,6 +453,23 @@ Each registry entry declares what it needs:
     its builds and again before measuring.
   - A harness crash, a usage error, a provisional measurement or a fence RED
     stay RED. G8b-SELF proves this.
+  - G-REL-LAT (HARD) runs this way too, before G8b. It is
+    `check_release_lane.sh --exclusive`: the `EXCLUSIVE_TESTS` rows that
+    G-REL's main pass `--skip`s. Each row is a test whose verdict is a
+    wall-clock budget, with its reason. Today the one row is rustty-termio's
+    `readthread_pipeline_keeps_interactive_latency`, a 300 µs median in
+    release only. In Phase 8 it went RED at 10 ms under full parallel load
+    (N549) and passed 10/10 on a quiet machine.
+  - G-REL-LAT follows G8b's load check. It builds first, then waits for the
+    1-minute load to fall to `ws10_suite.py`'s `IDLE_MAX` within
+    `REL_LAT_COOLDOWN_S` (default 600 s). If it does not, the gate exits 3
+    BLOCKED, a WARNING with its reason, having run nothing.
+  - On a quiet machine each row must run exactly one test and pass. A
+    failure is RED, and so is a row that matches no test (stale). Off macOS
+    the gate is BLOCKED, because the test is macOS-only.
+  - G-REL's self-test proves the skip, the load-check BLOCKED, the stale
+    row and the reasonless row, with controls. G-CI-SELF arm X proves that
+    the real entry runs beside nothing.
 - **`shard`**: in a parallel run G-VALGRIND runs as `CI_VALGRIND_SHARDS` (4)
   `check_valgrind.sh --shard K/N` units. Each unit is heavy, so the heavy cap
   bounds them, and each passes `--jobs $CI_VALGRIND_JOBS`. That defaults to
@@ -455,6 +478,43 @@ Each registry entry declares what it needs:
   any shard is RED the gate is RED. If any shard is BLOCKED the gate is
   BLOCKED. Only all-green shards make a green gate.
 - **`scope=<how>`**: what `--changed-since` does to the gate (below).
+
+### Parity and product tiers
+
+Every registry entry carries exactly one tier trait:
+
+- **`tier=parity`**: the gate exists because Rustty tracks the Ghostty
+  oracle. It needs the oracle checkout, the pin or the oracle's artifacts,
+  or it checks the port's records and coverage. Examples: G1 to G3b, G9,
+  G-PARITY, G-FILES, G-SYMS, G-TESTS, G-CENSUS, G-UDDOCS, G-LOGFILE, G4,
+  G4-uni, G-ESCTEST, G-REFGEOM, G-EOL, G8b and G8, and the D1 to D10 port
+  audits.
+- **`tier=product`**: the CI the project would have without the port. That
+  covers fmt, clippy, the workspace build and tests, the release lane, the
+  sanitizers, Miri, Valgrind, fuzz smoke, cross-target and feature builds,
+  the linters, the examples, and the C-ABI and artifact checks.
+
+A `-SELF` entry takes the tier of the gate it tests. The cargo steps are all
+product.
+
+ci.sh checks the registry before the cargo steps. An entry with no tier, two
+tiers or an unknown value is a usage error (exit 2), and nothing runs.
+
+`--tier product` or `--tier parity` runs only that tier. A tier run is a
+subset, like `--fast`:
+
+- every gate and cargo step of the other tier is listed as `SKIPPED by
+  --tier`;
+- the run exits 4 with a TIER-SUBSET banner, never 0, and never prints
+  `CI RESULT: PASS`.
+
+G-CI-SELF's T arms prove all of this, each with a negative control:
+
+- every real entry has exactly one valid tier;
+- a missing, doubled or unknown tier is refused;
+- the real registry's plan under each tier holds only that tier;
+- fixture runs under `--tier product` and `--tier parity` start no gate of the
+  other tier and exit 4.
 
 ### `--changed-since <rev>`: fix verification
 
@@ -539,9 +599,37 @@ Each arm has a negative control.
 `ci.sh` deletes only `target/ci-targets/<name>` dirs. `<name>` must be a plain
 word, the target root must be `<checkout>/target/ci-targets`, and the dir must
 hold the `.created-by-ci-sh` marker that ci.sh writes when it creates the dir.
-A dir without the marker is refused by name. Each dir is deleted when the last
-gate that uses it ends. This is the only deletion `ci.sh` makes. The sanitizer
-gates already delete their own `target/san-<san>` dirs at the end of each pass.
+A dir without the marker is refused by name. This is the only deletion
+`ci.sh` makes.
+
+A dir is deleted when the last gate that uses it ends, and only if every gate
+that used it ended GREEN, meaning rc 0 on all of its units. A gate that ended
+RED, was killed (rc 128 or more) or ended BLOCKED keeps its dir. ci.sh prints
+`kept <dir>: <gate> ended RED (exit N)`, `was killed` or `ended BLOCKED`. That
+gate is the one about to be rerun, and the rerun reuses its build. In Phase 8,
+killing G-VALGRIND's shards ended the gate and pruned `ci-targets/valgrind`,
+so the rerun rebuilt it from nothing. G-CI-SELF arm H proves the rule with a
+RED, a self-killed (SIGTERM, 143), a BLOCKED and a RED-plus-GREEN shared dir.
+Its control is a prune that ignores the verdict.
+
+**`target/debug` is never pruned.** The developer's IDE shares it
+(rust-analyzer's flycheck builds there), so deleting it would cost every
+editor session a cold rebuild. `--prune-targets` touches only
+`target/ci-targets/`.
+
+**`target/san-<san>`** is deleted by `sanitizers.sh` itself on every way out
+of a pass:
+
+- the end of the crate loop, whether the crates were GREEN or RED;
+- the disk-floor BLOCKED stop;
+- an INT, TERM or HUP. A trap deletes the dir being built in, the shared
+  `san-<san>` or the current `san-<san>-<crate>`, then exits 128 plus the
+  signal number.
+
+Before CI hygiene B an interrupted pass left its dir behind. A SIGKILL cannot
+be trapped. In that case the next pass's opening `drop_target` clears the
+dir. G-SAN-SELF arm D2 covers all four paths with a stub `run_crate`. Its
+control installs no trap, and the SIGTERM then leaves the dir behind.
 
 ---
 
@@ -568,7 +656,8 @@ gate, put its script in `.port/tools/gates/` and make it obey the 0 / 3 /
 non-zero exit contract above. Then add one registry line that declares its
 resource and traits (see "How gates are scheduled"): `heavy` if it is long or
 fills the machine, `tgt` if it builds in, or reads from, the default target
-dir or writes untracked files into the tree, and `-` otherwise. Read built
+dir or writes untracked files into the tree, and always its `tier=parity` or
+`tier=product`. Read built
 artifacts through `_target_dir.sh`, never through a literal `target/` path
 (G-TGTDIR enforces this). ci.sh dispatches HARD gates first, then PROGRESS
 gates, and aggregates all results before deciding the exit code.
