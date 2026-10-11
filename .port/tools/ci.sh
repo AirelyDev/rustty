@@ -25,6 +25,12 @@
 #                                    this is the release counterpart. Build +
 #                                    test under `--release`, watchdogged so a
 #                                    hang is RED rather than an infinite wait.)
+#   G-REL-LAT check_release_lane.sh --exclusive
+#                                    G-REL's wall-clock-budget tests (the
+#                                    EXCLUSIVE_TESTS rows its main pass
+#                                    skips), run alone (`exclusive`) after a
+#                                    load check   -> HARD-FAIL; BLOCKED on a
+#                                    loaded machine or off macOS.
 #   G4-uni run_unicode_diff.sh       unicode tables vs LIVE uucode    -> HARD-FAIL
 #                                    (ORACLE #2: rustty's embedded width/symbol/
 #                                    Properties/grapheme tables diffed full-range
@@ -905,6 +911,18 @@ GATE_REGISTRY=(
   # — from going unnoticed again. HARD: it is green today and its verdict has a
   # `--self-test` RED-flip proof.
   "G-REL|HARD|heavy|tgt,tier=product|bash $GATES/check_release_lane.sh"
+  # G-REL-LAT (CI hygiene B, N549) — G-REL's EXCLUSIVE_TESTS rows, which its
+  # main pass skips: tests whose verdict is a wall-clock budget, today
+  # rustty-termio's readthread_pipeline_keeps_interactive_latency (a 300 us
+  # median, release only). It went RED at 10 ms in the release lane of a full
+  # parallel P8 run and passed 10/10 on a quiet machine. `exclusive`, like
+  # G8b/G8: it starts once every other gate has finished, and nothing starts
+  # beside it. HARD, because the budget is meant to gate. A loaded machine is
+  # G8b's precedent: a load check after the build and before any test (IDLE_MAX
+  # from ws10_suite.py, REL_LAT_COOLDOWN_S cooldown) exits 3 BLOCKED, a
+  # WARNING with its reason, never a silent pass; a stale row (0 tests ran) is
+  # RED. BLOCKED off macOS (the test is #[cfg(target_os = "macos")]).
+  "G-REL-LAT|HARD|heavy|tgt,exclusive,tier=product|bash $GATES/check_release_lane.sh --exclusive"
   # G-GTKINIT (WS19 T4, audit row N3) — one `gtk4::init()` per test binary. GTK is
   # thread-pinned and libtest gives every `#[test]` its own thread, so a second
   # `gtk4::init()` in one binary ALWAYS panics. `tests/gtk_wayland_winproto.rs`

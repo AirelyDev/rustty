@@ -453,6 +453,23 @@ The traits always include exactly one `tier=parity` or `tier=product` (see
     its builds and again before measuring.
   - A harness crash, a usage error, a provisional measurement or a fence RED
     stay RED. G8b-SELF proves this.
+  - G-REL-LAT (HARD) runs this way too, before G8b. It is
+    `check_release_lane.sh --exclusive`: the `EXCLUSIVE_TESTS` rows that
+    G-REL's main pass `--skip`s. Each row is a test whose verdict is a
+    wall-clock budget, with its reason. Today the one row is rustty-termio's
+    `readthread_pipeline_keeps_interactive_latency`, a 300 µs median in
+    release only. In Phase 8 it went RED at 10 ms under full parallel load
+    (N549) and passed 10/10 on a quiet machine.
+  - G-REL-LAT follows G8b's load check. It builds first, then waits for the
+    1-minute load to fall to `ws10_suite.py`'s `IDLE_MAX` within
+    `REL_LAT_COOLDOWN_S` (default 600 s). If it does not, the gate exits 3
+    BLOCKED, a WARNING with its reason, having run nothing.
+  - On a quiet machine each row must run exactly one test and pass. A
+    failure is RED, and so is a row that matches no test (stale). Off macOS
+    the gate is BLOCKED, because the test is macOS-only.
+  - G-REL's self-test proves the skip, the load-check BLOCKED, the stale
+    row and the reasonless row, with controls. G-CI-SELF arm X proves that
+    the real entry runs beside nothing.
 - **`shard`**: in a parallel run G-VALGRIND runs as `CI_VALGRIND_SHARDS` (4)
   `check_valgrind.sh --shard K/N` units. Each unit is heavy, so the heavy cap
   bounds them, and each passes `--jobs $CI_VALGRIND_JOBS`. That defaults to

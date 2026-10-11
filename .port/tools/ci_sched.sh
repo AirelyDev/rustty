@@ -749,6 +749,9 @@ ci_on_signal() {
 #      the real registry's plan under each tier is the same split. Controls:
 #      the plan's tier filter dropped (a parity gate runs under --tier
 #      product); the tier banner dropped (the run reads PASS, exit 0).
+#   X  G-REL-LAT, the real registry entry: `exclusive`, and in a fixture run
+#      with its real KIND|RES|TRAITS it overlaps no other gate. Control: the
+#      same entry without `exclusive` runs beside the others.
 #   I  the harness: a mutation whose target no longer exists is a FAIL, and
 #      the fixture it leaves exits 99 (never a stale copy from a past run).
 CST_PASS=0; CST_FAIL=0; CST_BLOCKED=0
@@ -1135,6 +1138,9 @@ B1|BOGUS|light|tier=product|bash $GATES/fake.sh B1 0 0'
   # T — the parity/product tier on every entry, and --tier.
   cst_tier_arms
 
+  # X — G-REL-LAT runs with nothing beside it.
+  cst_exclusive_arms
+
   # I — the harness itself: a mutation whose target is gone must not run a
   # stale copy (it happened: a refactor removed a target and an old fixture
   # kept the arm green).
@@ -1150,6 +1156,37 @@ B1|BOGUS|light|tier=product|bash $GATES/fake.sh B1 0 0'
   [ "$CST_BLOCKED" -eq 0 ] || { echo "G-CI-SELF BLOCKED: an arm could not run (above)"; return 3; }
   echo "G-CI-SELF GREEN"
   return 0
+}
+
+# X: the real G-REL-LAT entry's KIND|RES|TRAITS on a fake runner, beside
+# light, heavy and slow gates; it must overlap none of them.
+cst_exclusive_arms() {
+  local entry spec="" gid gkind gres gtraits grun R o k bad
+  for entry in "${GATE_REGISTRY[@]}"; do
+    IFS='|' read -r gid gkind gres gtraits grun <<< "$entry"
+    [ "$gid" = G-REL-LAT ] && spec="$gkind|$gres|$gtraits"
+  done
+  if [ -z "$spec" ]; then CST_OUT=""; cst_bad "X the real GATE_REGISTRY has no G-REL-LAT entry"; return; fi
+  if trait_has "${spec##*|}" exclusive; then cst_ok "X the real G-REL-LAT entry is exclusive ($spec)"
+  else CST_OUT="$spec"; cst_bad "X the real G-REL-LAT entry is not exclusive"; fi
+  for k in lat lat-mut; do
+    o="$spec"
+    [ "$k" = lat-mut ] && o="$(printf '%s' "$spec" | sed -e 's/,exclusive//' -e 's/exclusive,//')"
+    R="A1|HARD|light|tier=product|bash \$GATES/fake.sh A1 0 1
+LAT|$o|bash \$GATES/fake.sh LAT 0 1
+A2|HARD|heavy|tier=product|bash \$GATES/fake.sh A2 0 2
+A3|PROGRESS|light|tier=parity|bash \$GATES/fake.sh A3 0 1
+A4|HARD|light|tier=product|bash \$GATES/fake.sh A4 0 0"
+    cst_make "$k" "$R"; cst_run "$k" --jobs 4 --heavy-cap 2
+    bad=""
+    for o in A1 A2 A3 A4; do cst_events "$k" overlap LAT "$o" && bad="$bad $o"; done
+    if [ "$k" = lat ]; then
+      if [ "$CST_RC" = 0 ] && [ -z "$bad" ] && cst_events lat before A2 LAT && cst_has "+ LAT"; then
+        cst_ok "X --jobs 4: the G-REL-LAT entry runs alone, after the 2 s heavy gate, beside nothing"
+      else cst_bad "X G-REL-LAT alone (exit $CST_RC, overlapped:$bad)"; fi
+    elif [ -n "$bad" ]; then cst_ok "X control: the same entry without exclusive runs beside$bad, noticed"
+    else cst_bad "X control: a non-exclusive G-REL-LAT entry went unnoticed"; fi
+  done
 }
 
 # T: tiers. cst_tier_ran NAME: the ids a fixture run started, sorted.
