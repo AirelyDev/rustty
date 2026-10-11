@@ -256,6 +256,8 @@ def session_aggregates(prompts, titles=None):
     out = []
     for (tool, machine, sid), ps in by.items():
         ps.sort(key=lambda p: (p["ts_epoch"], p.get("order", 0)))
+        if len({bool(p.get("founding")) for p in ps}) > 1:
+            raise SystemExit(f"session {tool}-{machine}-{sid} mixes founding and non-founding prompts")
         commits = []
         for p in ps:
             for sha in p.get("commits") or []:
@@ -265,7 +267,7 @@ def session_aggregates(prompts, titles=None):
             session=sid, key=None, tool=tool, machine=machine,
             first_ts=iso_utc(ps[0]["ts_epoch"]), last_ts=iso_utc(ps[-1]["ts_epoch"]), prompts=len(ps),
             commands_only=all(p["kind"] == "command" for p in ps),
-            founding=any(p.get("founding") for p in ps), article_work=any(p.get("article_work") for p in ps),
+            founding=bool(ps[0].get("founding")), article_work=any(p.get("article_work") for p in ps),
             branches=sorted({p["branch"] for p in ps if p.get("branch")}),
             models=sorted({p["model"] for p in ps if p.get("model")}),
             commits=commits, commits_ambiguous=sum(1 for p in ps if p.get("commits_basis") == "ambiguous"),
@@ -350,9 +352,10 @@ def glossary_ids(md):
     return out
 
 
-def phase_for(day, phases):
-    """phases: sorted [(start_day, key)]; the key of the last phase starting on or before day."""
-    cur = None
+def phase_for(day, phases, founding=False):
+    """phases: sorted [(start_day, key)]; the key of the last phase starting on or before day. A founding
+    prompt dated before the first phase starts takes the first phase."""
+    cur = phases[0][1] if founding and phases else None
     for start, key in phases:
         if start <= day:
             cur = key
@@ -642,7 +645,7 @@ def join_settings(p, end, tx, stats_calls, stats_session, trailer_models):
 
 COMMITS_RULE = ("A prompt's window runs from the prompt to the next human prompt of the same session (for the "
                 "session's last prompt: to the session's last recorded activity, or 12 h when unknown), capped "
-                "at 12 h. Commits authored in the window are linked as follows. A commit is never linked when "
+                "at 12 h and never past the extraction cutoff. Commits authored in the window are linked as follows. A commit is never linked when "
                 "its Claude-Session trailer, or the `[branch sha]` git output in a surviving transcript, ties it "
                 "to other human sessions only. session-window: the session's git branch is known (transcript, "
                 "rustty-stats or Codex metadata) and the commit either shows up in this session's own "
@@ -654,19 +657,22 @@ COMMITS_RULE = ("A prompt's window runs from the prompt to the next human prompt
                 "branch that reaches it.")
 
 
-def window_end(start, next_ts, last_ts):
+def window_end(start, next_ts, last_ts, cutoff=None):
     if next_ts is not None:
         e = next_ts
     elif last_ts is not None:
         e = max(start, last_ts)
     else:
         e = start + WINDOW_CAP_S
-    return min(e, start + WINDOW_CAP_S)
+    e = min(e, start + WINDOW_CAP_S)
+    return min(e, cutoff) if cutoff is not None else e
 
 
-def commit_window(start, end, branch, commits, foreign_cloud=frozenset(), session=None):
+def commit_window(start, end, branch, commits, foreign_cloud=frozenset(), session=None, cutoff=None):
     """commits: [{sha, ts, label, on: set(branch names), cloud: set(cloud session ids),
-    sessions: set(human sessions whose transcripts show the commit)}]."""
+    sessions: set(human sessions whose transcripts show the commit)}]. The window never runs past `cutoff`."""
+    if cutoff is not None:
+        end = min(end, cutoff)
     win = []
     for c in commits:
         if not (start <= c["ts"] < end):
@@ -1166,7 +1172,7 @@ def main(argv=None):
         foreign = {c for c, o in owners.items() if sid not in o}
         for i, p in enumerate(ps):
             nxt = next((q["ts_epoch"] for q in ps[i + 1:] if q["ts_epoch"] > p["ts_epoch"]), None)
-            end = window_end(p["ts_epoch"], nxt, last)
+            end = window_end(p["ts_epoch"], nxt, last, cutoff)
             branch = p.get("branch")
             if tool == "claude":
                 if t and t["branches"]:
@@ -1177,7 +1183,7 @@ def main(argv=None):
             if branch == "HEAD":
                 branch = None
             p["branch"] = branch
-            p["commits"], p["commits_basis"] = commit_window(p["ts_epoch"], end, branch, commits, foreign, sid)
+            p["commits"], p["commits_basis"] = commit_window(p["ts_epoch"], end, branch, commits, foreign, sid, cutoff)
             p["_end"], p["_tx"], p["_sk"], p["_ss"] = end, t, sk, ss
 
     # a commit claimed by two or more human sessions keeps only evidence-backed links
@@ -1204,7 +1210,7 @@ def main(argv=None):
     for p in prompts:
         p["article_work"] = is_article_work(p, art)
         p["ids"] = find_internal_ids(p["text"])
-        p["phase"] = phase_for(pacific_day(p["ts_epoch"]), phases)
+        p["phase"] = phase_for(pacific_day(p["ts_epoch"]), phases, p.get("founding", False))
         p["decision"] = is_decision(p["text"])
     assign_ids(prompts)
     prompts.sort(key=lambda p: (p["ts_epoch"], p["tool"], p["machine"], p["order"]))

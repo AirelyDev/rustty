@@ -72,7 +72,7 @@ never overwritten.
   the rustty-stats session mode (`bypassPermissions` → `bypass`). Codex mode: `plan` for plan
   collaboration mode, `bypass` for approval `never` + `danger-full-access`, else `default`.
 - **Commits.** See `COMMITS_RULE` in the script (also written to the manifest): a window from the
-  prompt to the session's next prompt (capped at 12 h); `session-window` when the session's branch
+  prompt to the session's next prompt (capped at 12 h and at the extraction cutoff); `session-window` when the session's branch
   is known, `time-window-branch` when it is not but only one branch was active, else `none`.
   Claude-Session trailers and the `[branch sha]` lines git prints into surviving transcripts keep
   a commit away from sessions that did not make it. After linking, a commit claimed by two or more
@@ -87,7 +87,8 @@ never overwritten.
 - **Ids.** `ID_PATTERN` and `PROCESS_LABELS` are copied from the website repo's
   `scripts/porting/jargon.py` (`find_internal_ids`), plus the `FX<n>` family.
 - **Phase.** The strategy timeline's era (latest dated `strategy-timeline-*.csv`) in force on the
-  prompt's Pacific date; the one-day `external` marker is skipped.
+  prompt's Pacific date; the one-day `external` marker is skipped. A founding prompt dated before
+  the first phase starts takes the first phase.
 - **Founding sessions** (`FOUNDING_RULE`). Candidates: Claude history sessions with prompts on or
   after 2026-06-20T00:00Z in `~/projects` itself or `~/projects/rusty*` before the first prompt in a
   `rustty` path (any machine), or in the reference checkout `~/projects/ghostty*` (not
@@ -97,7 +98,10 @@ never overwritten.
   `zig|rust|ghostty`), `naming` (`rustty|rusty|name it|naming|call it`, or the `rusty` folder),
   `other`. Candidates are only proposed. With `--founding`, every prompt of an `include`d
   `(tool, machine, session)` from 2026-06-20T00:00Z to the cutoff is kept with `founding: true`,
-  whatever its folder; everything else follows the project and window rules unchanged.
+  whatever its folder; everything else follows the project and window rules unchanged. A session
+  mixing founding and non-founding prompts stops the run. Founding detection covers Claude history
+  (Mac and VM) only; Codex was checked (rustty-stats `sessions.csv`, 2026-06-20 to 06-24) and has
+  no session in a qualifying folder.
 - **Sessions** (`SESSION_RULE`, after `dedupe_links`). Key `<tool>-<machine>-<first 8 of the id>`
   (longer only if two ids of the same tool and machine share 8 characters). `commits` is the union
   of the session's prompt links; `commits_ambiguous` counts its prompts left `ambiguous` (their
@@ -120,8 +124,8 @@ never overwritten.
 - **2026-10-11** (`DATE_TAG` 2026-10-11), `--cutoff 2026-10-11T01:51:58Z` (the 2026-10-10 run's
   cutoff, so its counts and redaction reviews carry over), no `--founding`. VM history: the copy
   rsynced on 2026-10-11T01:28Z (its last prompt is 2026-08-22T17:27:58Z), reused; the VM was not contacted.
-  1,010 prompts (823 Mac, 165 VM, 22 Codex), identical to 2026-10-10 except one prompt's commit
-  links (two research-branch commits made after that run fall in its window). 93 sessions (66 Mac,
+  1,010 prompts (823 Mac, 165 VM, 22 Codex), identical to 2026-10-10 apart from the new `founding`
+  field (commit windows now stop at the cutoff, so later research commits are not linked). 93 sessions (66 Mac,
   21 VM, 6 Codex; 44 command-only; 16 with a Claude Code title). Founding candidates: 4 sessions,
   16 prompts (one each `port-decision`, `naming`, `ghostty-checkout`, `other`). Redaction proposals
   unchanged (20 spans in 15 prompts).

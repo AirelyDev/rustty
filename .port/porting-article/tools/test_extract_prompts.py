@@ -220,6 +220,18 @@ class CommitWindowTest(unittest.TestCase):
         self.assertEqual((prompts[2]["commits"], prompts[2]["commits_basis"]), ([], "ambiguous"))
         self.assertEqual(stats, {"contested_commits": 3, "links_removed": 5, "prompts_ambiguous": 1})
 
+    def test_window_clamped_to_cutoff(self):
+        cutoff = self.t + 90
+        # the next prompt is an hour away, but the extraction stopped at the cutoff
+        self.assertEqual(ep.window_end(self.t, self.t + 3600, None, cutoff), cutoff)
+        self.assertEqual(ep.window_end(self.t, None, None, cutoff), cutoff)
+        self.assertEqual(ep.window_end(self.t, self.t + 30, None, cutoff), self.t + 30)
+        # commit a (t+60) is before the cutoff, commit b (t+120) after it
+        shas, basis = ep.commit_window(self.t, self.t + 3600, "main", self.commits, cutoff=cutoff)
+        self.assertEqual((shas, basis), (["a" * 40], "session-window"))
+        self.assertEqual(ep.commit_window(self.t + 100, self.t + 3600, "main", self.commits, cutoff=cutoff),
+                         ([], "none"))
+
     def test_window_end(self):
         self.assertEqual(ep.window_end(100.0, 200.0, None), 200.0)
         self.assertEqual(ep.window_end(100.0, None, 5000.0), 5000.0)
@@ -272,6 +284,11 @@ class RulesTest(unittest.TestCase):
         self.assertEqual(ep.phase_for("2026-07-09", phases), "pre-Bun")
         self.assertEqual(ep.phase_for("2026-07-10", phases), "post-Bun")
         self.assertEqual(ep.phase_for("2026-10-10", phases), "post-R13")
+        # a founding prompt before the first phase takes the first phase; others are unchanged
+        self.assertEqual(ep.phase_for("2026-06-20", phases, founding=True), "pre-Bun")
+        self.assertIsNone(ep.phase_for("2026-06-20", phases))
+        self.assertEqual(ep.phase_for("2026-07-10", phases, founding=True), "post-Bun")
+        self.assertIsNone(ep.phase_for("2026-06-20", [], founding=True))
 
     def test_glossary_ids(self):
         md = ("| ID | Plain |\n|---|---|\n| R1 | Full fidelity |\n"
@@ -506,6 +523,14 @@ class SessionAggregateTest(unittest.TestCase):
         self.assertEqual(set(a), {"session", "key", "tool", "machine", "first_ts", "last_ts", "prompts",
                                   "commands_only", "founding", "article_work", "branches", "models", "commits",
                                   "commits_ambiguous", "cc_title"})
+
+    def test_session_mixing_founding_refused(self):
+        ps = [self.p("mixed-1", "2026-06-21T05:00:00Z", founding=True),
+              self.p("mixed-1", "2026-06-22T13:00:00Z", founding=False)]
+        with self.assertRaises(SystemExit):
+            ep.session_aggregates(ps)
+        ps[1]["founding"] = True
+        self.assertTrue(ep.session_aggregates(ps)[0]["founding"])
 
     def test_session_keys_unique(self):
         ps = [self.p("019e1d07-aaaa", "2026-07-01T10:00:00Z", tool="codex"),
