@@ -17,11 +17,16 @@
 //! The catalog tree is built here by `msgfmt` from the committed `po/`, so the
 //! test also covers the `GhosttyI18n.zig:33-43` compile step end to end.
 
-// Not on Windows (task W-2, R14 form 1): the reference's `-Di18n` default is
-// `false` there (`build/Config.zig:263-271`: only macOS/iOS, and Linux/FreeBSD
-// with glibc), so `rustty_translate` is the identity and there is no catalog
-// to look up.
-#![cfg(not(windows))]
+// Only where the reference's `-Di18n` default is `true` (task W-2, R14 form 1;
+// `build/Config.zig:263-271`: macOS/iOS, and Linux/FreeBSD with glibc).
+// Elsewhere (Windows, FreeBSD's own libc, musl) `rustty_translate` is the
+// identity and there is no catalog to look up. N560: this was `not(windows)`,
+// so it ran, and failed, on FreeBSD.
+#![cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    all(any(target_os = "linux", target_os = "freebsd"), target_env = "gnu")
+))]
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

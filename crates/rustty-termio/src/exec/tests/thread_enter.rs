@@ -11,7 +11,7 @@ use super::*;
 /// reads `self.pty` directly) the first assertions fail: the main thread
 /// sees the pty mid-publication.
 #[test]
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
 #[cfg_attr(miri, ignore)] // opens a real pty
 fn ud367_process_info_waits_for_thread_enter_to_publish_the_pty() {
     use allocator_api2::alloc::Global;

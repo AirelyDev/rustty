@@ -2224,10 +2224,46 @@ fn wtf16le_to_wtf8(wide: &[u16]) -> Vec<u8> {
 // has arms for more unixes than the port's rustty tiers build for; on these
 // the kitty file/temporary-file medium fails closed (`InvalidData` via
 // `validatedFilePath`).
+// FreeBSD: Zig 0.16's `File.realPath` (`std/Io/Threaded.zig:6872-6896`) reads
+// the path out of `fcntl(F_KINFO)`'s `kinfo_file`, and a zero-length path is
+// `error.NameTooLong`. N561: this arm was missing, so FreeBSD fell to the
+// `Unsupported` arm below and every file and temporary-file medium failed.
+// `KINFO_FILE_SIZE` is `sizeof(struct kinfo_file)`; the `libc` crate defines it
+// for x86 FreeBSD only, so the size is taken from the struct.
+#[cfg(target_os = "freebsd")]
+fn realpath_of_handle(file: &std::fs::File) -> std::io::Result<Vec<u8>> {
+    use std::os::fd::AsRawFd;
+    // SAFETY: `kinfo_file` is plain old data; all-zero is a valid value.
+    let mut k_file: libc::kinfo_file = unsafe { std::mem::zeroed() };
+    k_file.kf_structsize = std::mem::size_of::<libc::kinfo_file>() as libc::c_int;
+    loop {
+        // SAFETY(ffi-boundary/graphics_image): `F_KINFO` fills at most
+        // `kf_structsize` bytes of `k_file`, which is exactly that size; `file`
+        // keeps the fd open for the duration of the call.
+        let rc = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_KINFO, &raw mut k_file) };
+        if rc != -1 {
+            break;
+        }
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() != Some(libc::EINTR) {
+            return Err(err);
+        }
+    }
+    let path: &[u8] =
+        // SAFETY: `kf_path` is a `[c_char; PATH_MAX]`, the same bytes as `u8`.
+        unsafe { std::slice::from_raw_parts(k_file.kf_path.as_ptr().cast(), k_file.kf_path.len()) };
+    let len = path.iter().position(|&b| b == 0).unwrap_or(path.len());
+    if len == 0 {
+        return Err(std::io::Error::from(std::io::ErrorKind::InvalidFilename));
+    }
+    Ok(path[..len].to_vec())
+}
+
 #[cfg(not(any(
     target_os = "macos",
     target_os = "linux",
     target_os = "android",
+    target_os = "freebsd",
     windows
 )))]
 fn realpath_of_handle(_file: &std::fs::File) -> std::io::Result<Vec<u8>> {

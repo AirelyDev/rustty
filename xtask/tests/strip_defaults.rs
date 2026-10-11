@@ -183,15 +183,22 @@ fn release_test_lanes_run_unstripped() {
     let export = lane
         .find("\nexport CARGO_PROFILE_RELEASE_STRIP=false\n")
         .expect("G-REL exports CARGO_PROFILE_RELEASE_STRIP=false");
+    // The main lane's steps, by their exact text: `run_exclusive` (defined
+    // earlier in the file) also runs `cargo test --release`, so the first bare
+    // match is inside that function (N562, `e0fb9a6e8`). Its call site must
+    // come after the export too.
     let build = lane
-        .find("run_watchdogged cargo build --release")
+        .find("run_watchdogged cargo build --release \"${SCOPE_ARGS[@]}\"")
         .expect("G-REL's build step");
     let test = lane
-        .find("run_watchdogged cargo test --release")
+        .find("run_watchdogged cargo test --release \"${SCOPE_ARGS[@]}\"")
         .expect("G-REL's test step");
+    let exclusive = lane
+        .find("then run_exclusive;")
+        .expect("G-REL's exclusive-unit call site");
     assert!(
-        export < build && export < test,
-        "the export must precede both steps"
+        export < build && export < test && export < exclusive,
+        "the export must precede every release test step"
     );
 
     let ci = std::fs::read_to_string(root.join(".port/tools/ci.sh")).expect("read ci.sh");

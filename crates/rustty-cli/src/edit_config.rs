@@ -469,7 +469,13 @@ mod exec_tests {
         ];
         #[cfg(target_os = "linux")]
         let rows: &[(i32, &str)] = &[(libc::ELIBBAD, "LIBBAD"), (libc::EOPNOTSUPP, "OPNOTSUPP")];
-        #[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+        #[cfg(target_os = "freebsd")]
+        let rows: &[(i32, &str)] = &[
+            (libc::ENOTCAPABLE, "NOTCAPABLE"),
+            (libc::ECAPMODE, "CAPMODE"),
+            (libc::EINTEGRITY, "INTEGRITY"),
+        ];
+        #[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "freebsd")))]
         let rows: &[(i32, &str)] = &[];
         assert!(!rows.is_empty(), "no errno table for this target");
         for (code, name) in rows {
