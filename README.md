@@ -12,7 +12,9 @@
     A native GUI or embeddable library via <code>librustty</code>.
   </p>
   <p align="center">
-    <a href="https://rustty.sh/porting"><strong>📖 Read the story: how Ghostty was ported to Rust &rarr;</strong></a>
+    <a href="https://rustty.sh/porting">
+      <img src="images/porting-banner.svg" alt="Read the story: how Ghostty was ported to Rust — rustty.sh/porting" width="720" />
+    </a>
   </p>
   <p align="center">
     <a href="#about">About</a>
