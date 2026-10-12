@@ -27,9 +27,15 @@ case "$XCFRAMEWORK_TARGET" in
     # The x86_64 standard library is not installed by default on an arm64 host.
     rustup target add aarch64-apple-darwin x86_64-apple-darwin
     DESTINATION='generic/platform=macOS'
+    ARCH_FLAG=()
     ;;
   native)
     DESTINATION="platform=macOS,arch=$(uname -m)"
+    # The destination alone does not restrict a Release build, whose ARCHS lists
+    # both architectures: it would link x86_64 against this arm64-only library
+    # ("Undefined symbols for architecture x86_64"). `-arch` is what
+    # GhosttyXcodebuild.zig:36-48 passes.
+    ARCH_FLAG=(-arch "$(uname -m)")
     ;;
   *)
     echo "XCFRAMEWORK_TARGET must be universal or native, got '$XCFRAMEWORK_TARGET'" >&2
@@ -94,7 +100,7 @@ echo "== 3/3 xcodebuild =="
 cd macos
 env -i HOME="$HOME" PATH="$PATH" \
   xcodebuild -project Rustty.xcodeproj -scheme Rustty -configuration "$CONFIGURATION" \
-  -destination "$DESTINATION" \
+  -destination "$DESTINATION" ${ARCH_FLAG[@]+"${ARCH_FLAG[@]}"} \
   CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
   "$@"
 
