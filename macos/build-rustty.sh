@@ -30,13 +30,14 @@ case "$XCFRAMEWORK_TARGET" in
     ARCH_FLAG=()
     ;;
   native)
-    # A destination naming the arch does not restrict a Release build, whose
-    # ARCHS lists both architectures: it would link x86_64 against this
-    # arm64-only library ("Undefined symbols for architecture x86_64"). `-arch`
-    # is what GhosttyXcodebuild.zig:36-48 passes, and xcodebuild rejects it
-    # beside a destination that already implies an architecture.
-    DESTINATION='generic/platform=macOS'
-    ARCH_FLAG=(-arch "$(uname -m)")
+    DESTINATION="platform=macOS,arch=$(uname -m)"
+    # The destination alone does not restrict a Release build, whose ARCHS lists
+    # both architectures: it would link x86_64 against this arm64-only library
+    # ("Undefined symbols for architecture x86_64"). The oracle overrides the
+    # project's architectures with `-arch` (GhosttyXcodebuild.zig:36-48), but
+    # xcodebuild rejects `-arch` beside a destination that implies one, so the
+    # same override is passed as the ARCHS build setting.
+    ARCH_FLAG=(ARCHS="$(uname -m)")
     ;;
   *)
     echo "XCFRAMEWORK_TARGET must be universal or native, got '$XCFRAMEWORK_TARGET'" >&2
