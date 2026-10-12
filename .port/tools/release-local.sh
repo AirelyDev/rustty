@@ -46,7 +46,7 @@ full_version() {
   local p
   # A VM build gets the host's exact version (it has no git history to derive one).
   if [ -n "${RUSTTY_VERSION_STRING:-}" ]; then printf '%s' "$RUSTTY_VERSION_STRING"; return; fi
-  p="$(cargo run -q -p xtask -- dist 2>/dev/null | tail -1)"
+  p="$(cargo run -q -p xtask -- dist 2>/dev/null | sed -n 's/^wrote //p' | tail -1)"
   [ -f "$p" ] || p="$(ls -t dist/rustty-*.tar.gz 2>/dev/null | head -1)"
   [ -f "$p" ] || die "xtask dist produced no tarball"
   basename "$p" .tar.gz | sed 's/^rustty-//'
@@ -72,8 +72,8 @@ lane_source() {
     cargo run -q -p xtask -- distcheck-lib-vt
   fi
   local a b
-  a="$(cargo run -q -p xtask -- dist 2>/dev/null | tail -1)"
-  b="$(cargo run -q -p xtask -- dist-lib-vt 2>/dev/null | tail -1)"
+  a="$(cargo run -q -p xtask -- dist 2>/dev/null | sed -n 's/^wrote //p' | tail -1)"
+  b="$(cargo run -q -p xtask -- dist-lib-vt 2>/dev/null | sed -n 's/^wrote //p' | tail -1)"
   [ -f "$a" ] && [ -f "$b" ] || die "xtask dist / dist-lib-vt did not produce tarballs"
   cp "$a" "$out/$(safe "$(basename "$a")")"
   cp "$b" "$out/$(safe "$(basename "$b")")"
