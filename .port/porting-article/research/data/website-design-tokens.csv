@@ -1,0 +1,26 @@
+token,value,role,source
+--brand-color,#d97934,primary accent (rust copper),src/styles/globals.css
+--rust-copper,#d97934,series 1,src/styles/globals.css
+--rust-gold,#ffbc7a,series 2,src/styles/globals.css
+--rust-teal,#64d8c6,series 3 / contrast accent,src/styles/globals.css
+--rust-ember,#7a321d,dark accent / fills,src/styles/globals.css
+--gray-0,#0f1111,page background,src/styles/globals.css
+--gray-1,#171a19,blocks / chart panel bg,src/styles/globals.css
+--gray-2,#262927,hr / gridlines,src/styles/globals.css
+--gray-3,#4a4f4b,unfocused text / axis,src/styles/globals.css
+--gray-4,#858a84,body text,src/styles/globals.css
+--gray-5,#9aa09a,secondary text,src/styles/globals.css
+--gray-6,#c1c8c0,strong text,src/styles/globals.css
+--gray-7,#d9ded6,table header text,src/styles/globals.css
+--gray-8,#e8ede4,light text,src/styles/globals.css
+--gray-9,#f4f1ed,headings / links,src/styles/globals.css
+--atom-one-blue,#61aeee,code + callout-note,src/styles/globals.css
+--atom-one-green,#98c379,code + callout-tip (pass/green),src/styles/globals.css
+--atom-one-yellow,#e6c07b,code + callout-warning,src/styles/globals.css
+--atom-one-purple,#c678dd,code + callout-important,src/styles/globals.css
+--atom-one-red,#e06c75,code + callout-caution (fail/red),src/styles/globals.css
+--atom-one-orange,#d19a66,code numbers,src/styles/globals.css
+--atom-one-teal,#56b6c2,code literals,src/styles/globals.css
+--atom-one-gray,#5c6370,code comments,src/styles/globals.css
+--pretendard-std-variable,local woff2,body/display font,src/components/text/index.tsx
+--jetbrains-mono,next/font/google weight 400,code font,src/components/text/index.tsx

@@ -1,0 +1,21 @@
+profile,bench,rust_ms,source
+"release (overflow-checks on, no LTO)",terminal-parser,328.8,perf-v2/FINAL_A.jsonl
+"release (overflow-checks on, no LTO)",terminal-stream,483.8,perf-v2/FINAL_A.jsonl
+"release (overflow-checks on, no LTO)",osc-parser,57.4,perf-v2/FINAL_A.jsonl
+"release (overflow-checks on, no LTO)",screen-clone.clone,80.0,perf-v2/FINAL_A.jsonl
+release-fast: overflow-checks off only (SHIPPED),terminal-parser,322.0,perf-v2/EXP_Bfinal.jsonl
+release-fast: overflow-checks off only (SHIPPED),terminal-stream,449.7,perf-v2/EXP_Bfinal.jsonl
+release-fast: overflow-checks off only (SHIPPED),osc-parser,57.8,perf-v2/EXP_Bfinal.jsonl
+release-fast: overflow-checks off only (SHIPPED),screen-clone.clone,84.2,perf-v2/EXP_Bfinal.jsonl
++ fat LTO + cgu=1 + panic=abort,terminal-parser,531.1,perf-v2/FINAL_C.jsonl
++ fat LTO + cgu=1 + panic=abort,terminal-stream,484.5,perf-v2/FINAL_C.jsonl
++ fat LTO + cgu=1 + panic=abort,osc-parser,48.4,perf-v2/FINAL_C.jsonl
++ fat LTO + cgu=1 + panic=abort,screen-clone.clone,70.4,perf-v2/FINAL_C.jsonl
++ thin LTO instead of fat,terminal-parser,500.6,perf-v2/EXP_thinlto.jsonl
++ thin LTO instead of fat,terminal-stream,469.6,perf-v2/EXP_thinlto.jsonl
++ thin LTO instead of fat,osc-parser,48.4,perf-v2/EXP_thinlto.jsonl
++ thin LTO instead of fat,screen-clone.clone,70.4,perf-v2/EXP_thinlto.jsonl
+"+ fat LTO, do_action demoted",terminal-parser,535.3,perf-v2/EXP_demote.jsonl
+"+ fat LTO, do_action demoted",terminal-stream,464.3,perf-v2/EXP_demote.jsonl
+"+ fat LTO, do_action demoted",osc-parser,49.0,perf-v2/EXP_demote.jsonl
+"+ fat LTO, do_action demoted",screen-clone.clone,70.2,perf-v2/EXP_demote.jsonl

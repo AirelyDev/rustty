@@ -1,0 +1,419 @@
+/* Agents vs human widget body. Values follow the approved mockup
+   (02-agents-vs-human) inside the shared instrument card. */
+
+/* Widget root: positioning context for the floating tooltip. */
+.root {
+  position: relative;
+  min-width: 0;
+  color: #d9ded6;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Headline row: big totals on the left, live counters on the right. */
+.top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 10px;
+}
+
+/* Big mono totals; copper commits, teal prompts. */
+.big {
+  color: #f4f1ed;
+  font: 700 30px/1 var(--jetbrains-mono), ui-monospace, monospace;
+}
+.big b {
+  color: #d97934;
+}
+.big i {
+  color: #64d8c6;
+  font-style: normal;
+}
+.big small {
+  display: block;
+  margin-top: 6px;
+  color: #858a84;
+  font: 500 13px/1.3 var(--jetbrains-mono), ui-monospace, monospace;
+}
+
+/* Live counters: date, commits, prompts, lines. */
+.ctr {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  color: #9aa09a;
+  font: 12px/1.2 var(--jetbrains-mono), ui-monospace, monospace;
+}
+.ctr b {
+  display: block;
+  color: #f4f1ed;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* Toolbar: metric toggle, reset and range text. */
+.ctrl {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+/* Toolbar buttons. */
+.btn {
+  padding: 7px 9px;
+  background: #121413;
+  border: 1px solid #262927;
+  border-radius: 8px;
+  color: #c1c8c0;
+  font: 500 11px/1 var(--jetbrains-mono), ui-monospace, monospace;
+  cursor: pointer;
+}
+.btn:hover {
+  border-color: #4a4f4b;
+  color: #f4f1ed;
+}
+.btn[aria-pressed="true"] {
+  background: #1d140d;
+  border-color: #d97934;
+  color: #f4f1ed;
+}
+.btn:focus-visible {
+  outline: 2px solid #64d8c6;
+  outline-offset: 2px;
+}
+
+/* Thin vertical separator between button groups. */
+.sep {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: #262927;
+}
+
+/* Current range text, pushed to the right. */
+.range {
+  margin-left: auto;
+  color: #858a84;
+  font: 11px var(--jetbrains-mono), ui-monospace, monospace;
+}
+
+/* Replay controls row. */
+.replayRow {
+  margin-bottom: 10px;
+}
+
+/* Six insight tiles. */
+.ins {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+/* One insight tile: big value and explanation. */
+.tile {
+  min-width: 0;
+  padding: 9px 10px;
+  background: #0e100f;
+  border: 1px solid #262927;
+  border-radius: 10px;
+}
+.tile b {
+  display: block;
+  color: #f4f1ed;
+  font: 700 18px/1.1 var(--jetbrains-mono), ui-monospace, monospace;
+}
+.tile span {
+  display: block;
+  margin-top: 4px;
+  color: #858a84;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+/* Horizontal scroll box for the main SVG (phone). */
+.scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* The main SVG keeps a readable minimum width. */
+.main {
+  min-width: 760px;
+}
+
+/* Main SVG: full width, no text selection while brushing; vertical pans scroll the page. */
+.mainSvg {
+  display: block;
+  width: 100%;
+  height: auto;
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.mainSvg text {
+  font-family: var(--jetbrains-mono), ui-monospace, monospace;
+}
+.mainSvg:focus-visible {
+  outline: 2px solid #64d8c6;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Scroll hint, shown only where the main SVG scrolls sideways. */
+.scrollHint {
+  display: none;
+  margin: 0 0 6px;
+  color: #858a84;
+  font: 11px var(--jetbrains-mono), ui-monospace, monospace;
+  text-align: center;
+}
+
+/* Interaction hint under the chart. */
+.hint {
+  margin: 6px 0 0;
+  color: #4a4f4b;
+  font-size: 11px;
+}
+
+/* Autonomy and leverage, side by side. */
+.sub {
+  display: grid;
+  grid-template-columns: 1.55fr 1fr;
+  gap: 16px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #262927;
+}
+.sub h4 {
+  margin: 0 0 8px;
+  color: #858a84;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.3;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+/* Era small multiples grid. */
+.sm {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+/* One era card (a button: hover outlines the era, click zooms to it). */
+.smc {
+  display: block;
+  min-width: 0;
+  padding: 8px;
+  background: #0e100f;
+  border: 1px solid #262927;
+  border-radius: 10px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.smc:hover,
+.on {
+  border-color: #4a4f4b;
+}
+.smc:focus-visible {
+  outline: 2px solid #64d8c6;
+  outline-offset: 2px;
+}
+.smc svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.smc svg text {
+  font-family: var(--jetbrains-mono), ui-monospace, monospace;
+}
+
+/* Era with no commits in the range. */
+.dim {
+  opacity: 0.35;
+}
+
+/* Era card title and stats line. */
+.smTitle {
+  display: block;
+  min-height: 28px;
+  color: #c1c8c0;
+  font-size: 11px;
+  line-height: 1.3;
+}
+.smTitle em {
+  display: block;
+  color: #858a84;
+  font: normal 10px var(--jetbrains-mono), ui-monospace, monospace;
+}
+
+/* Leverage table: era label and two bar columns. */
+.lev {
+  display: grid;
+  grid-template-columns: minmax(0, 118px) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 4px 10px;
+  align-items: center;
+  font-size: 11px;
+}
+.levRow {
+  display: contents;
+}
+.levHead {
+  color: #858a84;
+  font-size: 10px;
+  letter-spacing: 1px;
+}
+.levLabel {
+  color: #c1c8c0;
+  line-height: 1.2;
+}
+.levCell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 14px;
+}
+.levBar {
+  flex: none;
+  height: 8px;
+  border-radius: 0 4px 4px 0;
+}
+.levText {
+  color: #c1c8c0;
+  font: 10.5px var(--jetbrains-mono), ui-monospace, monospace;
+}
+.levNote {
+  margin: 10px 0 0;
+  color: #858a84;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+/* Floating tooltip for the main chart. */
+.tip {
+  position: absolute;
+  z-index: 5;
+  max-width: min(340px, calc(100% - 16px));
+  padding: 9px 11px;
+  background: #161917;
+  border: 1px solid #3a3f3b;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  color: #d9ded6;
+  font-size: 12px;
+  line-height: 1.45;
+  pointer-events: none;
+}
+.tip[data-pinned] {
+  pointer-events: auto;
+}
+.tip[hidden] {
+  display: none;
+}
+
+/* Tooltip heading. */
+.th {
+  color: #f4f1ed;
+  font: 600 12px var(--jetbrains-mono), ui-monospace, monospace;
+}
+
+/* Tooltip mono metric line. */
+.tm {
+  color: #9aa09a;
+  font: 11px var(--jetbrains-mono), ui-monospace, monospace;
+}
+.tmBright {
+  color: #d9ded6;
+}
+.teal {
+  color: #64d8c6;
+}
+
+/* Largest commit subject of the hour. */
+.ts {
+  margin: 5px 0;
+  padding-left: 7px;
+  border-left: 2px solid #d97934;
+  color: #c1c8c0;
+  font-size: 11.5px;
+}
+.hash {
+  color: #858a84;
+  font-family: var(--jetbrains-mono), ui-monospace, monospace;
+}
+.largest {
+  display: block;
+  color: #858a84;
+}
+.dayHead {
+  margin-top: 4px;
+  color: #858a84;
+}
+
+/* Era and event lines in the day summary. */
+.te {
+  margin-top: 4px;
+  color: #c1c8c0;
+  font-size: 11.5px;
+}
+.teEras {
+  color: #9aa09a;
+}
+.teKind {
+  font-family: var(--jetbrains-mono), ui-monospace, monospace;
+}
+
+/* Quiet-stretch reason. */
+.tq {
+  margin: 5px 0;
+  padding-left: 7px;
+  border-left: 2px solid #e06c75;
+  color: #c1c8c0;
+  font-size: 11.5px;
+}
+
+/* Touch and narrow screens: let a sideways swipe scroll the chart's box. */
+@media (pointer: coarse), (max-width: 820px) {
+  .mainSvg {
+    touch-action: pan-x pan-y;
+  }
+}
+
+/* Narrow: tiles in 3 columns, sub-panels stacked, scroll hint shown. */
+@media (max-width: 820px) {
+  .ins {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .sub {
+    grid-template-columns: 1fr;
+  }
+  .scrollHint {
+    display: block;
+  }
+}
+
+/* Phone: tiles and era cards in 2 columns, smaller headline. */
+@media (max-width: 520px) {
+  .ins {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .sm {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .big {
+    font-size: 24px;
+  }
+  .range {
+    width: 100%;
+    margin-left: 0;
+  }
+}

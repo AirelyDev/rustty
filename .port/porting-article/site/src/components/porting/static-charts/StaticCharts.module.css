@@ -1,0 +1,609 @@
+/* The seven static charts: server-rendered SVG and HTML inside the shared
+   instrument card. Hover, tap and keyboard detail come from the shared
+   Tooltip only. Wide layouts above 800 px, stacked phone layouts below. */
+
+/* Vertical stack of a chart's blocks. */
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  color: #d9ded6;
+  font-variant-numeric: tabular-nums;
+}
+.mono {
+  font-family: var(--jetbrains-mono), ui-monospace, monospace;
+}
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Wide-only and phone-only variants of a chart. */
+.narrowOnly {
+  display: none;
+}
+@media (max-width: 800px) {
+  .wideOnly {
+    display: none;
+  }
+  .narrowOnly {
+    display: block;
+  }
+}
+
+/* An SVG plot with its hover targets laid over it. */
+.plot {
+  position: relative;
+  min-width: 0;
+}
+.svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+.svg text {
+  font-family: var(--jetbrains-mono), ui-monospace, monospace;
+}
+.axisText {
+  fill: #858a84;
+  font-size: 10px;
+}
+.panelText {
+  fill: #9aa09a;
+  font-size: 10.5px;
+}
+.valText {
+  fill: #f4f1ed;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.evText,
+.markText {
+  fill: #c1c8c0;
+  font-size: 10px;
+}
+.noteText {
+  fill: #e6c07b;
+  font-size: 10px;
+}
+.laneText {
+  fill: #c1c8c0;
+  font-size: 11px;
+}
+.eraText {
+  fill: #f4f1ed;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.inkText {
+  fill: #0b0c0c;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+/* Hover target over an SVG mark: invisible until hovered or focused. */
+.hot {
+  position: absolute;
+  display: block;
+  border-radius: 3px;
+}
+.hot:hover,
+.hot:focus-within {
+  background: rgb(244 241 237 / 7%);
+}
+.hot > span,
+.hot > span > button {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Tooltip body lines. */
+.tipTitle {
+  display: block;
+  margin-bottom: 3px;
+  color: #f4f1ed;
+  font-weight: 600;
+}
+.tipRow {
+  display: block;
+  color: #c1c8c0;
+}
+
+/* Legends and small headings. */
+.legendLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  margin: 0;
+  color: #9aa09a;
+  font-size: 11.5px;
+}
+.legendLine i {
+  display: inline-block;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+.swLine {
+  width: 14px;
+  height: 2px;
+}
+.swDash {
+  width: 14px;
+  height: 0;
+  border-top: 2px dashed;
+}
+.swBox {
+  width: 9px;
+  height: 9px;
+  border-radius: 1px;
+}
+.swDiamond {
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid;
+  transform: rotate(45deg);
+}
+.glyph {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+.miniHead {
+  color: #9aa09a;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.miniNote {
+  margin: 6px 0 0;
+  color: #858a84;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+/* KPI row. */
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  color: #9aa09a;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.kpis b {
+  display: block;
+  color: #f4f1ed;
+  font: 700 22px/1.2 var(--jetbrains-mono), ui-monospace, monospace;
+}
+
+/* Column layouts. */
+.twoCol {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+  gap: 22px;
+  align-items: start;
+}
+.threeCol {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+  align-items: start;
+}
+.threeCol .miniHead {
+  margin-bottom: 4px;
+}
+
+/* Stats card tiles. */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.tile {
+  min-width: 0;
+  padding: 12px 12px 11px;
+  background: #121413;
+  border: 1px solid #262927;
+  border-radius: 10px;
+}
+.tile:hover,
+.tile:focus-within {
+  border-color: #4a4f4b;
+}
+.tile > span,
+.tile > span > button {
+  display: block;
+  width: 100%;
+}
+.tileValue {
+  display: block;
+  color: #f4f1ed;
+  font: 700 23px/1.15 var(--jetbrains-mono), ui-monospace, monospace;
+  overflow-wrap: anywhere;
+}
+.tileLabel {
+  display: block;
+  margin-top: 3px;
+  color: #c1c8c0;
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+.tileSub {
+  display: block;
+  margin-top: 5px;
+  color: #858a84;
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+.tileSub b {
+  color: #d97934;
+  font-family: var(--jetbrains-mono), ui-monospace, monospace;
+  font-weight: 600;
+}
+
+/* Platform table (cards on phones). Scoped under .tableWrap to beat site table styles. */
+.tableWrap {
+  min-width: 0;
+}
+.tableWrap .table {
+  width: 100%;
+  margin: 0;
+  border-collapse: collapse;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.tableWrap .table th,
+.tableWrap .table td {
+  padding: 7px 8px;
+  border: 0;
+  background: none;
+  text-align: left;
+  vertical-align: top;
+}
+.tableWrap .table thead th {
+  color: #858a84;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  border-bottom: 1px solid #262927;
+}
+.tableWrap .platform tr:first-child > * {
+  border-top: 1px solid #262927;
+}
+.platName {
+  display: block;
+  color: #f4f1ed;
+  font-size: 13px;
+  font-weight: 650;
+}
+.platSub {
+  display: block;
+  margin-top: 2px;
+  color: #858a84;
+  font-size: 11px;
+  font-weight: 400;
+}
+.status {
+  display: inline;
+  color: #d9ded6;
+}
+.status > span[aria-hidden] {
+  margin-right: 5px;
+}
+.stYes > span[aria-hidden],
+.legendLine .stYes {
+  color: #98c379;
+}
+.stPartial > span[aria-hidden],
+.legendLine .stPartial {
+  color: #e6c07b;
+}
+.stNo > span[aria-hidden],
+.legendLine .stNo {
+  color: #e06c75;
+}
+.stNa > span[aria-hidden],
+.legendLine .stNa {
+  color: #858a84;
+}
+.tableWrap .legendLine {
+  margin-top: 8px;
+}
+.tableWrap .claimRow td {
+  padding-top: 0;
+  color: #9aa09a;
+  font-style: italic;
+}
+
+/* Audit funnel. */
+.funnelGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+.funnel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.funnel li > span,
+.funnel li > span > button {
+  display: block;
+  width: 100%;
+}
+.fRow {
+  display: grid;
+  grid-template-columns: minmax(0, 210px) minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+.fLabel {
+  color: #c1c8c0;
+  font-size: 12.5px;
+  line-height: 1.3;
+}
+.fWho {
+  display: block;
+  color: #858a84;
+  font-size: 10.5px;
+}
+.fTrack {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 22px;
+}
+.fBar {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+}
+.fNum {
+  color: #f4f1ed;
+  font: 700 14px var(--jetbrains-mono), ui-monospace, monospace;
+}
+.sevBox {
+  min-width: 0;
+}
+.sevBar {
+  display: flex;
+  height: 26px;
+  margin-top: 8px;
+  overflow: visible;
+  border-radius: 4px;
+}
+.sevSeg {
+  display: flex;
+  min-width: 0;
+}
+.sevSeg > span,
+.sevSeg > span > button {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.sevText {
+  display: block;
+  padding: 5px 4px;
+  color: #0b0c0c;
+  font: 600 11px var(--jetbrains-mono), ui-monospace, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* Checks growth: waffle, groups, comment bar and C API pills. */
+.waffle {
+  display: grid;
+  grid-template-columns: repeat(17, 13px);
+  gap: 3px;
+  margin: 10px 0;
+}
+.cell {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  box-sizing: border-box;
+  border: 1.5px solid;
+  border-radius: 2px;
+}
+.groupList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: #c1c8c0;
+  font-size: 12px;
+}
+.groupList .cell {
+  margin-right: 7px;
+  vertical-align: -2px;
+}
+.groupList b {
+  color: #f4f1ed;
+  font-family: var(--jetbrains-mono), ui-monospace, monospace;
+}
+.pillRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+  gap: 22px;
+  align-items: start;
+}
+.pillHead {
+  color: #c1c8c0;
+  font-size: 12.5px;
+}
+.pillHead b {
+  color: #98c379;
+  font-family: var(--jetbrains-mono), ui-monospace, monospace;
+}
+.commentBar {
+  display: flex;
+  gap: 1px;
+  height: 22px;
+  margin-top: 8px;
+}
+.commentSeg {
+  display: flex;
+  min-width: 3px;
+}
+.commentSeg > span,
+.commentSeg > span > button {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.commentFill {
+  display: block;
+  height: 100%;
+  padding: 4px 5px;
+  overflow: hidden;
+  background: #98c379;
+  color: #0b0c0c;
+  font: 600 10.5px var(--jetbrains-mono), ui-monospace, monospace;
+  white-space: nowrap;
+}
+.commentSeg:nth-child(even) .commentFill {
+  background: #7fa863;
+}
+.capi {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.capiPill {
+  display: inline-block;
+  padding: 3px 10px;
+  border: 1px solid #98c379;
+  border-radius: 999px;
+  color: #c1c8c0;
+  font-size: 12px;
+}
+.capiPill b {
+  color: #98c379;
+  font-family: var(--jetbrains-mono), ui-monospace, monospace;
+}
+
+/* Strategy timeline phone list. */
+.eraList,
+.evList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.eraHead {
+  margin: 12px 0 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #262927;
+  color: #f4f1ed;
+  font-size: 12px;
+  font-weight: 650;
+}
+.evList li {
+  display: grid;
+  grid-template-columns: 38px 16px minmax(0, 1fr);
+  gap: 2px;
+  margin-bottom: 7px;
+  color: #c1c8c0;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.evDate {
+  color: #858a84;
+  font: 11px/1.7 var(--jetbrains-mono), ui-monospace, monospace;
+}
+.evList b {
+  color: #f4f1ed;
+}
+.trigger {
+  display: block;
+  margin-top: 3px;
+  color: #858a84;
+  font-size: 11.5px;
+}
+
+/* Phone layouts. */
+@media (max-width: 800px) {
+  .tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .kpis {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+  .kpis b {
+    display: inline;
+    margin-right: 8px;
+    font-size: 18px;
+  }
+  .twoCol,
+  .threeCol,
+  .funnelGrid,
+  .pillRow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .fRow {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
+  }
+  .tableWrap .table,
+  .tableWrap .table tbody,
+  .tableWrap .table tr,
+  .tableWrap .table th,
+  .tableWrap .table td {
+    display: block;
+    width: auto;
+  }
+  .tableWrap .table thead {
+    display: none;
+  }
+  .tableWrap .platform {
+    margin-bottom: 12px;
+    padding: 8px 10px;
+    border: 1px solid #262927;
+    border-radius: 10px;
+  }
+  .tableWrap .platform tr:first-child > * {
+    border-top: 0;
+  }
+  .tableWrap .table th,
+  .tableWrap .table td {
+    padding: 4px 0;
+  }
+  .tableWrap .table td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    color: #858a84;
+    font-size: 10px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+}
+@media (max-width: 420px) {
+  .tileValue {
+    font-size: 19px;
+  }
+}

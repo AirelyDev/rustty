@@ -1,0 +1,451 @@
+/* The "Cutting the cycle" widget body. Values follow the approved mockup
+   (04-cutting-the-cycle) inside the shared instrument card. */
+
+/* Widget root (positions the floating tooltip). */
+.root {
+  position: relative;
+  min-width: 0;
+  color: #d9ded6;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Headline: 345 → 61 and its subtitle. */
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 14px;
+  margin-bottom: 12px;
+}
+.big {
+  color: #f4f1ed;
+  font: 700 30px/1.1 var(--jetbrains-mono), ui-monospace, monospace;
+}
+.big span {
+  color: #d97934;
+}
+.sub {
+  color: #9aa09a;
+  font-size: 13px;
+}
+
+/* Stage tabs. */
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.tab {
+  padding: 8px 11px;
+  border: 1px solid #262927;
+  border-radius: 8px;
+  background: transparent;
+  color: #9aa09a;
+  font: 500 12px/1 var(--jetbrains-mono), ui-monospace, monospace;
+  cursor: pointer;
+}
+.tab:hover {
+  border-color: #4a4f4b;
+  color: #f4f1ed;
+}
+.tab[aria-selected="true"] {
+  border-color: #d97934;
+  background: #1a120c;
+  color: #f4f1ed;
+}
+.tab i {
+  margin-right: 6px;
+  color: #d97934;
+  font-style: normal;
+}
+.tab:focus-visible,
+.btn:focus-visible,
+.cut:focus-visible,
+.svg:focus-visible {
+  outline: 2px solid #d97934;
+  outline-offset: 2px;
+}
+
+.svg:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Graph and side panel. */
+.body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 16px;
+}
+.main {
+  position: relative;
+  min-width: 0;
+}
+.scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  font-family: var(--jetbrains-mono), ui-monospace, monospace;
+}
+.scrollHint {
+  display: none;
+  margin: 0 0 6px;
+  color: #858a84;
+  font: 11px var(--jetbrains-mono), ui-monospace, monospace;
+}
+.side {
+  min-width: 0;
+  color: #9aa09a;
+  font-size: 12px;
+}
+
+/* Side-panel building blocks. */
+.h4 {
+  margin: 14px 0 8px;
+  color: #858a84;
+  font: 600 10px/1.3 system-ui, sans-serif;
+  letter-spacing: 1.6px;
+  text-transform: uppercase;
+}
+.side > .h4:first-child {
+  margin-top: 2px;
+}
+.kv {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 3px 10px;
+}
+.kv b {
+  color: #f4f1ed;
+  font: 600 12px var(--jetbrains-mono), ui-monospace, monospace;
+  text-align: right;
+}
+.indent {
+  padding-left: 10px;
+}
+.copper {
+  color: #d97934 !important;
+}
+.mono {
+  font-family: var(--jetbrains-mono), ui-monospace, monospace;
+}
+.note {
+  margin: 6px 0 0;
+  color: #858a84;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.note b {
+  color: #f4f1ed;
+}
+.lead {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font: 11px var(--jetbrains-mono), ui-monospace, monospace;
+}
+.leadRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.leadRow > span:last-child {
+  color: #f4f1ed;
+  text-align: right;
+}
+.miniSvg {
+  display: block;
+  width: 100%;
+  height: auto;
+  font-family: var(--jetbrains-mono), ui-monospace, monospace;
+}
+.btn {
+  margin: 0 4px 4px 0;
+  padding: 6px 9px;
+  border: 1px solid #262927;
+  border-radius: 7px;
+  background: transparent;
+  color: #c1c8c0;
+  font: 500 11px/1 var(--jetbrains-mono), ui-monospace, monospace;
+  cursor: pointer;
+}
+.btn:hover {
+  border-color: #4a4f4b;
+  color: #f4f1ed;
+}
+.btn[aria-pressed="true"] {
+  border-color: #d97934;
+  color: #f4f1ed;
+}
+.toggles {
+  margin-top: 8px;
+}
+
+/* Cut list. */
+.cuts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 430px;
+  overflow: auto;
+  padding-right: 4px;
+}
+.cut {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  gap: 6px;
+  align-items: center;
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.cut:hover,
+.cut[aria-pressed="true"] {
+  border-color: #262927;
+  background: #161817;
+}
+.cutN {
+  color: #e06c75;
+  font: 600 11px var(--jetbrains-mono), ui-monospace, monospace;
+}
+.cutExtra .cutN {
+  color: #ffbc7a;
+}
+.cutT {
+  color: #d9ded6;
+  font-size: 11.5px;
+  line-height: 1.25;
+}
+.cutT small {
+  display: block;
+  color: #858a84;
+  font: 10px var(--jetbrains-mono), ui-monospace, monospace;
+}
+.chip {
+  padding: 3px 6px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font: 500 9.5px/1 var(--jetbrains-mono), ui-monospace, monospace;
+  white-space: nowrap;
+}
+.m_trait {
+  color: #61aeee;
+}
+.m_move {
+  color: #e6c07b;
+}
+.m_split {
+  color: #c678dd;
+}
+.m_inject {
+  color: #98c379;
+}
+.m_other {
+  color: #858a84;
+}
+
+/* Crate detail panel. */
+.detail {
+  margin-top: 6px;
+  padding: 10px 12px;
+  border: 1px solid #262927;
+  border-radius: 10px;
+  background: #0f1111;
+}
+.detailName {
+  color: #f4f1ed;
+  font: 700 15px var(--jetbrains-mono), ui-monospace, monospace;
+}
+.list {
+  margin: 6px 0 8px 16px;
+  padding: 0;
+  color: #c1c8c0;
+  line-height: 1.45;
+}
+.bar {
+  height: 6px;
+  margin: 3px 0 7px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: #1a1c1b;
+}
+.bar i {
+  display: block;
+  height: 100%;
+}
+
+.edgeList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font: 11px var(--jetbrains-mono), ui-monospace, monospace;
+}
+.edgeList li {
+  padding: 1px 0;
+}
+.edgeNote {
+  display: block;
+  padding-left: 10px;
+  color: #ffbc7a;
+  font: 10.5px/1.4 system-ui, sans-serif;
+}
+
+/* Legend. */
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 8px;
+  color: #858a84;
+  font-size: 10.5px;
+}
+.legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.legend i {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+.legend .legendLine {
+  height: 2px;
+  border-radius: 0;
+}
+.legend .legendDash {
+  height: 0;
+  border-top: 2px dashed #9aa09a;
+  border-radius: 0;
+}
+.legendNote {
+  color: #858a84;
+}
+
+/* Replay controls and counters. */
+.replayRow {
+  margin-top: 8px;
+}
+.counters {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-top: 10px;
+}
+.counters div {
+  padding: 8px 10px;
+  border: 1px solid #262927;
+  border-radius: 10px;
+}
+.counters b {
+  display: block;
+  color: #f4f1ed;
+  font: 700 18px var(--jetbrains-mono), ui-monospace, monospace;
+}
+.counters span {
+  color: #858a84;
+  font-size: 10.5px;
+}
+
+/* Insight tiles. */
+.ins {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-top: 16px;
+}
+.ins div {
+  padding-top: 8px;
+  border-top: 1px solid #262927;
+  color: #9aa09a;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.ins b {
+  display: block;
+  margin-bottom: 2px;
+  color: #f4f1ed;
+  font: 700 17px var(--jetbrains-mono), ui-monospace, monospace;
+}
+
+/* Floating tooltip. */
+.tip {
+  position: absolute;
+  z-index: 5;
+  max-width: 300px;
+  padding: 8px 10px;
+  background: #141615;
+  border: 1px solid #3a3f3b;
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  color: #c1c8c0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  pointer-events: none;
+}
+.tip[hidden] {
+  display: none;
+}
+.tip b {
+  color: #f4f1ed;
+  font-family: var(--jetbrains-mono), ui-monospace, monospace;
+  font-weight: 600;
+}
+.k {
+  color: #858a84;
+}
+.tipLine {
+  display: block;
+}
+
+@media (pointer: coarse) {
+  .svg {
+    touch-action: pan-x pan-y;
+  }
+}
+
+/* Narrow: the side panel stacks under the graph. */
+@media (max-width: 820px) {
+  .body {
+    grid-template-columns: 1fr;
+  }
+  .ins {
+    grid-template-columns: 1fr 1fr;
+  }
+  .cuts {
+    max-height: none;
+  }
+  .svg {
+    touch-action: pan-x pan-y;
+  }
+}
+
+/* Phone: the graph keeps a readable width and scrolls sideways. */
+@media (max-width: 540px) {
+  .svg {
+    min-width: 560px;
+  }
+  .scrollHint {
+    display: block;
+  }
+  .ins {
+    grid-template-columns: 1fr;
+  }
+  .counters {
+    grid-template-columns: 1fr 1fr;
+  }
+  .big {
+    font-size: 24px;
+  }
+}

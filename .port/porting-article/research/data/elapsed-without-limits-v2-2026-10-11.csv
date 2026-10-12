@@ -1,0 +1,114 @@
+date,commits,prompts,api_calls,active_hours,limit_evidence,other_project_prompts_count,busy_hours,author_wait_hours,quota_week_day,class_v1,class_v2
+2026-06-20,0,8,0,0,,63,0,0,3,pre-repo,pre-repo
+2026-06-21,34,3,0,0,,18,8.39,0,4,active,busy
+2026-06-22,51,23,0,0,rustty-prompt:limit,12,24.0,6.28,5,active,busy
+2026-06-23,30,15,0,0,,3,24.0,18.33,6,active,busy
+2026-06-24,81,3,0,0,,7,24.0,7.4,0,active,busy
+2026-06-25,84,5,0,0,,14,24.0,0.53,1,active,busy
+2026-06-26,13,9,0,0,rustty-prompt:limit,4,9.52,2.97,2,active+limit-loss,busy
+2026-06-27,0,0,0,0.0,,0,0,0,3,limit,limit-paced-idle (default: limit or project switch due to limits)
+2026-06-28,0,0,0,0.0,,10,0,0,4,limit,limit-paced-idle (default: limit or project switch due to limits)
+2026-06-29,0,0,0,0.0,,10,0,0,5,limit,limit-paced-idle (default: limit or project switch due to limits)
+2026-06-30,19,4,0,0.0,resume-<=5h-after-weekly-reset;rustty-prompt:limit,1,5.38,0,6,active+limit-loss,busy
+2026-07-01,29,10,0,0,rustty-prompt:limit,13,24.0,12.33,0,active,busy
+2026-07-02,43,8,0,0.0,other-project-limit-mention,67,24.0,2.06,1,active,busy
+2026-07-03,29,15,0,0.0,,10,24.0,8.04,2,active,busy
+2026-07-04,5,2,0,0.0,rustty-prompt:limit,0,8.72,6.51,3,active+limit-loss,busy
+2026-07-05,0,0,0,0,,0,0,0,4,limit,limit-paced-idle (default: limit or project switch due to limits)
+2026-07-06,0,0,0,0,,0,0,0,5,limit,limit-paced-idle (default: limit or project switch due to limits)
+2026-07-07,4,8,0,0,resume-<=5h-after-weekly-reset,7,8.76,1.68,6,active+limit-loss,busy
+2026-07-08,11,11,0,0,,5,24.0,13.14,0,active,busy
+2026-07-09,19,5,0,0,,8,24.0,9.9,1,active,busy
+2026-07-10,46,18,0,0,,8,24.0,12.37,2,active,busy
+2026-07-11,4,8,0,0,,2,24.0,21.8,3,active,busy
+2026-07-12,54,26,0,0,,2,16.76,12.47,4,active+limit-loss,busy
+2026-07-13,0,10,0,0.0,rustty-prompt:limit;slash:/rate-limit-options;slash:/usage-credits-x2,0,2.52,2.22,5,limit,busy
+2026-07-14,55,20,0,0,resume-<=5h-after-weekly-reset,2,8.98,1.32,6,active+limit-loss,busy
+2026-07-15,62,108,17,0.25,,6,24.0,8.77,0,active,busy
+2026-07-16,44,19,0,0,,9,24.0,10.91,1,active,busy
+2026-07-17,69,0,0,0,,13,24.0,0,2,active,busy
+2026-07-18,16,65,1943,9.5,,42,24.0,11.15,3,active,busy
+2026-07-19,51,80,2715,13.25,,16,16.22,1.58,4,active,busy
+2026-07-20,1,0,0,0.0,,0,0,0,5,unknown,busy
+2026-07-21,0,1,0,0.0,,7,0,0,6,unknown,limit-paced-idle (default: limit or project switch due to limits)
+2026-07-22,10,20,388,2.17,,18,2.77,0.26,0,active,busy
+2026-07-23,52,21,0,0.0,,14,14.89,11.32,1,active+probable-limit-loss,busy
+2026-07-24,0,0,0,0.0,,4,0,0,2,probable-limit,limit-paced-idle (default: limit or project switch due to limits)
+2026-07-25,0,0,0,0.0,,3,0,0,3,probable-limit,limit-paced-idle (default: limit or project switch due to limits)
+2026-07-26,0,0,0,0.0,,15,0,0,4,probable-limit,limit-paced-idle (default: limit or project switch due to limits)
+2026-07-27,0,0,0,0,,0,0,0,5,probable-limit,limit-paced-idle (default: limit or project switch due to limits)
+2026-07-28,49,9,0,0,other-project-limit-mention;resume-<=5h-after-weekly-reset,8,4.72,1.77,6,active+probable-limit-loss,busy
+2026-07-29,179,25,0,0,,5,24.0,11.7,0,active,busy
+2026-07-30,174,28,0,0,,0,24.0,9.35,1,active,busy
+2026-07-31,105,24,5485,12.17,,0,24.0,1.51,2,active,busy
+2026-08-01,0,6,20739,24.0,codex-weekly-meter>=90%,0,24.0,0,3,active,busy
+2026-08-02,0,0,2186,7.17,codex-weekly-meter>=90%,0,7.08,0,4,active,busy
+2026-08-03,0,0,0,0.0,,0,0,0,5,other-project,limit-paced-idle (default: limit or project switch due to limits)
+2026-08-04,0,0,0,0.0,,0,0,0,6,other-project,limit-paced-idle (default: limit or project switch due to limits)
+2026-08-05,0,0,0,0,,8,0,0,0,other-project,limit-paced-idle (default: limit or project switch due to limits)
+2026-08-06,0,0,0,0,,5,0,0,1,other-project,limit-paced-idle (default: limit or project switch due to limits)
+2026-08-07,0,0,0,0,,11,0,0,2,other-project,limit-paced-idle (default: limit or project switch due to limits)
+2026-08-08,0,0,0,0.0,,47,0,0,3,other-project,limit-paced-idle (default: limit or project switch due to limits)
+2026-08-09,0,0,0,0,,81,0,0,4,other-project,limit-paced-idle (default: limit or project switch due to limits)
+2026-08-10,1,5,0,0.0,rustty-prompt:limit;rustty-prompt:model-allotment,14,6.0,5.62,5,active+probable-limit-loss,busy
+2026-08-11,1,4,0,0.0,rustty-prompt:limit;rustty-prompt:model-allotment,2,10.51,10.35,6,active+probable-limit-loss,busy
+2026-08-12,0,3,0,0.0,,19,8.53,8.47,0,other-project,busy
+2026-08-13,0,0,0,0,,80,0,0,1,other-project,limit-paced-idle (default: limit or project switch due to limits)
+2026-08-14,0,5,10,0.17,,12,0.85,0,2,other-project,limit-paced-idle (default: limit or project switch due to limits)
+2026-08-15,0,0,0,0,,33,0,0,3,other-project,limit-paced-idle (default: limit or project switch due to limits)
+2026-08-16,0,0,0,0.0,,21,0,0,4,other-project,limit-paced-idle (default: limit or project switch due to limits)
+2026-08-17,5,9,14,0.17,,49,5.8,3.8,5,active,busy
+2026-08-18,5,6,0,0,,43,14.36,10.47,6,active,busy
+2026-08-19,0,0,0,0,,10,0,0,0,mixed-limit-other,limit-paced-idle (default: limit or project switch due to limits)
+2026-08-20,0,0,0,0,,9,0,0,1,mixed-limit-other,limit-paced-idle (default: limit or project switch due to limits)
+2026-08-21,0,0,0,0,,40,0,0,2,mixed-limit-other,limit-paced-idle (default: limit or project switch due to limits)
+2026-08-22,0,1,0,0,,10,0,0,3,mixed-limit-other,limit-paced-idle (default: limit or project switch due to limits)
+2026-08-23,0,0,0,0,,28,0,0,4,mixed-limit-other,limit-paced-idle (default: limit or project switch due to limits)
+2026-08-24,0,0,0,0,,15,0,0,5,mixed-limit-other,limit-paced-idle (default: limit or project switch due to limits)
+2026-08-25,13,9,0,0,rustty-prompt:limit,1,16.7,3.79,6,active,busy
+2026-08-26,58,24,0,0,,0,21.68,11.85,0,active,busy
+2026-08-27,0,0,0,0.0,,0,0,0,1,unknown,limit-paced-idle (default: limit or project switch due to limits)
+2026-08-28,2,14,0,0,,1,2.9,1.96,2,active,busy
+2026-08-29,0,2,0,0.0,,15,0.0,0,3,unknown,limit-paced-idle (default: limit or project switch due to limits)
+2026-08-30,0,0,0,0,,0,0,0,4,unknown,limit-paced-idle (default: limit or project switch due to limits)
+2026-08-31,0,0,0,0,,8,0,0,5,unknown,limit-paced-idle (default: limit or project switch due to limits)
+2026-09-01,36,8,2978,2.67,rustty-prompt:limit;session-limit-notice,5,10.53,7.86,6,active,busy
+2026-09-02,0,0,0,0.0,,8,0,0,0,unknown,limit-paced-idle (default: limit or project switch due to limits)
+2026-09-03,0,0,0,0.0,,17,0,0,1,unknown,limit-paced-idle (default: limit or project switch due to limits)
+2026-09-04,0,0,0,0,,11,0,0,2,unknown,limit-paced-idle (default: limit or project switch due to limits)
+2026-09-05,0,0,0,0,,76,0,0,3,other-project,limit-paced-idle (default: limit or project switch due to limits)
+2026-09-06,1,0,0,0.0,,152,0,0,4,other-project,busy
+2026-09-07,0,4,1019,0.33,rustty-prompt:limit;session-limit-notice(other-project),100,3.77,3.5,5,limit,busy
+2026-09-08,30,10,5778,6.67,resume-<=5h-after-weekly-reset;rustty-prompt:limit;usage-credits-exhausted,57,11.27,1.6,6,active+limit-loss,busy
+2026-09-09,26,3,2664,9.25,,0,24.0,3.83,0,active,busy
+2026-09-10,118,5,5368,14.75,,37,24.0,7.5,1,active,busy
+2026-09-11,85,9,4469,12.58,rustty-prompt:pause-to-spend-tokens-elsewhere,36,19.43,4.41,2,active+probable-limit-loss,busy+split-boundary
+2026-09-12,0,0,0,0,,26,0,0,3,probable-limit,split-limit-and-voluntary(50/50)
+2026-09-13,0,0,0,0.0,,32,0,0,4,probable-limit,split-limit-and-voluntary(50/50)
+2026-09-14,0,0,0,0.0,weekly-limit-notice(other-project),11,0,0,5,probable-limit,split-limit-and-voluntary(50/50)
+2026-09-15,0,0,0,0,other-project-limit-mention,22,0,0,6,probable-limit,split-limit-and-voluntary(50/50)
+2026-09-16,0,1,0,0.0,,24,0,0,0,probable-limit,split-limit-and-voluntary(50/50)
+2026-09-17,4,0,21,0.25,,54,5.73,0,1,probable-limit,split-limit-and-voluntary(50/50)
+2026-09-18,0,1,0,0,,123,0,0,2,probable-limit,split-limit-and-voluntary(50/50)
+2026-09-19,0,0,0,0.0,,109,0,0,3,probable-limit,split-limit-and-voluntary(50/50)
+2026-09-20,0,0,0,0,,30,0,0,4,probable-limit,split-limit-and-voluntary(50/50)
+2026-09-21,0,0,0,0,,70,0,0,5,probable-limit,split-limit-and-voluntary(50/50)
+2026-09-22,101,10,4821,5.33,resume-<=5h-after-weekly-reset,33,5.4,0,6,active+probable-limit-loss,busy+split-boundary
+2026-09-23,249,4,10020,12.08,,2,24.0,6.54,0,active,busy
+2026-09-24,136,8,6040,8.58,other-project-limit-mention;rustty-prompt:limit,4,8.63,0,1,active+limit-loss,busy
+2026-09-25,0,0,0,0,,52,0,0,2,limit,limit-paced-idle (default: limit or project switch due to limits)
+2026-09-26,85,4,3421,5.92,,6,7.58,1.69,3,active+limit-loss,busy
+2026-09-27,99,26,4229,12.0,,19,16.16,2.57,4,active,busy
+2026-09-28,142,22,8022,17.0,rustty-prompt:limit;rustty-prompt:pause-approaching-limits,60,21.86,0.75,5,active+limit-loss,busy
+2026-09-29,106,23,6455,7.42,resume-<=5h-after-weekly-reset,34,8.42,0.66,6,active+limit-loss,busy
+2026-09-30,63,16,3096,14.83,,31,24.0,3.18,0,active,busy
+2026-10-01,43,14,2226,8.17,,49,24.0,0.92,1,active,busy
+2026-10-02,35,17,1695,11.42,weekly-limit-notice;weekly-limit-notice:reset-Oct-6-3pm,39,16.1,1.35,2,active+limit-loss,busy
+2026-10-03,0,0,0,0.0,,0,0,0,3,limit,limit-paced-idle (default: limit or project switch due to limits)
+2026-10-04,0,0,0,0.0,,0,0,0,4,limit,limit-paced-idle (default: limit or project switch due to limits)
+2026-10-05,0,0,0,0.0,,17,0,0,5,limit,limit-paced-idle (default: limit or project switch due to limits)
+2026-10-06,3,3,308,3.0,resume-prompt-4h-after-weekly-reset;rustty-prompt:limit,8,4.95,0,6,active+limit-loss,busy
+2026-10-07,77,10,3969,12.5,,7,24.0,5.84,0,active,busy
+2026-10-08,49,51,2228,8.25,,31,24.0,7.64,1,active,busy
+2026-10-09,95,36,0,0,,3,24.0,6.39,2,active,busy
+2026-10-10,44,39,0,0,,2,23.28,15.61,3,active,busy

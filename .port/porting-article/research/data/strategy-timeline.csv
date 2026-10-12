@@ -1,0 +1,33 @@
+date,era,change,trigger,evidence
+2026-06-21,pre-Bun,"Phase-0 Definition of Parity (G1-G9) + PORT_RULES R1-R5 (100% fidelity, rustty identity, self-contained, acyclic crates, gates never weakened); gate suite with self-tests",kickoff,15c1a9bd7 5540e9bae .port/phase-0/plan/DEFINITION_OF_PARITY.md .port/PORT_RULES.md
+2026-06-21,pre-Bun,"Miri adopted as primary UB/leak gate G6 (R6); custom tracking allocator dropped",tracking-allocator chosen only because Miri looked uninstalled,d9fd637ce
+2026-06-22,pre-Bun,"Workflow-tool orchestration: design -> adversary -> port -> verify, per milestone wf-*.js scripts with JSON-schema outputs",scale of rustty-vt,.port/phase-2/wf-phase0-*.js .port/phase-2/WORKFLOWS.md
+2026-06-23,pre-Bun,"Sanitizer matrix gate (ASan/LSan/MSan/TSan/HWASan) + Miri progress harness + documented MIRI_EXCEPTIONS (4-criterion routing)",FFI crates Miri cannot run,161178d6a 756e532ef fd9a3c8a2
+2026-06-24,pre-Bun,"Raw-pointer args rule: &mut Page/Row/[Cell] args re-read during the call are Stacked-Borrows UB; port Zig pointers as raw pointers",Miri caught Screen::clear_cells SB UB,3ee9fd06d; memory rust-mut-args-strongly-protected
+2026-07-02,pre-Bun,"Placeholder-leaf doctrine: inhabited placeholder structs with unimplemented!() leaves let ~95% of Surface.zig/App.zig port as live Rust",GPU/xev/inspector not yet ported,67579b58c c6041368b; memory placeholder-leaf-doctrine
+2026-07-03,pre-Bun,"wf-*.js scripts collected into the repo as executable provenance (61 committed that day)",Workflow scratch dirs are ephemeral,f7411131f .port/phase-2/WORKFLOWS.md
+2026-07-07,pre-Bun,"Isolated non-FFI Miri proof harnesses (mirihar-*) instead of hand-reasoning about SB; Tree Borrows lane",shaper-hook SB interleave,f046d41a6 .port/phase-2/mirihar-*
+2026-07-08,external,"Bun publishes 'Bun in Rust' (Jarred Sumner)",n/a,https://bun.com/blog/bun-in-rust
+2026-07-10,post-Bun,"Research workflow over Bun PR/docs/post-mortems/HN -> BUN_PORT_LEARNINGS.md; validation sweep #1; realignment plan",Bun article,2c03357ce .port/phase-2/wf-bun-port-learnings.js docs/superpowers/plans/2026-07-10-port-realignment-and-validation-hardening.md
+2026-07-10,post-Bun,"R7-R12 ratified: semantic-mapping tables, comptime/build-switch preservation, unsafe census + unsound-safe ledger, marker taxonomy, adversarial verification protocol + LIFETIMES, upstream main-parity",Bun learnings (DG1),ccd14200e
+2026-07-10,post-Bun,"GHOSTTY_LIFETIMES.tsv retroactive ledger (216 rows; 20 audit findings) + pre-port tier checklist (LIFETIMES rows before porting any pointer-heavy tier)",Bun LIFETIMES.tsv,8f6d781dc b4845f427 .port/audits/GHOSTTY_LIFETIMES.tsv
+2026-07-10,post-Bun,"Unsafe census (count-unsafe.sh) + UNSOUND_SAFE.md ledger; R10 marker migration",Bun unsafe audit,d8ee18a75 3f5a226f0
+2026-07-11,post-Bun,"First full rustty-vt Miri sweep (2037 tests) finds and fixes 9-test search-subsystem SB UB",widened G6 lane,3277f2f78 9e3fe1c25
+2026-07-12,post-Bun,"Semantic-mismatch detectors D1-D6, D8, D9 wired into ci.sh (one per Bun post-release regression class)",Bun post-mortems #31188 #31503 #30693 #30678 #30875,94ca0243e 6081c2b40
+2026-07-15,post-Bun,"AGENTS.md committed (agent-facing build/test/Miri commands)",agent onboarding,648d1afeb
+2026-07-16,post-Bun,"Branch-and-merge integration begins (first merge commits; history linear before)",parallel perf lanes,d211a84a6
+2026-07-16,post-Bun,"Linux port + Linux VM lane (rvm) for GTK/OpenGL",macOS-first plan reaches Linux,85d19023a f32352ab1
+2026-07-23,post-Bun,"Completion ROADMAP: workstreams WS1-WS20 executed by worktree-isolated executors + per-workstream review gate (superpowers SDD)",scope of remaining work,docs/superpowers/plans/2026-07-23-rustty-completion-ROADMAP.md
+2026-07-29,post-Bun,"ORACLE_SYNC.md + standing upstream resync; pin advances become phases (7 advances, 1718 upstream commits absorbed)",stale baseline 4749c4e93,3d79b3ba2 .port/ORACLE_SYNC.md
+2026-07-31,post-Bun,"Derived-gate audits: G-P2 green was bookkeeping; struck rows must not vote; G-CENSUS staleness gate",G-P2 false green,aeb05fbdc; memory derived-gate-green-can-be-bookkeeping
+2026-08-11,post-Bun,"Cross-vendor audit: Codex line-audit (659 rows) independently vetted by Claude workflows (144 confirmed, 3 refuted), 140 remediated",second-opinion audit,8120dd10d .port/codex-vet/README.md
+2026-08-17,post-Bun,"Advance-first resync doctrine (move pin, record before/after gate states, then port)",user direction,.port/ORACLE_SYNC.md (Phase 4 row)
+2026-09-01,post-Bun,"Workflow scripts give way to hand-made worktrees + Agent workers (SDD); >1,100 subagents, 214 worktrees in Sep",long resyncs,memory phase-6-upstream-resync; rustty-stats messages.csv.gz
+2026-09-08,post-Bun,"Functional parity audit (497 findings) closed row-by-row: failing test first + negative control; G-PARITY HARD",parity audit,docs/superpowers/plans/2026-09-08-parity-defect-closure.md .port/parity-closure/PROCEDURE.md
+2026-09-11,post-R13,"R13: reference defects are not ported; UPSTREAM-DEFECTS.md (66 entries on day one from a retroactive sweep)",user ruling (S51-F7 overruled),7dd991582
+2026-09-23,post-R13,"R13 extended to non-crash intent-breaking bugs + docs/ghostty-bug-fixes.md; R14 no silent test skips + G-SKIP gate",user ruling,f94ab8e81 1096fa4cd
+2026-09-23,post-R13,"Parallelism cap: <=3 building worktrees; delete target/ after merge",disk filled to 100% with ~7 agents,memory parallel-worktree-disk-budget
+2026-09-24,post-R13,"COMMENT-NOT-CARRIED.tsv ledger for G3b comment fidelity",comment audit,f1c1639b0
+2026-09-27,post-R13,"Windows VM lane (rwin): portable tier builds/tests on Windows ARM64",Windows parity,a8c4fea8f
+2026-10-01,post-R13,"Memory-safety lanes design: Miri on nextest (one process per test), Tree Borrows G6t, G-LSAN on macOS, sanitizer self-tests G-SAN-SELF",memory-safety lanes spec,docs/superpowers/specs/2026-10-01-memory-safety-lanes-design.md 2d04310b0 96949eeaf
+2026-10-07,post-R13,"Phase 8 resync to a60e9e2a5; esctest2 differential vs reference (G-ESCTEST)",upstream esctest,03709b897 d1f7a4e5b

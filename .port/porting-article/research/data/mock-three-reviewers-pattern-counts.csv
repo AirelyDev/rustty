@@ -1,0 +1,13 @@
+bug,pattern,snapshot,count
+clear,functions taking raw `*Page` / `*Row` / `*[Cell]` / `*Cell` parameters,before fix (c8053eccc),49
+clear,functions taking raw `*Page` / `*Row` / `*[Cell]` / `*Cell` parameters,after fix (3662e56bf),51
+clear,functions taking raw `*Page` / `*Row` / `*[Cell]` / `*Cell` parameters,today (1d22ba80d),82
+shaper,isolated Miri proof-harness crates in the repo,before 2026-07-07,0
+shaper,isolated Miri proof-harness crates in the repo,after this fix,1
+shaper,isolated Miri proof-harness crates in the repo,today,33
+search,functions taking a raw `*Screen` parameter,before fix (9e3fe1c25~1),6
+search,functions taking a raw `*Screen` parameter,after fix (9e3fe1c25),11
+search,functions taking a raw `*Screen` parameter,today (1d22ba80d),31
+mpsc,pointer fields classified in the lifetime ledger,at creation (2026-07-10),216
+mpsc,pointer fields classified in the lifetime ledger,when this bug was fixed,216
+mpsc,pointer fields classified in the lifetime ledger,today,314

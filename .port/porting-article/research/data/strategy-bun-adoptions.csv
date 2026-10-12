@@ -1,0 +1,19 @@
+bun_idea,bun_source,rustty_artifact,rustty_rule_or_gate,adopted_date,adoption_tag,evidence
+LIFETIMES.tsv pointer-field ownership table,docs/LIFETIMES.tsv (Bun),.port/audits/GHOSTTY_LIFETIMES.tsv (216 rows at creation; 315 on 2026-10-08),R11 + pre-port tier checklist item 1,2026-07-10,ADOPT,8f6d781dc b4845f427
+PORTING.md integer/assert/zip semantic mapping tables,docs/PORTING.md,PORT_RULES R7,R7,2026-07-10,ADOPT,ccd14200e
+Comptime ladder / never fold build switches,docs/PORTING.md + PR #30875,PORT_RULES R8; D4; D6,R8,2026-07-10,ADOPT,ccd14200e 631f2ef5d 6081c2b40
+Unsafe census with one rg command + unsound-safe ledger,bun.com/bun-unsafe-audit,.port/audits/count-unsafe.sh; UNSOUND_SAFE.md; G-CENSUS,R9,2026-07-10,ADOPT,d8ee18a75 aeb05fbdc
+TODO(port)/PERF(port)/PORT NOTE marker taxonomy,PORT_NOTES_PLAN.md,.port/audits/MARKERS.md,R10,2026-07-10,ADOPT,3f5a226f0
+Implement -> adversarial verify -> surgical fix; default-refute votes,.claude/workflows/*.workflow.js,wf-*.js verifier prompts; codex-vet,R11,2026-07-10,ADOPT (already partly in use since 2026-06-22),2c03357ce ab11a0add
+Main-parity workflow (upstream commits -> verdicts),phase-h-main-parity.workflow.js,.port/phase-2/MAIN_PARITY.md; ORACLE_SYNC.md; phase 3-8 resyncs,R12,2026-07-10,ADOPT,551d12fc8 3d79b3ba2
+Slice reinterpret truncate-vs-panic (#31188),Bun issue #31188,.port/audits/slice-reinterpret.tsv,D1,2026-07-12,ADOPT,e4cbbc825
+Capacity off-by-one detonating under bounds checks (#31503),Bun PR #31504,.port/audits/capacity-saturation.tsv,D2,2026-07-12,ADOPT,0b243b275
+Placeholder constants folded by value,Bun class 2b,check_constants_parity.py,D3,2026-07-12,ADAPT,2ba32b5c0
+Paired-invariant drift (#30678),Bun PR #30684,.port/phase-2/VT_INVARIANTS.md,D5,2026-07-12,ADAPT,5f46569ff
+Sanitizer blinded by allocator switch (#30875),Bun PR #30875,.port/phase-2/d6-canary; later G-SAN-SELF,D6,2026-07-12,ADOPT,6081c2b40
+Clone injection,HN thread,check_clone_injection.sh,D8,2026-07-12,ADOPT,2ac65f037
+Ported comments asserting broken invariants,Bun #31188 comment,stale-comments-D9.tsv,D9,2026-07-12,ADAPT,a6f8bd7cc
+Two-phase non-compiling Phase A draft,Bun PR #30412,(rejected),R5/R6,2026-07-10,REJECT,.port/phase-2/BUN_PORT_LEARNINGS.md §3.5
+ZERO todo!() rule,docs/PORTING.md,placeholder-leaf doctrine kept + dated endgame audit,R10,2026-07-10,ADAPT,.port/phase-2/BUN_PORT_LEARNINGS.md §3.1
+crates.io substitutes for pure-Zig code,docs/PORTING.md,(rejected: z2d/zf hand-ported),R1/R3,2026-07-10,REJECT,.port/phase-2/BUN_PORT_LEARNINGS.md §3.1
+Worktree shards + agent git discipline,phase-g-test-swarm workflow,worktree executors; <=3 building worktrees,R11 swarm hygiene,2026-07-10,ADOPT,PORT_RULES R11; memory parallel-worktree-disk-budget

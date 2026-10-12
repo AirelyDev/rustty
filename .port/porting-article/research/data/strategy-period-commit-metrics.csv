@@ -1,0 +1,4 @@
+period,start,end,days,commits,commits_per_day,merge_commits,msgs_mention_miri,msgs_mention_UB,msgs_mention_adversarial,msgs_mention_reviewed
+A_pre_bun,2026-06-21,2026-07-09,19,452,23.8,0,171,91,50,9
+B_post_bun,2026-07-10,2026-09-10,63,1257,20.0,108,121,78,19,5
+C_post_R13,2026-09-11,2026-10-08,28,1259,45.0,109,87,55,0,69

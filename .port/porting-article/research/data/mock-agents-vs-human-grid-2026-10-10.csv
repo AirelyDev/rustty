@@ -1,0 +1,2713 @@
+date,hour,commits_all_refs,commits_non_merge,prompts,lines_added,lines_deleted,top_hash,top_subject_scrubbed,top_subject_raw
+2026-06-20,0,0,0,0,0,0,,,
+2026-06-20,1,0,0,0,0,0,,,
+2026-06-20,2,0,0,0,0,0,,,
+2026-06-20,3,0,0,0,0,0,,,
+2026-06-20,4,0,0,0,0,0,,,
+2026-06-20,5,0,0,0,0,0,,,
+2026-06-20,6,0,0,0,0,0,,,
+2026-06-20,7,0,0,0,0,0,,,
+2026-06-20,8,0,0,0,0,0,,,
+2026-06-20,9,0,0,0,0,0,,,
+2026-06-20,10,0,0,0,0,0,,,
+2026-06-20,11,0,0,0,0,0,,,
+2026-06-20,12,0,0,0,0,0,,,
+2026-06-20,13,0,0,0,0,0,,,
+2026-06-20,14,0,0,0,0,0,,,
+2026-06-20,15,0,0,0,0,0,,,
+2026-06-20,16,0,0,0,0,0,,,
+2026-06-20,17,0,0,0,0,0,,,
+2026-06-20,18,0,0,0,0,0,,,
+2026-06-20,19,0,0,0,0,0,,,
+2026-06-20,20,0,0,0,0,0,,,
+2026-06-20,21,0,0,0,0,0,,,
+2026-06-20,22,0,0,0,0,0,,,
+2026-06-20,23,0,0,0,0,0,,,
+2026-06-21,0,0,0,0,0,0,,,
+2026-06-21,1,0,0,0,0,0,,,
+2026-06-21,2,0,0,0,0,0,,,
+2026-06-21,3,0,0,0,0,0,,,
+2026-06-21,4,0,0,0,0,0,,,
+2026-06-21,5,0,0,0,0,0,,,
+2026-06-21,6,0,0,0,0,0,,,
+2026-06-21,7,0,0,0,0,0,,,
+2026-06-21,8,0,0,0,0,0,,,
+2026-06-21,9,0,0,0,0,0,,,
+2026-06-21,10,0,0,0,0,0,,,
+2026-06-21,11,0,0,0,0,0,,,
+2026-06-21,12,0,0,0,0,0,,,
+2026-06-21,13,0,0,0,0,0,,,
+2026-06-21,14,0,0,0,0,0,,,
+2026-06-21,15,1,1,0,25858,0,15c1a9bd7,rustty: phase-1 workspace scaffold + phase-0 artifacts,rustty: phase-1 workspace scaffold + phase-0 artifacts
+2026-06-21,16,5,5,0,7712,198,5540e9bae,rustty: phase-1 parity-gate infrastructure + self-test,rustty: phase-1 parity-gate infrastructure + self-test
+2026-06-21,17,3,3,0,5991,7,9701b880f,rustty: port rustty-datastruct (phase 2),rustty: port rustty-datastruct (phase 2)
+2026-06-21,18,7,7,0,1502,230,f0ba90ced,"rustty: batch-1 safe clippy autofixes + fmt (machine-applicable, tests green)","rustty: batch-1 safe clippy autofixes + fmt (machine-applicable, tests green)"
+2026-06-21,19,3,3,0,4540,46,443b45209,"rustty: port rustty-unicode (phase 2, batch 2)","rustty: port rustty-unicode (phase 2, batch 2)"
+2026-06-21,20,3,3,0,5290,43,cddedf541,rustty: os group A-pure (phase 2),rustty: os group A-pure (phase 2)
+2026-06-21,21,3,3,0,4799,153,7328b3704,rustty: os group D-rest (phase 2),rustty: os group D-rest (phase 2)
+2026-06-21,22,7,7,0,7529,3255,82773ecea,rustty: simd prep — highway-sys + simdutf-sys + copy simd cpp + skeleton,rustty: simd prep — highway-sys + simdutf-sys + copy simd cpp + skeleton
+2026-06-21,23,2,2,0,7783,15,4f02cca87,rustty: vt leaf primitives (sub-batch 1),rustty: vt leaf primitives (sub-batch 1)
+2026-06-22,0,1,1,0,3,3,a9ccf38fd,rustty: rustfmt vt skeleton stubs (whitespace only),rustty: rustfmt vt skeleton stubs (whitespace only)
+2026-06-22,1,1,1,0,4175,4,e3032249c,rustty: vt data structures (sub-batch 2a),rustty: vt data structures (sub-batch 2a)
+2026-06-22,2,0,0,0,0,0,,,
+2026-06-22,3,1,1,0,6349,44,7dd709aad,rustty: vt page memory layer + wire style seams (sub-batch 2b),rustty: vt page memory layer + wire style seams (sub-batch 2b)
+2026-06-22,4,4,4,0,2474,25,60d12fd0d,rustty: rustty-zigstd — faithful ArenaAllocator + MemoryPool + AutoArrayHashMap (Miri clea…,rustty: rustty-zigstd — faithful ArenaAllocator + MemoryPool + AutoArrayHashMap (Miri clean)
+2026-06-22,5,0,0,0,0,0,,,
+2026-06-22,6,0,0,13,0,0,,,
+2026-06-22,7,1,1,1,1028,182,e7578e43d,rustty: PageList core methods on zigstd,rustty: PageList core methods on zigstd (vt-3c)
+2026-06-22,8,1,1,0,662,4,5a7b314b1,rustty: PageList methods grow,rustty: PageList methods grow (vt-3c)
+2026-06-22,9,1,1,0,114,3,b923d064a,rustty: PageList methods scroll,rustty: PageList methods scroll (vt-3c)
+2026-06-22,10,2,2,0,205,3,d11b2024e,rustty: PageList methods resize,rustty: PageList methods resize (vt-3c)
+2026-06-22,11,1,1,0,529,4,b3317b8d3,rustty: PageList methods pin,rustty: PageList methods pin (vt-3c)
+2026-06-22,12,2,2,0,1751,14,ee38a4897,rustty: PageList methods access,rustty: PageList methods access (vt-3c)
+2026-06-22,13,0,0,0,0,0,,,
+2026-06-22,14,0,0,1,0,0,,,
+2026-06-22,15,1,1,0,1907,1,64f3861bc,rustty: PageList tests 43/205 + grow Stacked-Borrows fix (WIP checkpoint),rustty: PageList tests 43/205 + grow Stacked-Borrows fix (vt-3c WIP checkpoint)
+2026-06-22,16,6,6,2,668,57,53c3cb0df,rustty: PageList scroll + scroll_prompt,rustty: PageList scroll + scroll_prompt (vt-3c)
+2026-06-22,17,10,10,0,3747,213,203a4f824,rustty: PageList resize reflow + ReflowCursor,rustty: PageList resize reflow + ReflowCursor (vt-3c)
+2026-06-22,18,11,11,0,5035,7,92154d972,rustty: PageList tests — 72/205,rustty: PageList tests (vt-3c) — 72/205
+2026-06-22,19,5,5,0,2928,0,54aff35c8,rustty: PageList tests — 148/205,rustty: PageList tests (vt-3c) — 148/205
+2026-06-22,20,2,2,0,251,50,eccf49681,rustty: fix Stacked-Borrows UB in clone-reclaims-styles test (raw ptr),rustty: fix Stacked-Borrows UB in clone-reclaims-styles test (raw ptr)
+2026-06-22,21,1,1,1,32,0,ab11a0add,rustty: finale workflow (integrate + adversarial review),rustty: vt-3c finale workflow (integrate + adversarial review)
+2026-06-22,22,0,0,4,0,0,,,
+2026-06-22,23,0,0,1,0,0,,,
+2026-06-23,0,0,0,0,0,0,,,
+2026-06-23,1,0,0,0,0,0,,,
+2026-06-23,2,0,0,0,0,0,,,
+2026-06-23,3,0,0,1,0,0,,,
+2026-06-23,4,2,2,2,224,80,81d4aa7f1,rustty: raw-ptr sweep tests.rs (UB-class) — batch 1,rustty: raw-ptr sweep tests.rs (vt-3c UB-class) — batch 1
+2026-06-23,5,6,6,0,454,427,fff7c6055,rustty: raw-ptr sweep tests.rs (UB-class) — batch 2,rustty: raw-ptr sweep tests.rs (vt-3c UB-class) — batch 2
+2026-06-23,6,0,0,1,0,0,,,
+2026-06-23,7,0,0,1,0,0,,,
+2026-06-23,8,0,0,0,0,0,,,
+2026-06-23,9,0,0,0,0,0,,,
+2026-06-23,10,0,0,0,0,0,,,
+2026-06-23,11,0,0,0,0,0,,,
+2026-06-23,12,0,0,0,0,0,,,
+2026-06-23,13,0,0,0,0,0,,,
+2026-06-23,14,0,0,0,0,0,,,
+2026-06-23,15,1,1,2,53,47,6aeb3c707,rustty: miri-run.sh — add bounded per-test hard timeout + TIMEOUT class,rustty: miri-run.sh — add bounded per-test hard timeout + TIMEOUT class
+2026-06-23,16,0,0,2,0,0,,,
+2026-06-23,17,2,2,0,57,1,c5e88ccdd,rustty: allocation-stack audit workflow (phase 1: map + refute + synthesize),rustty: allocation-stack audit workflow (phase 1: map + refute + synthesize)
+2026-06-23,18,2,2,1,225,0,0786bbf07,rustty: allocation-stack audit report (ALLOC_AUDIT.md),rustty: allocation-stack audit report (ALLOC_AUDIT.md)
+2026-06-23,19,8,8,2,1326,321,0ec738090,rustty: PageList PagePool -> faithful MemoryPoolAligned/arena + fallible OOM + lazy-zero (…,rustty: PageList PagePool -> faithful MemoryPoolAligned/arena + fallible OOM + lazy-zero (audit #1/#2/#3)
+2026-06-23,20,2,2,0,735,4,1a2dbd9e5,rustty: page-pool tracking allocator (scoped std.testing.allocator equivalent),rustty: page-pool tracking allocator (scoped std.testing.allocator equivalent)
+2026-06-23,21,0,0,0,0,0,,,
+2026-06-23,22,7,7,1,1044,6,72d5565f8,rustty: phase-1 Zig reference PageList bench harness + measured results,rustty: phase-1 Zig reference PageList bench harness + measured results
+2026-06-23,23,0,0,0,0,0,,,
+2026-06-24,0,0,0,0,0,0,,,
+2026-06-24,1,0,0,0,0,0,,,
+2026-06-24,2,0,0,0,0,0,,,
+2026-06-24,3,0,0,0,0,0,,,
+2026-06-24,4,0,0,0,0,0,,,
+2026-06-24,5,0,0,0,0,0,,,
+2026-06-24,6,0,0,0,0,0,,,
+2026-06-24,7,8,8,1,1733,4,18d09f21d,rustty: vt port tabstops (vt-4 leaf),rustty: vt port tabstops (vt-4 leaf)
+2026-06-24,8,8,8,0,5779,131,8f6c8d984,"rustty: vt osc parent skeleton — Command+Parser+dispatch, parser stubs (vt-6)","rustty: vt osc parent skeleton — Command+Parser+dispatch, parser stubs (vt-6)"
+2026-06-24,9,8,8,0,8519,63,cdb3b93ea,rustty: vt Parser + parse_table (vt-5),rustty: vt Parser + parse_table (vt-5)
+2026-06-24,10,3,3,0,2320,17,ac9e53453,rustty: vt kitty image (vt-7),rustty: vt kitty image (vt-7)
+2026-06-24,11,5,5,0,2855,20,ab87d77dc,rustty: vt stream dispatch — csi/osc/esc/dcs/apc (vt-9),rustty: vt stream dispatch — csi/osc/esc/dcs/apc (vt-9)
+2026-06-24,12,7,7,0,3421,241,5953223e7,rustty: Screen-SCC struct-first skeleton — Screen+Selection+formatter+StringMap+ScreenSet …,rustty: Screen-SCC struct-first skeleton — Screen+Selection+formatter+StringMap+ScreenSet types (vt-10)
+2026-06-24,13,1,1,0,2727,78,bc28c0b50,rustty: Screen core foundation — init/cursor/accessors + tests (vt-11a),rustty: Screen core foundation — init/cursor/accessors + tests (vt-11a)
+2026-06-24,14,3,3,0,1665,32,622782008,rustty: formatter production + Screen dump_string + read/write tests (vt-11b),rustty: formatter production + Screen dump_string + read/write tests (vt-11b)
+2026-06-24,15,9,9,0,7093,33,011f407a5,rustty: Screen resize + reflow coordination + tests (vt-11c),rustty: Screen resize + reflow coordination + tests (vt-11c)
+2026-06-24,16,3,3,0,1634,42,083ddc285,rustty: Screen prompt_click + StringMap + ScreenSet + deferred map test (vt-11g),rustty: Screen prompt_click + StringMap + ScreenSet + deferred map test (vt-11g)
+2026-06-24,17,3,3,1,111,0,23dbddcb5,rustty: Terminal (vt-12) plan + vt-12a structs workflow,rustty: Terminal (vt-12) plan + vt-12a structs workflow
+2026-06-24,18,4,4,0,2974,15,97b2e30da,rustty: Terminal + stream_terminal struct-first skeleton (vt-12a),rustty: Terminal + stream_terminal struct-first skeleton (vt-12a)
+2026-06-24,19,6,6,1,2535,135,c8053eccc,rustty: Terminal erase methods + tests (vt-12b-3a),rustty: Terminal erase methods + tests (vt-12b-3a)
+2026-06-24,20,5,5,0,3872,72,9e76403f6,rustty: Terminal scroll/lines/margins + tests (vt-12b-3b),rustty: Terminal scroll/lines/margins + tests (vt-12b-3b)
+2026-06-24,21,0,0,0,0,0,,,
+2026-06-24,22,2,2,0,1325,5,bfb4657b9,rustty: Terminal modes/resize/switch + tests (vt-12b-5),rustty: Terminal modes/resize/switch + tests (vt-12b-5)
+2026-06-24,23,6,6,0,3889,162,b0dc9240a,rustty: stream_terminal Handler state-dispatch + Effects + stream tests (vt-12b-7a),rustty: stream_terminal Handler state-dispatch + Effects + stream tests (vt-12b-7a)
+2026-06-25,0,3,3,0,7000,126,c70020a91,rustty: TerminalFormatter + 100 formatter tests + 5 Screen tests (vt-12c-fmt),rustty: TerminalFormatter + 100 formatter tests + 5 Screen tests (vt-12c-fmt)
+2026-06-25,1,4,4,0,3367,109,1e568a333,rustty: port the 23 deferred Screen tests (vt-12c-screen),rustty: port the 23 deferred Screen tests (vt-12c-screen)
+2026-06-25,2,10,10,0,5835,101,af2511b38,rustty: recover Terminal print tests (vt-12 recovery),rustty: recover Terminal print tests (vt-12 recovery)
+2026-06-25,3,4,4,0,839,1,f1976733d,rustty: recover Terminal input-sweep tests (vt-12 recovery),rustty: recover Terminal input-sweep tests (vt-12 recovery)
+2026-06-25,4,0,0,0,0,0,,,
+2026-06-25,5,5,5,0,4416,28,fe855f517,rustty: port SelectionGesture (vt-13),rustty: port SelectionGesture (vt-13)
+2026-06-25,6,3,3,0,8288,7,a6979cf22,rustty: vt input key_encode + 92 tests (vt-14),rustty: vt input key_encode + 92 tests (vt-14)
+2026-06-25,7,3,3,0,2601,2,c3d215630,rustty: vt search sliding_window + 25 tests (vt-15),rustty: vt search sliding_window + 25 tests (vt-15)
+2026-06-25,8,2,2,0,6273,14,b09b3ffec,rustty: vt search screen/pagelist/viewport/active + 29 tests (vt-15),rustty: vt search screen/pagelist/viewport/active + 29 tests (vt-15)
+2026-06-25,9,0,0,0,0,0,,,
+2026-06-25,10,5,5,0,6398,15,51aad8666,rustty: vt tmux viewer + 9 tests (vt-16),rustty: vt tmux viewer + 9 tests (vt-16)
+2026-06-25,11,6,6,1,7296,28,564f20150,rustty: font Glyph + Metrics + nerd_font_attributes (Stage A.2),rustty: font Glyph + Metrics + nerd_font_attributes (Stage A.2)
+2026-06-25,12,4,4,1,4648,113,dff117625,rustty: apc glyph request+Glossary+execute + 40 tests (Stage A.3),rustty: apc glyph request+Glossary+execute + 40 tests (Stage A.3)
+2026-06-25,13,5,5,1,4900,10,7a123019a,"rustty: port rustty-args (args + CommaSplitter, 64 tests) — Stage C","rustty: port rustty-args (args + CommaSplitter, 64 tests) — Stage C"
+2026-06-25,14,5,5,1,5122,49,5c810ce5b,"rustty: vt-c foundation + small types (~40 tests, Stage B)","rustty: vt-c foundation + small types (~40 tests, Stage B)"
+2026-06-25,15,4,4,0,2224,0,85cf27a47,rustty: vt-c mutual-atom skeleton (terminal/grid_ref/selection/kitty-opaque) compiles,rustty: vt-c mutual-atom skeleton (terminal/grid_ref/selection/kitty-opaque) compiles (Stage B v3)
+2026-06-25,16,2,2,0,4069,253,f02a0ce2e,rustty: vt-c point/grid_ref/grid_ref_tracked/selection + 18 tests,rustty: vt-c point/grid_ref/grid_ref_tracked/selection + 18 tests (Stage B v4)
+2026-06-25,17,3,3,0,12941,78,92ebd1cab,rustty: vt-c render + selection_gesture + 57 tests,rustty: vt-c render + selection_gesture + 57 tests (Stage B v4)
+2026-06-25,18,3,3,0,4913,19,a57c546d4,rustty: vt-c wire 168 rustty_* C exports + fill residual set/get (Stage B),rustty: vt-c wire 168 rustty_* C exports + fill residual set/get (Stage B)
+2026-06-25,19,1,1,0,2404,9,bc8536cd9,rustty: vt-c cbindgen header (156 C-ABI fns + cross-crate types) + vt_c count gate,rustty: vt-c cbindgen header (156 C-ABI fns + cross-crate types) + vt_c count gate
+2026-06-25,20,3,3,1,72,7,4c2af7b8e,rustty: fix SIMD utf8_decode_until_control_seq tail over-read (ASan),rustty: fix SIMD utf8_decode_until_control_seq tail over-read (ASan)
+2026-06-25,21,2,2,0,7918,8,88f534834,rustty: port input Binding keybind grammar + 85 tests,rustty: port input Binding keybind grammar + 85 tests
+2026-06-25,22,4,4,0,8811,33,03d6c5454,rustty: port input KeymapDarwin/command/keycodes/Link/OptionAsAlt + tests,rustty: port input KeymapDarwin/command/keycodes/Link/OptionAsAlt + tests
+2026-06-25,23,3,3,0,6812,169,a7156db18,rustty: config value-type impls + tests,rustty: config C2 value-type impls + tests
+2026-06-26,0,2,2,0,3480,47,05e50b0fd,rustty: config Keybinds (default set + chain parseCLI) + tests,rustty: config C2 Keybinds (default set + chain parseCLI) + tests
+2026-06-26,1,2,2,0,2500,6,3aa85d6d9,rustty: config PARSE pass + enum name-maps,rustty: config C2 PARSE pass + enum name-maps
+2026-06-26,2,2,2,0,2573,24,ec9d84edd,rustty: config FORMAT pass (formatEntry + formatConfig),rustty: config C2 FORMAT pass (formatEntry + formatConfig)
+2026-06-26,3,1,1,0,2873,53,72f1f0854,rustty: config core machinery (load/finalize/parseManuallyHook/Replay) + theme,rustty: config C2 core machinery (load/finalize/parseManuallyHook/Replay) + theme
+2026-06-26,4,0,0,0,0,0,,,
+2026-06-26,5,0,0,0,0,0,,,
+2026-06-26,6,0,0,7,0,0,,,
+2026-06-26,7,1,1,0,1267,88,c8b24b3aa,rustty: config integration tests + key (113 total),rustty: config C2 integration tests + key (113 total)
+2026-06-26,8,3,3,0,1751,4,4739499f1,rustty: config CApi + c_get C-ABI (14 tests) — config cluster complete,rustty: config C3 CApi + c_get C-ABI (14 tests) — config cluster complete
+2026-06-26,9,2,2,2,1837,2,e7a621bb0,"rustty: font Atlas + CodepointMap (14 tests, hermetic)","rustty: font F0 Atlas + CodepointMap (14 tests, hermetic)"
+2026-06-26,10,0,0,0,0,0,,,
+2026-06-26,11,0,0,0,0,0,,,
+2026-06-26,12,0,0,0,0,0,,,
+2026-06-26,13,0,0,0,0,0,,,
+2026-06-26,14,0,0,0,0,0,,,
+2026-06-26,15,0,0,0,0,0,,,
+2026-06-26,16,0,0,0,0,0,,,
+2026-06-26,17,0,0,0,0,0,,,
+2026-06-26,18,0,0,0,0,0,,,
+2026-06-26,19,0,0,0,0,0,,,
+2026-06-26,20,0,0,0,0,0,,,
+2026-06-26,21,0,0,0,0,0,,,
+2026-06-26,22,0,0,0,0,0,,,
+2026-06-26,23,0,0,0,0,0,,,
+2026-06-27,0,0,0,0,0,0,,,
+2026-06-27,1,0,0,0,0,0,,,
+2026-06-27,2,0,0,0,0,0,,,
+2026-06-27,3,0,0,0,0,0,,,
+2026-06-27,4,0,0,0,0,0,,,
+2026-06-27,5,0,0,0,0,0,,,
+2026-06-27,6,0,0,0,0,0,,,
+2026-06-27,7,0,0,0,0,0,,,
+2026-06-27,8,0,0,0,0,0,,,
+2026-06-27,9,0,0,0,0,0,,,
+2026-06-27,10,0,0,0,0,0,,,
+2026-06-27,11,0,0,0,0,0,,,
+2026-06-27,12,0,0,0,0,0,,,
+2026-06-27,13,0,0,0,0,0,,,
+2026-06-27,14,0,0,0,0,0,,,
+2026-06-27,15,0,0,0,0,0,,,
+2026-06-27,16,0,0,0,0,0,,,
+2026-06-27,17,0,0,0,0,0,,,
+2026-06-27,18,0,0,0,0,0,,,
+2026-06-27,19,0,0,0,0,0,,,
+2026-06-27,20,0,0,0,0,0,,,
+2026-06-27,21,0,0,0,0,0,,,
+2026-06-27,22,0,0,0,0,0,,,
+2026-06-27,23,0,0,0,0,0,,,
+2026-06-28,0,0,0,0,0,0,,,
+2026-06-28,1,0,0,0,0,0,,,
+2026-06-28,2,0,0,0,0,0,,,
+2026-06-28,3,0,0,0,0,0,,,
+2026-06-28,4,0,0,0,0,0,,,
+2026-06-28,5,0,0,0,0,0,,,
+2026-06-28,6,0,0,0,0,0,,,
+2026-06-28,7,0,0,0,0,0,,,
+2026-06-28,8,0,0,0,0,0,,,
+2026-06-28,9,0,0,0,0,0,,,
+2026-06-28,10,0,0,0,0,0,,,
+2026-06-28,11,0,0,0,0,0,,,
+2026-06-28,12,0,0,0,0,0,,,
+2026-06-28,13,0,0,0,0,0,,,
+2026-06-28,14,0,0,0,0,0,,,
+2026-06-28,15,0,0,0,0,0,,,
+2026-06-28,16,0,0,0,0,0,,,
+2026-06-28,17,0,0,0,0,0,,,
+2026-06-28,18,0,0,0,0,0,,,
+2026-06-28,19,0,0,0,0,0,,,
+2026-06-28,20,0,0,0,0,0,,,
+2026-06-28,21,0,0,0,0,0,,,
+2026-06-28,22,0,0,0,0,0,,,
+2026-06-28,23,0,0,0,0,0,,,
+2026-06-29,0,0,0,0,0,0,,,
+2026-06-29,1,0,0,0,0,0,,,
+2026-06-29,2,0,0,0,0,0,,,
+2026-06-29,3,0,0,0,0,0,,,
+2026-06-29,4,0,0,0,0,0,,,
+2026-06-29,5,0,0,0,0,0,,,
+2026-06-29,6,0,0,0,0,0,,,
+2026-06-29,7,0,0,0,0,0,,,
+2026-06-29,8,0,0,0,0,0,,,
+2026-06-29,9,0,0,0,0,0,,,
+2026-06-29,10,0,0,0,0,0,,,
+2026-06-29,11,0,0,0,0,0,,,
+2026-06-29,12,0,0,0,0,0,,,
+2026-06-29,13,0,0,0,0,0,,,
+2026-06-29,14,0,0,0,0,0,,,
+2026-06-29,15,0,0,0,0,0,,,
+2026-06-29,16,0,0,0,0,0,,,
+2026-06-29,17,0,0,0,0,0,,,
+2026-06-29,18,0,0,0,0,0,,,
+2026-06-29,19,0,0,0,0,0,,,
+2026-06-29,20,0,0,0,0,0,,,
+2026-06-29,21,0,0,0,0,0,,,
+2026-06-29,22,0,0,0,0,0,,,
+2026-06-29,23,0,0,0,0,0,,,
+2026-06-30,0,0,0,0,0,0,,,
+2026-06-30,1,0,0,0,0,0,,,
+2026-06-30,2,0,0,0,0,0,,,
+2026-06-30,3,0,0,0,0,0,,,
+2026-06-30,4,0,0,0,0,0,,,
+2026-06-30,5,0,0,0,0,0,,,
+2026-06-30,6,0,0,0,0,0,,,
+2026-06-30,7,0,0,0,0,0,,,
+2026-06-30,8,0,0,0,0,0,,,
+2026-06-30,9,0,0,0,0,0,,,
+2026-06-30,10,0,0,0,0,0,,,
+2026-06-30,11,0,0,0,0,0,,,
+2026-06-30,12,0,0,0,0,0,,,
+2026-06-30,13,0,0,0,0,0,,,
+2026-06-30,14,0,0,0,0,0,,,
+2026-06-30,15,0,0,0,0,0,,,
+2026-06-30,16,0,0,0,0,0,,,
+2026-06-30,17,0,0,0,0,0,,,
+2026-06-30,18,0,0,4,0,0,,,
+2026-06-30,19,5,5,0,8532,157,0467b4db9,rustty: port z2d subset (2D vector rasterizer) -> rustty-z2d,rustty: port z2d subset (2D vector rasterizer) -> rustty-z2d
+2026-06-30,20,4,4,0,8104,42,14cebf994,rustty: font sprite draw box (box-drawing),rustty: font sprite draw box (box-drawing)
+2026-06-30,21,3,3,0,6992,46,2f54e538b,rustty: font sprite draw legacy-computing symbols,rustty: font sprite draw legacy-computing symbols
+2026-06-30,22,3,3,0,1629,39,9a2c055f1,rustty: font sprite Face + PNG known-answer suite (pixel-exact) — sprite tier COMPLETE,rustty: font sprite Face + PNG known-answer suite (pixel-exact) — sprite tier COMPLETE
+2026-06-30,23,4,4,0,3562,26,2e8277608,rustty: font-shaper freetype face + 9 tests,rustty: font-shaper freetype face + 9 tests
+2026-07-01,0,1,1,0,2636,11,44d7d8474,rustty: font-shaper coretext face + 8 tests,rustty: font-shaper coretext face + 8 tests
+2026-07-01,1,3,3,0,6373,179,1cf4ca775,rustty: font-shaper Collection + DeferredFace + CodepointResolver + 18 tests,rustty: font-shaper Collection + DeferredFace + CodepointResolver + 18 tests
+2026-07-01,2,2,2,0,4160,54,a3c8cfc25,rustty: font-shaper SharedGrid + SharedGridSet + 7 tests,rustty: font-shaper SharedGrid + SharedGridSet + 7 tests
+2026-07-01,3,1,1,0,3126,22,a8ab318d9,rustty: font-shaper harfbuzz shaper + 24 tests,rustty: font-shaper harfbuzz shaper + 24 tests
+2026-07-01,4,0,0,0,0,0,,,
+2026-07-01,5,2,2,6,3641,15,c8bf83f14,rustty: font-shaper coretext shaper + 27 tests (live CoreText),rustty: font-shaper coretext shaper + 27 tests (live CoreText)
+2026-07-01,6,4,4,0,3214,26,61ced867b,rustty: rustty-oniguruma safe wrapper (oni::* API) + tests,rustty: rustty-oniguruma safe wrapper (oni::* API) + tests
+2026-07-01,7,4,4,0,989,290,d5300d9a5,"rustty: un-defer config url regex test (oniguruma-backed, ~100 cases)","rustty: un-defer config url regex test (oniguruma-backed, ~100 cases)"
+2026-07-01,8,2,2,0,740,47,5ce7d85d2,"rustty: vendor glslang-sys (glslang 14.2.0, cc+bindgen+KAT) —","rustty: vendor glslang-sys (glslang 14.2.0, cc+bindgen+KAT) — R3"
+2026-07-01,9,2,2,0,1682,85,6cf99b4cd,rustty: fix concurrent onig_initialize heap corruption (remove renderer Terminal test lock…,rustty: fix concurrent onig_initialize heap corruption (remove renderer Terminal test lock)
+2026-07-01,10,0,0,0,0,0,,,
+2026-07-01,11,6,6,0,3981,102,7d9afd154,rustty: apprt-api keystone — action/surface/structs/runtime/ipc trait seam (breaks core↔ap…,rustty: apprt-api keystone — action/surface/structs/runtime/ipc trait seam (breaks core↔apprt) + renderer Health
+2026-07-01,12,0,0,0,0,0,,,
+2026-07-01,13,0,0,0,0,0,,,
+2026-07-01,14,0,0,0,0,0,,,
+2026-07-01,15,0,0,0,0,0,,,
+2026-07-01,16,0,0,0,0,0,,,
+2026-07-01,17,0,0,0,0,0,,,
+2026-07-01,18,0,0,0,0,0,,,
+2026-07-01,19,0,0,0,0,0,,,
+2026-07-01,20,0,0,0,0,0,,,
+2026-07-01,21,0,0,0,0,0,,,
+2026-07-01,22,0,0,4,0,0,,,
+2026-07-01,23,2,2,0,5686,13,c4df312da,rustty: termio dep wiring + struct shapes (Options/Termio/backend/mailbox/message) + rende…,rustty: termio dep wiring + struct shapes (Options/Termio/backend/mailbox/message) + renderer Thread::Mailbox
+2026-07-02,0,1,1,0,2168,21,136062aea,rustty: port Command.zig -> rustty-termio::command (break #13b) — 10 tests,rustty: port Command.zig -> rustty-termio::command (break #13b) — 10 tests
+2026-07-02,1,2,2,0,8055,90,7ad8e39c3,rustty: termio testable logic — Exec/shell_integration/stream_handler/root — termio 44 tes…,rustty: termio testable logic — Exec/shell_integration/stream_handler/root — termio 44 tests
+2026-07-02,2,2,2,0,1529,173,8c3bef888,"rustty: core blueprint (Surface/App/surface_mouse) — adversarially reviewed, ACCEPT-WITH-F…","rustty: core blueprint (Surface/App/surface_mouse) — adversarially reviewed, ACCEPT-WITH-FIXES folded in"
+2026-07-02,3,3,3,0,1881,21,67579b58c,"rustty: core — inspector KeyEvent Event/EventRing (partial-file, ImGui deferred) + Inspect…","rustty: core C1 — inspector KeyEvent Event/EventRing (partial-file, ImGui deferred) + Inspector placeholder"
+2026-07-02,4,2,2,0,2863,137,039b243a2,"rustty: core — App.zig (mailbox, dispatch, seam tests via TestRuntime)","rustty: core C4 — App.zig (mailbox, dispatch, seam tests via TestRuntime)"
+2026-07-02,5,1,1,0,1561,25,9effcdd37,rustty: core — Surface init/deinit/close/draw (inspector activate deferred verbatim),rustty: core C6 — Surface init/deinit/close/draw (inspector activate deferred verbatim)
+2026-07-02,6,2,2,0,2593,90,bbd463605,rustty: core — handleMessage/childExited/search callbacks,rustty: core C7 — handleMessage/childExited/search callbacks
+2026-07-02,7,1,1,0,1338,25,e9f86ed2f,rustty: core — text/selection/clipboard-write tier,rustty: core C9 — text/selection/clipboard-write tier
+2026-07-02,8,0,0,1,0,0,,,
+2026-07-02,9,2,2,0,2201,76,24abccd32,rustty: core — key tier + crash ThreadStateSurface un-defer,rustty: core C10 — key tier + crash ThreadStateSurface un-defer
+2026-07-02,10,1,1,0,1467,27,b7f4ad15a,rustty: core — mouse report/button tier,rustty: core C12 — mouse report/button tier
+2026-07-02,11,1,1,3,1175,95,12e67be6b,rustty: core — link/cursor-pos/color-scheme tier,rustty: core C13 — link/cursor-pos/color-scheme tier
+2026-07-02,12,1,1,0,1145,13,f74d82e90,rustty: core — performBindingAction (first half),rustty: core C14a — performBindingAction (first half)
+2026-07-02,13,2,2,0,1941,55,8e7462249,rustty: core — clipboard completions/screen-file/notifications,rustty: core C15 — clipboard completions/screen-file/notifications
+2026-07-02,14,3,3,0,1461,397,dc4b2954d,rustty: core C-T — termio mutex-family un-defers + newConfig realized,rustty: core C-T — termio mutex-family un-defers + newConfig realized
+2026-07-02,15,2,2,0,1339,22,c5db4591a,rustty: embedded — App backend + Options callbacks + impl apprt_api::App,rustty: embedded E1 — App backend + Options callbacks + impl apprt_api::App
+2026-07-02,16,2,2,0,1394,86,c01bf1472,rustty: embedded — Surface backend (heap-pinned) + impl apprt_api::Surface,rustty: embedded E2 — Surface backend (heap-pinned) + impl apprt_api::Surface
+2026-07-02,17,3,3,1,1516,29,651bc404b,rustty: embedded — Inspector Phase-3 placeholder,rustty: embedded E4 — Inspector Phase-3 placeholder
+2026-07-02,18,4,4,0,2286,16,10b41ac46,rustty: embedded — CAPI surface lifecycle + state + render exports,rustty: embedded E7 — CAPI surface lifecycle + state + render exports
+2026-07-02,19,2,2,0,2553,15,3dd1fe9d8,"rustty: CLI+bin blueprint — adversarially reviewed, ACCEPT-WITH-FIXES folded in (bin-owns-…","rustty: CLI+bin blueprint — adversarially reviewed, ACCEPT-WITH-FIXES folded in (bin-owns-detection, version PARTIAL, explain_config defers on help_strings)"
+2026-07-02,20,2,2,0,2999,52,a33801740,rustty: cli — action dispatcher + ghostty Action enum + version(partial)/help,rustty: cli C1 — action dispatcher + ghostty Action enum + version(partial)/help
+2026-07-02,21,1,1,0,3695,33,121f8d5d0,"rustty: cli — ssh subsystem (Entry/DiskCache/ssh_cache/ssh, 30 tests, xterm-rustty)","rustty: cli C3 — ssh subsystem (Entry/DiskCache/ssh_cache/ssh, 30 tests, xterm-rustty)"
+2026-07-02,22,2,2,2,4637,108,5cfafe8d9,rustty: cli — list_colors/keybinds/themes plain paths + vaxis-deferred TUI leaves,rustty: cli C5 — list_colors/keybinds/themes plain paths + vaxis-deferred TUI leaves
+2026-07-02,23,1,1,1,1088,8,6dbeafb31,rustty: cli — bin (action dispatch + usage banner + Phase-3 GUI leaf) + it-runs smoke KAT,rustty: cli C6 — bin (action dispatch + usage banner + Phase-3 GUI leaf) + it-runs smoke KAT
+2026-07-03,0,2,2,4,1662,50,f66fa5fb1,rustty: cli — port list_fonts + show_face against rustty-font-shaper (close false-block),rustty: cli — port list_fonts + show_face against rustty-font-shaper (close C2 false-block)
+2026-07-03,1,2,2,0,4450,148,656ceed78,rustty: help_strings doc-table generator + un-defer explain_config + --docs/+help,rustty: help_strings doc-table generator + un-defer explain_config + --docs/+help
+2026-07-03,2,2,2,0,1707,0,64631f280,"rustty: xev — queue/mpsc/heap intrusive structures (8 tests, Miri-clean)","rustty: xev C1 — queue/mpsc/heap intrusive structures (8 tests, Miri-clean)"
+2026-07-03,3,0,0,0,0,0,,,
+2026-07-03,4,0,0,0,0,0,,,
+2026-07-03,5,0,0,0,0,0,,,
+2026-07-03,6,1,1,3,4864,94,f4504274c,rustty: xev — loop core + Completion/Operation + tick (Send/Default discipline),rustty: xev C3 — loop core + Completion/Operation + tick (Send/Default discipline)
+2026-07-03,7,3,3,0,2526,66,f25e52bab,rustty: xev — Stream/WriteQueue ordered-write engine (4 tests + KAT),rustty: xev C6 — Stream/WriteQueue ordered-write engine (4 tests + KAT)
+2026-07-03,8,2,2,0,1403,13,9c602341a,"rustty: xev Milestone B blueprint (termio live shell) — adversarially reviewed, ACCEPT-WIT…","rustty: xev Milestone B blueprint (termio live shell) — adversarially reviewed, ACCEPT-WITH-FIXES (Termio::init in-place, raw threadMain/processOutput, no pty double-close)"
+2026-07-03,9,1,1,0,415,14,5a975ba2d,"rustty: xev — subprocess spawn (pid-only handle, no double-close, SB-clean)","rustty: xev B1 — subprocess spawn (pid-only handle, no double-close, SB-clean)"
+2026-07-03,10,2,2,0,1824,100,29fce57bc,rustty: xev — Exec threadEnter/queueWrite/ttyWrite (xev Process/Stream/Timer wiring),rustty: xev B2 — Exec threadEnter/queueWrite/ttyWrite (xev Process/Stream/Timer wiring)
+2026-07-03,11,1,1,0,1155,48,2eb7bcd9a,rustty: xev — Thread::threadMain run loop + callbacks (raw-ptr),"rustty: xev B4 — Thread::threadMain run loop + callbacks (raw-ptr, F1/F2)"
+2026-07-03,12,2,2,0,511,8,944270b0a,rustty: xev — live-shell KAT (real /bin/sh round-trip through the terminal),rustty: xev B5 — live-shell KAT (real /bin/sh round-trip through the terminal)
+2026-07-03,13,2,2,0,429,0,9e13f609f,rustty: fix xev socket-test flake (macOS TIME_WAIT rebind race),rustty: fix xev socket-test flake (macOS TIME_WAIT rebind race)
+2026-07-03,14,0,0,0,0,0,,,
+2026-07-03,15,0,0,0,0,0,,,
+2026-07-03,16,0,0,0,0,0,,,
+2026-07-03,17,1,1,4,224,2,607199956,rustty: GPU prereq — port std.Thread.Semaphore into rustty-zigstd,rustty: GPU R-d prereq P0 — port std.Thread.Semaphore into rustty-zigstd
+2026-07-03,18,2,2,1,2383,4,5eba570c3,rustty: GPU Chunk 0 — Metal API vocabulary + shader build infra (monomorphic),rustty: GPU R-d Chunk 0 — Metal API vocabulary + shader build infra (monomorphic)
+2026-07-03,19,2,2,0,3600,12,62eaf81af,rustty: GPU Chunk 1b — Metal draw-plumbing leaves (Pipeline/RenderPass/Target/Frame/shader…,rustty: GPU R-d Chunk 1b — Metal draw-plumbing leaves (Pipeline/RenderPass/Target/Frame/shaders)
+2026-07-03,20,0,0,1,0,0,,,
+2026-07-03,21,2,2,0,1809,39,d816729c0,"rustty: GPU Chunk 2 (Part B) — port Metal.zig graphics-API wrapper (offscreen, monomorphic…","rustty: GPU R-d Chunk 2 (Part B) — port Metal.zig graphics-API wrapper (offscreen, monomorphic)"
+2026-07-03,22,1,1,0,2461,0,497969cfd,"rustty: GPU — port renderer/image.zig + Overlay.zig (Chunk-3 prereqs, doctrine-scoped)","rustty: GPU R-d P1 — port renderer/image.zig + Overlay.zig (Chunk-3 prereqs, doctrine-scoped)"
+2026-07-03,23,1,1,2,3900,0,f7411131f,rustty: collect all workflow orchestration scripts into .port/phase-2 (+ WORKFLOWS.md mani…,rustty: collect all workflow orchestration scripts into .port/phase-2 (+ WORKFLOWS.md manifest)
+2026-07-04,0,0,0,0,0,0,,,
+2026-07-04,1,2,2,0,2231,315,c0eb09fd6,rustty: GPU Chunk 3a (Part B) — the monomorphic Renderer struct + SwapChain/FrameState ske…,rustty: GPU R-d Chunk 3a (Part B) — the monomorphic Renderer struct + SwapChain/FrameState skeleton
+2026-07-04,2,0,0,0,0,0,,,
+2026-07-04,3,0,0,0,0,0,,,
+2026-07-04,4,0,0,0,0,0,,,
+2026-07-04,5,0,0,0,0,0,,,
+2026-07-04,6,0,0,0,0,0,,,
+2026-07-04,7,0,0,1,0,0,,,
+2026-07-04,8,3,3,1,1151,8,469e312d0,rustty: collect the Chunk-3a re-attempt validation workflow (.port/phase-2 convention),rustty: collect the Chunk-3a re-attempt validation workflow (.port/phase-2 convention)
+2026-07-04,9,0,0,0,0,0,,,
+2026-07-04,10,0,0,0,0,0,,,
+2026-07-04,11,0,0,0,0,0,,,
+2026-07-04,12,0,0,0,0,0,,,
+2026-07-04,13,0,0,0,0,0,,,
+2026-07-04,14,0,0,0,0,0,,,
+2026-07-04,15,0,0,0,0,0,,,
+2026-07-04,16,0,0,0,0,0,,,
+2026-07-04,17,0,0,0,0,0,,,
+2026-07-04,18,0,0,0,0,0,,,
+2026-07-04,19,0,0,0,0,0,,,
+2026-07-04,20,0,0,0,0,0,,,
+2026-07-04,21,0,0,0,0,0,,,
+2026-07-04,22,0,0,0,0,0,,,
+2026-07-04,23,0,0,0,0,0,,,
+2026-07-05,0,0,0,0,0,0,,,
+2026-07-05,1,0,0,0,0,0,,,
+2026-07-05,2,0,0,0,0,0,,,
+2026-07-05,3,0,0,0,0,0,,,
+2026-07-05,4,0,0,0,0,0,,,
+2026-07-05,5,0,0,0,0,0,,,
+2026-07-05,6,0,0,0,0,0,,,
+2026-07-05,7,0,0,0,0,0,,,
+2026-07-05,8,0,0,0,0,0,,,
+2026-07-05,9,0,0,0,0,0,,,
+2026-07-05,10,0,0,0,0,0,,,
+2026-07-05,11,0,0,0,0,0,,,
+2026-07-05,12,0,0,0,0,0,,,
+2026-07-05,13,0,0,0,0,0,,,
+2026-07-05,14,0,0,0,0,0,,,
+2026-07-05,15,0,0,0,0,0,,,
+2026-07-05,16,0,0,0,0,0,,,
+2026-07-05,17,0,0,0,0,0,,,
+2026-07-05,18,0,0,0,0,0,,,
+2026-07-05,19,0,0,0,0,0,,,
+2026-07-05,20,0,0,0,0,0,,,
+2026-07-05,21,0,0,0,0,0,,,
+2026-07-05,22,0,0,0,0,0,,,
+2026-07-05,23,0,0,0,0,0,,,
+2026-07-06,0,0,0,0,0,0,,,
+2026-07-06,1,0,0,0,0,0,,,
+2026-07-06,2,0,0,0,0,0,,,
+2026-07-06,3,0,0,0,0,0,,,
+2026-07-06,4,0,0,0,0,0,,,
+2026-07-06,5,0,0,0,0,0,,,
+2026-07-06,6,0,0,0,0,0,,,
+2026-07-06,7,0,0,0,0,0,,,
+2026-07-06,8,0,0,0,0,0,,,
+2026-07-06,9,0,0,0,0,0,,,
+2026-07-06,10,0,0,0,0,0,,,
+2026-07-06,11,0,0,0,0,0,,,
+2026-07-06,12,0,0,0,0,0,,,
+2026-07-06,13,0,0,0,0,0,,,
+2026-07-06,14,0,0,0,0,0,,,
+2026-07-06,15,0,0,0,0,0,,,
+2026-07-06,16,0,0,0,0,0,,,
+2026-07-06,17,0,0,0,0,0,,,
+2026-07-06,18,0,0,0,0,0,,,
+2026-07-06,19,0,0,0,0,0,,,
+2026-07-06,20,0,0,0,0,0,,,
+2026-07-06,21,0,0,0,0,0,,,
+2026-07-06,22,0,0,0,0,0,,,
+2026-07-06,23,0,0,0,0,0,,,
+2026-07-07,0,0,0,0,0,0,,,
+2026-07-07,1,0,0,0,0,0,,,
+2026-07-07,2,0,0,0,0,0,,,
+2026-07-07,3,0,0,0,0,0,,,
+2026-07-07,4,0,0,0,0,0,,,
+2026-07-07,5,0,0,0,0,0,,,
+2026-07-07,6,0,0,0,0,0,,,
+2026-07-07,7,0,0,0,0,0,,,
+2026-07-07,8,0,0,0,0,0,,,
+2026-07-07,9,0,0,0,0,0,,,
+2026-07-07,10,0,0,0,0,0,,,
+2026-07-07,11,0,0,0,0,0,,,
+2026-07-07,12,0,0,0,0,0,,,
+2026-07-07,13,0,0,0,0,0,,,
+2026-07-07,14,0,0,0,0,0,,,
+2026-07-07,15,0,0,5,0,0,,,
+2026-07-07,16,0,0,0,0,0,,,
+2026-07-07,17,0,0,0,0,0,,,
+2026-07-07,18,1,1,0,3119,166,f046d41a6,rustty: GPU Chunk 3b — CPU cell-fill + the shaper-hook aliasing fix (Miri-proven SB/TB-cle…,rustty: GPU R-d Chunk 3b — CPU cell-fill + the shaper-hook aliasing fix (Miri-proven SB/TB-clean)
+2026-07-07,19,0,0,0,0,0,,,
+2026-07-07,20,1,1,0,1993,3,b30a29a44,rustty: GPU Chunk 3c — updateFrame frame-orchestrator + the uniforms math,rustty: GPU R-d Chunk 3c — updateFrame frame-orchestrator + the uniforms math
+2026-07-07,21,1,1,0,3005,29,b0df56c29,rustty: GPU Chunk 4 — the offscreen GOLDEN-IMAGE gate (the contract),rustty: GPU R-d Chunk 4 — the offscreen GOLDEN-IMAGE gate (the R-d contract)
+2026-07-07,22,0,0,0,0,0,,,
+2026-07-07,23,1,1,3,608,78,a12b196fd,rustty: GPU Chunk 5 — the finale (seam audit + honest status + docs),rustty: GPU R-d Chunk 5 — the finale (seam audit + honest status + R-d docs)
+2026-07-08,0,0,0,0,0,0,,,
+2026-07-08,1,0,0,0,0,0,,,
+2026-07-08,2,0,0,1,0,0,,,
+2026-07-08,3,2,2,0,3346,78,414294ca4,rustty: renderer surface — DerivedConfig::init<C> + change_config + resize (acyclic Render…,rustty: renderer surface — DerivedConfig::init<C> + change_config + resize (acyclic RendererConfig trait)
+2026-07-08,4,0,0,0,0,0,,,
+2026-07-08,5,2,2,0,3802,244,498aeac27,rustty: renderer background-image pipeline — wuffs PNG/JPEG decode + rustty-wuffs crate,rustty: renderer background-image pipeline — wuffs PNG/JPEG decode + rustty-wuffs crate
+2026-07-08,6,1,1,0,1107,224,b02437dd1,rustty: renderer config-message/thread tier — initChangeConfig<C> + thread DerivedConfig +…,rustty: renderer config-message/thread tier — initChangeConfig<C> + thread DerivedConfig + deinit
+2026-07-08,7,1,1,0,3110,90,40ceeb506,rustty: z2d hairline stroking + renderer debug-overlay — the last renderer render seam,rustty: z2d hairline stroking + renderer debug-overlay — the last renderer render seam
+2026-07-08,8,0,0,0,0,0,,,
+2026-07-08,9,1,1,2,605,42,8c9b1fa0a,rustty: core — wire the real renderer DerivedConfig (first headless RendererConfig-for-Con…,rustty: core — wire the real renderer DerivedConfig (first headless RendererConfig-for-Config exercise)
+2026-07-08,10,1,1,0,1490,161,efb4daeda,rustty: terminal search — the .search binding arm + search-thread mutex unification (Miri-…,rustty: terminal search — the .search binding arm + search-thread mutex unification (Miri-proven)
+2026-07-08,11,0,0,3,0,0,,,
+2026-07-08,12,0,0,0,0,0,,,
+2026-07-08,13,0,0,0,0,0,,,
+2026-07-08,14,0,0,0,0,0,,,
+2026-07-08,15,0,0,0,0,0,,,
+2026-07-08,16,0,0,0,0,0,,,
+2026-07-08,17,1,1,2,4672,0,3a4403587,rustty: full gap analysis + completion plan + macOS-windowing (sub-project #1) design,rustty: full gap analysis + completion plan + macOS-windowing (sub-project #1) design
+2026-07-08,18,1,1,0,1945,0,ad76296b7,rustty: macOS-windowing (sub-project #1) implementation plan — tasks,rustty: macOS-windowing (sub-project #1) implementation plan — W0-W4 tasks
+2026-07-08,19,0,0,1,0,0,,,
+2026-07-08,20,1,1,1,1099,131,540c9248f,rustty: macOS-windowing — objc2-quartz-core + cf_release_thread xev rewire + IOSurfaceLaye…,rustty: macOS-windowing W0 — objc2-quartz-core + cf_release_thread xev rewire + IOSurfaceLayer
+2026-07-08,21,0,0,0,0,0,,,
+2026-07-08,22,0,0,0,0,0,,,
+2026-07-08,23,0,0,1,0,0,,,
+2026-07-09,0,1,1,0,1434,178,74c57204f,rustty: macOS-windowing — Metal on-screen present + windowed Renderer::init (FIRST PIXELS),rustty: macOS-windowing W1 — Metal on-screen present + windowed Renderer::init (FIRST PIXELS)
+2026-07-09,1,1,1,0,1599,27,accbd4afe,rustty: macOS-windowing — CVDisplayLink block (apprt-free); un-defer loop_enter + deinit l…,rustty: macOS-windowing W2 — CVDisplayLink block (apprt-free); un-defer loop_enter + deinit link arm
+2026-07-09,2,1,1,0,2700,49,8e604eb26,rustty: macOS-windowing — real Renderer swap + core render Thread event loop (Miri-proven),rustty: macOS-windowing W3 — real Renderer swap + core render Thread event loop (Miri-proven)
+2026-07-09,3,1,1,0,1487,23,73acefa20,rustty: macOS-windowing — apprt-c host handshake: window blur + display_id C-ABI leaves,rustty: macOS-windowing W4 — apprt-c host handshake: window blur + display_id C-ABI leaves
+2026-07-09,4,1,1,0,1400,22,9f16b9dff,"rustty: macOS-windowing — fill Metal::loop_enter (display-callback trampoline, concurrency…","rustty: macOS-windowing W5 — fill Metal::loop_enter (display-callback trampoline, concurrency Miri-proven)"
+2026-07-09,5,0,0,0,0,0,,,
+2026-07-09,6,0,0,0,0,0,,,
+2026-07-09,7,0,0,0,0,0,,,
+2026-07-09,8,0,0,0,0,0,,,
+2026-07-09,9,1,1,1,153,12,734ee0522,rustty: sub-project #3 — ledger hygiene (reconcile DEFERRALS.md + fix stale vt status head…,rustty: sub-project #3 — ledger hygiene (reconcile DEFERRALS.md + fix stale vt status headers)
+2026-07-09,10,1,1,0,2823,5,fb1230323,"rustty: sub-project #3 — port src/synthetic/** (differential-fuzz generators, Miri-clean)","rustty: sub-project #3 — port src/synthetic/** (differential-fuzz generators, Miri-clean)"
+2026-07-09,11,1,1,0,3446,12,efc1df55d,"rustty: sub-project #3 — port src/benchmark/** (micro-benchmark harness, Miri-clean)","rustty: sub-project #3 — port src/benchmark/** (micro-benchmark harness, Miri-clean)"
+2026-07-09,12,1,1,0,3695,12,b6217aa36,"rustty: sub-project #3 — port src/extra/** (shell-completion + editor-syntax generators, b…","rustty: sub-project #3 — port src/extra/** (shell-completion + editor-syntax generators, byte-exact)"
+2026-07-09,13,2,2,0,3977,0,56d139636,"rustty: TUI-CLI groundwork — port the zf fuzzy finder into rustty-zf (rank bit-faithful, M…","rustty: TUI-CLI groundwork — port the zf fuzzy finder into rustty-zf (rank bit-faithful, Miri-clean)"
+2026-07-09,14,0,0,0,0,0,,,
+2026-07-09,15,0,0,1,0,0,,,
+2026-07-09,16,1,1,0,62768,3,e0abb034c,rustty: vaxis chunk 1b — uucode-0.1.0 unicode-data foundation + gwidth/unicode (tables bit…,"rustty: vaxis chunk 1b — uucode-0.1.0 unicode-data foundation + gwidth/unicode (tables bit-exact, Miri-clean)"
+2026-07-09,17,2,2,0,4705,12,5c72ced2d,"rustty: vaxis chunk 3a — ANSI input Parser + ctlseqs + event (34 tests, Miri-clean, no uns…","rustty: vaxis chunk 3a — ANSI input Parser + ctlseqs + event (34 tests, Miri-clean, no unsafe)"
+2026-07-09,18,1,1,0,2805,6,d52a11929,"rustty: vaxis chunk 3b — tty backend (termios FFI) + queue + Loop read-thread (owned-text,…","rustty: vaxis chunk 3b — tty backend (termios FFI) + queue + Loop read-thread (owned-text, Miri-proven)"
+2026-07-09,19,2,2,1,3850,99,17bcf2d1c,"rustty: vaxis chunk 4b — TextInput widget (gap buffer, Miri-clean)","rustty: vaxis chunk 4b — TextInput widget (gap buffer, Miri-clean)"
+2026-07-09,20,1,1,1,1589,451,e55e39d5d,rustty: TUI-CLI wiring 1 — un-defer list_colors + list_keybinds prettyPrint over rustty-va…,rustty: TUI-CLI wiring 1 — un-defer list_colors + list_keybinds prettyPrint over rustty-vaxis
+2026-07-09,21,1,1,0,3389,1577,1f88eeccd,rustty: TUI-CLI wiring 2 (finale) — list_themes interactive fuzzy-picker over vaxis + zf (…,rustty: TUI-CLI wiring 2 (finale) — list_themes interactive fuzzy-picker over vaxis + zf (Miri-proven)
+2026-07-09,22,0,0,0,0,0,,,
+2026-07-09,23,0,0,1,0,0,,,
+2026-07-10,0,0,0,0,0,0,,,
+2026-07-10,1,0,0,0,0,0,,,
+2026-07-10,2,2,2,9,102,0,c33a459f9,rustty: add LICENSE (MIT) + NOTICE with upstream attribution,rustty: add LICENSE (MIT) + NOTICE with upstream attribution
+2026-07-10,3,0,0,1,0,0,,,
+2026-07-10,4,0,0,0,0,0,,,
+2026-07-10,5,0,0,0,0,0,,,
+2026-07-10,6,0,0,0,0,0,,,
+2026-07-10,7,0,0,0,0,0,,,
+2026-07-10,8,0,0,0,0,0,,,
+2026-07-10,9,5,5,1,980,252,2ccd52134,rustty-termio: fix termio test-binary fork hang,rustty-termio: fix termio test-binary fork hang
+2026-07-10,10,6,6,0,8605,125,2c03357ce,"port: Bun-rewrite learnings + validation sweep #1 reports, realignment plan, and the phase…","port: Bun-rewrite learnings + validation sweep #1 reports, realignment plan, and the phase-0/1/2 orchestration workflows"
+2026-07-10,11,3,3,0,1327,105,8726523bb,rustty-vaxis: fix Loop::stop protected-tag UB via field projection; mirihar overlap model …,"rustty-vaxis: fix Loop::stop protected-tag UB via field projection; mirihar overlap model proves pre-fix UB and post-fix clean; MIRI_EXCEPTIONS 708 corrected (T11, VALIDATION_REPORT H1)"
+2026-07-10,12,1,1,1,660,62,9f87df18e,"soundness mediums: get_row ptr-arith, png decode leak, C-unwind abort, apprt-c panic polic…","soundness mediums: get_row ptr-arith, png decode leak, C-unwind abort, apprt-c panic policy, SIGWINCH, MIRI_EXCEPTIONS 8-13, div_exact, erase_chars clamp, error-path integrity, iosurface AtomicPtr (T12, VALIDATION_REPORT §3c)"
+2026-07-10,13,14,14,0,1226,308,ae40aa2a9,"phase-2 payoff: contract gates binding on done crates; 8 residual findings fixed, 4 filed","phase-2 payoff: contract gates binding on done crates; 8 residual findings fixed, 4 filed"
+2026-07-10,14,3,3,0,986,424,126bb143b,"rustty-vt/config: residual contract tests ported — DoP-slug renames, bell callback half, D…","rustty-vt/config: residual contract tests ported — DoP-slug renames, bell callback half, DCS<->tmux wiring un-deferred"
+2026-07-10,15,2,2,1,8164,1096,0d422876a,chore: rustfmt fallout from the families/ test restorations; phase-1/2 orchestration scrip…,chore: rustfmt fallout from the families/G2 test restorations; phase-1/2 orchestration scripts + payoff CI log committed
+2026-07-10,16,0,0,0,0,0,,,
+2026-07-10,17,2,2,0,433,0,8f6d781dc,audits: GHOSTTY_LIFETIMES.tsv — retroactive pointer-field ownership ledger (Bun lifetime-c…,audits: GHOSTTY_LIFETIMES.tsv — retroactive pointer-field ownership ledger (T16; Bun lifetime-classify heritage; R11)
+2026-07-10,18,4,4,0,2262,84,4292a3b6b,"rustty-vt, rustty-font: upstream parity ports — b953bb346, e44f5cb0f, 3d08161b5, 0aaedf436…","rustty-vt, rustty-font: upstream parity ports — b953bb346, e44f5cb0f, 3d08161b5, 0aaedf436, 0cb004734, 91f0cf67d(fix-only), 5fa37f2b7, cee35cabf, 8f1c2fe95, dac341cad+e8f3f6c43 (T19, R12)"
+2026-07-10,19,1,1,0,1203,1015,3f5a226f0,markers: taxonomy migration + census,markers: R10 taxonomy migration + census (T20)
+2026-07-10,20,0,0,1,0,0,,,
+2026-07-10,21,3,3,2,251,0,2a50ddfed,chore: gitignore transient rustc-ice-*.txt dumps (Miri ICEs under parallel load),chore: gitignore transient rustc-ice-*.txt dumps (Miri ICEs under parallel load)
+2026-07-10,22,0,0,0,0,0,,,
+2026-07-10,23,0,0,2,0,0,,,
+2026-07-11,0,0,0,0,0,0,,,
+2026-07-11,1,1,1,0,64,0,3277f2f78,vt: first full Miri sweep (all 2037 tests) — inventory + the real search/screen.rs SB UB f…,vt: first full Miri sweep (all 2037 tests) — inventory + the real search/screen.rs SB UB finding
+2026-07-11,2,0,0,0,0,0,,,
+2026-07-11,3,0,0,0,0,0,,,
+2026-07-11,4,0,0,0,0,0,,,
+2026-07-11,5,0,0,0,0,0,,,
+2026-07-11,6,0,0,0,0,0,,,
+2026-07-11,7,0,0,0,0,0,,,
+2026-07-11,8,3,3,4,502,110,9e3fe1c25,vt: fix search-subsystem SB UB found by the full Miri sweep (9 tests),vt: fix search-subsystem SB UB found by the full Miri sweep (9 tests)
+2026-07-11,9,0,0,0,0,0,,,
+2026-07-11,10,0,0,1,0,0,,,
+2026-07-11,11,0,0,0,0,0,,,
+2026-07-11,12,0,0,0,0,0,,,
+2026-07-11,13,0,0,0,0,0,,,
+2026-07-11,14,0,0,2,0,0,,,
+2026-07-11,15,0,0,1,0,0,,,
+2026-07-11,16,0,0,0,0,0,,,
+2026-07-11,17,0,0,0,0,0,,,
+2026-07-11,18,0,0,0,0,0,,,
+2026-07-11,19,0,0,0,0,0,,,
+2026-07-11,20,0,0,0,0,0,,,
+2026-07-11,21,0,0,0,0,0,,,
+2026-07-11,22,0,0,0,0,0,,,
+2026-07-11,23,0,0,0,0,0,,,
+2026-07-12,0,0,0,3,0,0,,,
+2026-07-12,1,3,3,3,614,177,c44e04f23,fmt: rustfmt the search UB fix + Miri-exception annotations; fix pre-existing face.rs drif…,fmt: rustfmt the search UB fix + Miri-exception annotations; fix pre-existing face.rs drift
+2026-07-12,2,15,15,2,6466,26,202870e36,validation: sweep #2 report + Phase-5 pre-port artifacts (gtk/swift-app/inspector),validation: sweep #2 report + Phase-5 pre-port artifacts (gtk/swift-app/inspector)
+2026-07-12,3,16,16,0,43376,16,1395249e5,"macos: import the reused ghostty Swift app (Branch A, byte-identical) + swap in rustty's G…","macos: import the reused ghostty Swift app (Branch A, byte-identical) + swap in rustty's GhosttyKit.xcframework (B2)"
+2026-07-12,4,5,5,0,591,4,269cdb8e6,xtask res_terminfo — gen_terminfo compiles terminfo + creates share/ghostty root,xtask res_terminfo — gen_terminfo compiles terminfo + creates share/ghostty root
+2026-07-12,5,0,0,0,0,0,,,
+2026-07-12,6,0,0,0,0,0,,,
+2026-07-12,7,0,0,0,0,0,,,
+2026-07-12,8,0,0,0,0,0,,,
+2026-07-12,9,0,0,4,0,0,,,
+2026-07-12,10,0,0,0,0,0,,,
+2026-07-12,11,0,0,0,0,0,,,
+2026-07-12,12,0,0,0,0,0,,,
+2026-07-12,13,0,0,0,0,0,,,
+2026-07-12,14,0,0,0,0,0,,,
+2026-07-12,15,3,3,8,336,0,96b01163b,renderer: W-ATTACH — route the host NSView into the windowed layer-attach (VISIBLE TERMINA…,renderer: W-ATTACH — route the host NSView into the windowed layer-attach (VISIBLE TERMINAL)
+2026-07-12,16,12,12,6,15632,226,252edc22b,parity: integration parity review vs ghostty — faithful runtime seams; fixes are packaging…,"parity: integration parity review vs ghostty — faithful runtime seams; fixes are packaging/resource-layer (shell-integration + themes ship empty, self-contained lib, iOS host_view)"
+2026-07-12,17,0,0,0,0,0,,,
+2026-07-12,18,0,0,0,0,0,,,
+2026-07-12,19,0,0,0,0,0,,,
+2026-07-12,20,0,0,0,0,0,,,
+2026-07-12,21,0,0,0,0,0,,,
+2026-07-12,22,0,0,0,0,0,,,
+2026-07-12,23,0,0,0,0,0,,,
+2026-07-13,0,0,0,0,0,0,,,
+2026-07-13,1,0,0,0,0,0,,,
+2026-07-13,2,0,0,0,0,0,,,
+2026-07-13,3,0,0,0,0,0,,,
+2026-07-13,4,0,0,0,0,0,,,
+2026-07-13,5,0,0,1,0,0,,,
+2026-07-13,6,0,0,0,0,0,,,
+2026-07-13,7,0,0,5,0,0,,,
+2026-07-13,8,0,0,3,0,0,,,
+2026-07-13,9,0,0,0,0,0,,,
+2026-07-13,10,0,0,0,0,0,,,
+2026-07-13,11,0,0,0,0,0,,,
+2026-07-13,12,0,0,0,0,0,,,
+2026-07-13,13,0,0,0,0,0,,,
+2026-07-13,14,0,0,0,0,0,,,
+2026-07-13,15,0,0,0,0,0,,,
+2026-07-13,16,0,0,0,0,0,,,
+2026-07-13,17,0,0,0,0,0,,,
+2026-07-13,18,0,0,0,0,0,,,
+2026-07-13,19,0,0,0,0,0,,,
+2026-07-13,20,0,0,0,0,0,,,
+2026-07-13,21,0,0,1,0,0,,,
+2026-07-13,22,0,0,0,0,0,,,
+2026-07-13,23,0,0,0,0,0,,,
+2026-07-14,0,0,0,0,0,0,,,
+2026-07-14,1,0,0,0,0,0,,,
+2026-07-14,2,0,0,0,0,0,,,
+2026-07-14,3,0,0,0,0,0,,,
+2026-07-14,4,0,0,0,0,0,,,
+2026-07-14,5,0,0,0,0,0,,,
+2026-07-14,6,0,0,0,0,0,,,
+2026-07-14,7,0,0,0,0,0,,,
+2026-07-14,8,0,0,0,0,0,,,
+2026-07-14,9,0,0,0,0,0,,,
+2026-07-14,10,0,0,0,0,0,,,
+2026-07-14,11,0,0,0,0,0,,,
+2026-07-14,12,0,0,0,0,0,,,
+2026-07-14,13,0,0,0,0,0,,,
+2026-07-14,14,0,0,0,0,0,,,
+2026-07-14,15,8,8,2,2561,804,68d920305,abi: canonical rustty embedding umbrella include/rustty-embed.h (renamed from validated or…,abi: canonical rustty embedding umbrella include/rustty-embed.h (renamed from validated oracle ghostty.h); keep ghostty.h as frozen oracle (Task 2)
+2026-07-14,16,11,11,0,3068,2839,2efe07372,"swift: repoint ghostty_* -> rustty_*, import RusttyKit (Task 5)","swift: repoint ghostty_* -> rustty_*, import RusttyKit (Task 5)"
+2026-07-14,17,12,12,2,908,651,bc3405f5e,"shell-integration: rename ghostty.* scripts to rustty.*, route env vars to RUSTTY_ (Task 1…","shell-integration: rename ghostty.* scripts to rustty.*, route env vars to RUSTTY_ (Task 13)"
+2026-07-14,18,6,6,4,736,521,9a5d61654,parity: rename identity-ghostty cargo feature -> identity-oracle (user request); values un…,parity: rename identity-ghostty cargo feature -> identity-oracle (user request); values unchanged (Task 17)
+2026-07-14,19,3,3,4,681,612,ae70b8214,"rebrand: final residual sweep — tree is rustty-branded, oracle carve-out documented, parit…","rebrand: final residual sweep — tree is rustty-branded, oracle carve-out documented, parity green (Task 16)"
+2026-07-14,20,3,3,5,417,398,0c5fe1434,"rebrand: fix Ghostty->rustty miscasing — product name in prose is Rustty (capital), not lo…","rebrand: fix Ghostty->rustty miscasing — product name in prose is Rustty (capital), not lowercase; regenerate completion goldens"
+2026-07-14,21,0,0,0,0,0,,,
+2026-07-14,22,7,7,3,885,111,027f695bb,inspector: inhabit Inspector struct + per-Surface ImGui context (Task 4),inspector: inhabit Inspector struct + per-Surface ImGui context (Task 4)
+2026-07-14,23,5,5,0,2476,532,f9b7cc3f3,inspector: key.rs ImGui draw half (Task 8),inspector: key.rs ImGui draw half (Task 8)
+2026-07-15,0,4,4,0,4217,61,1422b9ed6,inspector: pagelist.rs widget + comptime hand-expansion (Task 13),inspector: pagelist.rs widget + comptime hand-expansion (Task 13)
+2026-07-15,1,4,4,0,4994,280,d9566c520,inspector: Inspector.rs aggregate + top-level render (Task 17),inspector: Inspector.rs aggregate + top-level render (Task 17)
+2026-07-15,2,2,2,0,2129,1059,d6be9b26f,inspector: inhabit aggregation chain — screen/terminal/surface Info + Inspector::render (d…,inspector: inhabit aggregation chain — screen/terminal/surface Info + Inspector::render (dockspace unblocked)
+2026-07-15,3,1,1,0,273,78,0b8f7af00,inspector: complete apprt Metal render loop (renderMetal + queueInspectorRender) + objc2 e…,inspector: complete apprt Metal render loop (renderMetal + queueInspectorRender) + objc2 encoder msgSends — inspector render path live
+2026-07-15,4,0,0,0,0,0,,,
+2026-07-15,5,0,0,0,0,0,,,
+2026-07-15,6,0,0,0,0,0,,,
+2026-07-15,7,0,0,3,0,0,,,
+2026-07-15,8,3,3,5,491,73,c62ab072a,inspector: port ImGui input callbacks (focus/mouse/key/text/size/scale) — fix crash-on-ope…,"inspector: port ImGui input callbacks (focus/mouse/key/text/size/scale) — fix crash-on-open, wire host input to dcimgui IO"
+2026-07-15,9,5,5,0,19653,725,e7e5a8c15,rustty: un-defer +boo — vxfw widget-framework subset + framedata asset (completeness-fill:…,rustty: un-defer +boo — vxfw widget-framework subset + framedata asset (completeness-fill: vxfw)
+2026-07-15,10,4,4,3,333,49,ea92fb464,rustty: wasm32-wasip1 bringup — real ghostty-vt.wasm via zig C/C++ cross-compile,rustty: wasm32-wasip1 bringup — real ghostty-vt.wasm via zig C/C++ cross-compile
+2026-07-15,11,1,1,3,207,7,074720681,rustty: wasm alloc-convenience exports + end-to-end VT roundtrip proof,rustty: wasm alloc-convenience exports + end-to-end VT roundtrip proof
+2026-07-15,12,4,4,7,2320,409,6c432f314,rustty: web_canvas font backend + true browser-freestanding wasm,rustty: web_canvas font backend + true browser-freestanding wasm
+2026-07-15,13,11,11,15,11522,63,711ed2d4c,vt-headers: token-rename ghostty/vt.h family -> include/rustty/vt.h + vt/*.h + rustty.sh b…,vt-headers: token-rename ghostty/vt.h family -> include/rustty/vt.h + vt/*.h + rustty.sh branding
+2026-07-15,14,6,6,6,2822,1349,01c180f1e,examples(phase B): port all 20 ghostty c-vt/cpp-vt runtime examples — 21/21 byte-identical,examples(phase B): port all 20 ghostty c-vt/cpp-vt runtime examples — 21/21 byte-identical
+2026-07-15,15,0,0,5,0,0,,,
+2026-07-15,16,3,3,4,693,15,40727a2cb,fix(cabi): TriggerC by-value return was 20B vs header 12B → sret crash,fix(cabi): TriggerC by-value return was 20B vs header 12B → sret crash
+2026-07-15,17,0,0,0,0,0,,,
+2026-07-15,18,0,0,10,0,0,,,
+2026-07-15,19,1,1,8,4993,5,648d1afeb,"rustty: top-level project files port — Batch 1 (docs, dotfiles, governance)","rustty: top-level project files port — Batch 1 (docs, dotfiles, governance)"
+2026-07-15,20,4,4,6,6167,6,0f3311f22,rustty: top-level project files port — Batch 2 (C-API build tooling),rustty: top-level project files port — Batch 2 (C-API build tooling)
+2026-07-15,21,3,3,4,12372,77,e020db2e4,rustty: top-level project files port — Batch 6 (full i18n),rustty: top-level project files port — Batch 6 (full i18n)
+2026-07-15,22,2,2,16,5,5,2de5ba82b,rustty: po/he.po — drop the ported translator name (use maintainer identity),rustty: po/he.po — drop the ported translator name (use maintainer identity)
+2026-07-15,23,2,2,10,1489,36,10cc61434,rustty: phase-2 — Rust-vs-Zig benchmark head-to-head + synthetic CLI parity design,rustty: phase-2 — Rust-vs-Zig benchmark head-to-head + synthetic CLI parity design
+2026-07-16,0,0,0,2,0,0,,,
+2026-07-16,1,8,8,0,780,325,9789788e2,rustty: perf — fix-render-soa: restore MultiArrayList SoA + raw-column memcpy in RenderSta…,rustty: perf — fix-render-soa: restore MultiArrayList SoA + raw-column memcpy in RenderState
+2026-07-16,2,4,3,0,331,139,2bb5c4278,rustty: perf — fix-parser-destage: restore the reference arm structure in Parser::next,rustty: perf — fix-parser-destage: restore the reference arm structure in Parser::next
+2026-07-16,3,3,3,0,1229,102,1e9660360,"rustty: phase-2 — perf-opt attribution log, fix plan, raw bench data","rustty: phase-2 — perf-opt attribution log, fix plan, raw bench data"
+2026-07-16,4,1,1,0,56,24,b6f5e4f2f,perf(vt): render update — stop re-zeroing the style/grapheme SoA columns per rebuild (fix-…,perf(vt): render update — stop re-zeroing the style/grapheme SoA columns per rebuild (fix-render-undefined-cols)
+2026-07-16,5,6,5,0,1712,233,ada047519,"rustty: alloc-bench suite — alloc-bench feature seam, equal-scope standalone bench, arena …","rustty: alloc-bench suite — alloc-bench feature seam, equal-scope standalone bench, arena resize seam (fix 12), std_size golden gate"
+2026-07-16,6,0,0,0,0,0,,,
+2026-07-16,7,4,4,0,884,119,1abae33eb,rustty: perf — r3-clone: outline cold grapheme/hyperlink arms of clone_partial_row_from,rustty: perf — r3-clone: outline cold grapheme/hyperlink arms of clone_partial_row_from
+2026-07-16,8,0,0,0,0,0,,,
+2026-07-16,9,7,7,1,922,425,6ca101519,rustty: perf — r5-print-outline: outline cold print arms (grapheme/zero-width/wide),rustty: perf — r5-print-outline: outline cold print arms (grapheme/zero-width/wide)
+2026-07-16,10,5,2,0,994,18,745b3c9e3,rustty: perf — r5-clone-style-run: batch same-style runs + by-pointer set adds in the clon…,rustty: perf — r5-clone-style-run: batch same-style runs + by-pointer set adds in the clone chain
+2026-07-16,11,0,0,0,0,0,,,
+2026-07-16,12,0,0,0,0,0,,,
+2026-07-16,13,0,0,1,0,0,,,
+2026-07-16,14,0,0,0,0,0,,,
+2026-07-16,15,0,0,0,0,0,,,
+2026-07-16,16,0,0,0,0,0,,,
+2026-07-16,17,0,0,0,0,0,,,
+2026-07-16,18,0,0,2,0,0,,,
+2026-07-16,19,0,0,5,0,0,,,
+2026-07-16,20,1,1,8,40,11,85d19023a,rustty: linux-port — fix never-compiled -sys build breaks on aarch64 glibc GCC 16,rustty: linux-port — fix never-compiled -sys build breaks on aarch64 glibc / GCC 16
+2026-07-16,21,0,0,0,0,0,,,
+2026-07-16,22,1,1,0,507,0,f32352ab1,rustty: linux-port — GTK roadmap + detailed (xev epoll/io_uring/Dynamic) plan,rustty: linux-port — GTK roadmap + detailed L1 (xev epoll/io_uring/Dynamic) plan
+2026-07-16,23,4,4,0,439,21,0aa7470a8,rustty-xev: linux timerfd + eventfd primitives + shared ABI enums,rustty-xev: linux timerfd + eventfd primitives + shared ABI enums (L1 LT2)
+2026-07-17,0,3,3,0,3667,22,89be5045c,rustty-xev: epoll socket/process/stream arms + live KATs,rustty-xev: epoll socket/process/stream arms + live KATs (L1 LT4)
+2026-07-17,1,10,10,0,8092,182,981b57b80,"rustty-font-shaper: fix Linux hard compile errors (Options alias, discovery::Error, typed …","rustty-font-shaper: fix Linux hard compile errors (Options alias, discovery::Error, typed Fontconfig stub) (L3 Task 1)"
+2026-07-17,2,4,4,0,4242,120,04e278965,rustty-xev: hand-authored Dynamic io_uring/epoll selector,rustty-xev: hand-authored Dynamic io_uring/epoll selector (L1 LT7)
+2026-07-17,3,0,0,0,0,0,,,
+2026-07-17,4,1,1,0,76,0,b9cdd41c0,rustty-xev: pin dynamic.rs's Send/Copy story with Step-3 trait-bound tripwires,rustty-xev: pin dynamic.rs's Send/Copy story with Step-3 trait-bound tripwires
+2026-07-17,5,3,3,0,3207,100,b60017e52,rustty-renderer: opengl::gl buffer/vertex_array/errors/draw leaves,rustty-renderer: opengl::gl buffer/vertex_array/errors/draw leaves (L4 T2)
+2026-07-17,6,5,5,0,3216,143,5af512357,rustty-renderer: opengl::gl texture/sampler/framebuffer/renderbuffer leaves,rustty-renderer: opengl::gl texture/sampler/framebuffer/renderbuffer leaves (L4 T4)
+2026-07-17,7,1,1,0,520,0,af0d065d9,libxml2-sys: vendor libxml2 2.11.5 (cc + bindgen + KAT) —,libxml2-sys: vendor libxml2 2.11.5 (cc + bindgen + KAT) — L3 T2
+2026-07-17,8,0,0,0,0,0,,,
+2026-07-17,9,0,0,0,0,0,,,
+2026-07-17,10,7,7,0,5256,73,baa047e9d,rustty-apprt/gtk: vendor 19 .blp + 4 .css + icons verbatim; build_info + gresource manifes…,rustty-apprt/gtk: vendor 19 .blp + 4 .css + icons verbatim; build_info + gresource manifest (L5.0 T4)
+2026-07-17,11,7,7,0,4687,84,30d5e9953,rustty-renderer: verbatim GLSL assets + opengl gpu_abi/shaders,rustty-renderer: verbatim GLSL assets + opengl gpu_abi/shaders (L4 T7)
+2026-07-17,12,5,5,0,5443,70,5ddd39f62,rustty-renderer: linux_impl rebuild_cells + update_frame uniforms,rustty-renderer: linux_impl rebuild_cells + update_frame uniforms (L4 T10)
+2026-07-17,13,4,4,0,2152,21,1556c8070,rustty-renderer: linux_impl draw_frame + OpenGL offscreen golden,rustty-renderer: linux_impl draw_frame + OpenGL offscreen golden (L4 T11)
+2026-07-17,14,1,1,0,1583,1,dfd10775e,rustty-apprt/gtk: Surface subclass + surface.blp template + init + gsettings,rustty-apprt/gtk: Surface subclass + surface.blp template + init + gsettings (L5.2 T13)
+2026-07-17,15,2,2,0,494,7,c507361cf,"rustty-apprt/gtk: Surface dispose/finalize — template double-free workaround, deleteSurfac…","rustty-apprt/gtk: Surface dispose/finalize — template double-free workaround, deleteSurface ordering, source-id RAII (L5.2 T14)"
+2026-07-17,16,3,3,0,1185,92,be3f203cd,rustty-apprt/gtk: GLArea lifecycle + lazy core_surface + apprt Surface shim,rustty-apprt/gtk: GLArea lifecycle + lazy core_surface + apprt Surface shim (L5.2 T15+T17)
+2026-07-17,17,2,2,0,1504,33,0bb7aaca1,"rustty-apprt/gtk: input pipeline — key.rs, keyEvent/IM, mouse, scroll, focus","rustty-apprt/gtk: input pipeline — key.rs, keyEvent/IM, mouse, scroll, focus (L5.2 T18)"
+2026-07-17,18,1,1,0,353,197,5c801a295,rustty-core: swap — wire the real OpenGL Renderer into the renderer seam (first light),rustty-core: L4 swap — wire the real OpenGL Renderer into the renderer seam (first light)
+2026-07-17,19,1,1,0,411,0,3dad6d7a2,rustty-apprt/gtk: FIRST LIGHT — AdwApplicationWindow + GLArea renders a live terminal fram…,rustty-apprt/gtk: FIRST LIGHT — AdwApplicationWindow + GLArea renders a live terminal frame (L5.2 T19)
+2026-07-17,20,2,2,0,808,250,269845ec9,rustty-renderer/gtk: GL-ATTACH — draw into GDK's GLArea context (first light on screen),rustty-renderer/gtk: GL-ATTACH — draw into GDK's GLArea context (first light on screen)
+2026-07-17,21,4,4,0,2291,13,f3bb00b5c,rustty-termio: fix Subprocess argv double-free — free C-string storage in deinit,rustty-termio: fix Subprocess argv double-free — free C-string storage in deinit
+2026-07-17,22,1,1,0,1875,107,8cef0162f,rustty-apprt/gtk: Tab + SurfaceScrolledWindow + SplitTree/Split,rustty-apprt/gtk: Tab + SurfaceScrolledWindow + SplitTree/Split (L5.3 T21)
+2026-07-17,23,2,2,0,1567,40,7cb541e55,rustty-apprt/gtk: the full performAction switch + Action namespace,rustty-apprt/gtk: the full performAction switch + Action namespace (L5.3 T22)
+2026-07-18,0,0,0,0,0,0,,,
+2026-07-18,1,0,0,0,0,0,,,
+2026-07-18,2,2,2,2,985,84,8d38349c8,docs: handoff plan — finish GTK on Linux + validate under real 3D acceleration,docs: handoff plan — finish GTK on Linux + validate under real 3D acceleration
+2026-07-18,3,0,0,3,0,0,,,
+2026-07-18,4,0,0,0,0,0,,,
+2026-07-18,5,0,0,0,0,0,,,
+2026-07-18,6,0,0,3,0,0,,,
+2026-07-18,7,0,0,0,0,0,,,
+2026-07-18,8,0,0,5,0,0,,,
+2026-07-18,9,1,1,8,266,0,2d1489c29,rustty-apprt/gtk: gtk_glyph_dump validation harness — GPU-accurate GLArea screenshot,rustty-apprt/gtk: gtk_glyph_dump validation harness — GPU-accurate GLArea screenshot
+2026-07-18,10,0,0,1,0,0,,,
+2026-07-18,11,1,1,4,188,2,5ce0d0269,rustty-apprt/gtk: fix terminal swallowing all input — placeholder overlays must start hidd…,rustty-apprt/gtk: fix terminal swallowing all input — placeholder overlays must start hidden
+2026-07-18,12,1,1,10,51,4,486793623,rustty-apprt/gtk: fix crash-on-interaction — context_menu_closed + child_exited_close,rustty-apprt/gtk: fix crash-on-interaction — context_menu_closed + child_exited_close
+2026-07-18,13,2,2,5,486,22,abb3c51a3,rustty-apprt/gtk: menu accelerators — implement syncActionAccelerators (shortcuts in menus…,rustty-apprt/gtk: menu accelerators — implement syncActionAccelerators (shortcuts in menus)
+2026-07-18,14,1,1,2,308,8,a984c8003,"rustty-apprt/gtk: TitleDialog + wire context-menu ""Change Tab Title"" — fixes crash + dead …","rustty-apprt/gtk: T23 TitleDialog + wire context-menu ""Change Tab Title"" — fixes crash + dead menu"
+2026-07-18,15,0,0,0,0,0,,,
+2026-07-18,16,0,0,2,0,0,,,
+2026-07-18,17,0,0,0,0,0,,,
+2026-07-18,18,2,2,3,324,21,c10e6ff5d,rustty-apprt/gtk: clipboard copy/paste (Phase A) — set_clipboard + clipboard_request,rustty-apprt/gtk: clipboard copy/paste (Phase A) — set_clipboard + clipboard_request
+2026-07-18,19,1,1,7,620,8,e105ea921,rustty-apprt/gtk: clipboard confirmation dialog (Phase B) — ClipboardConfirmationDialog,rustty-apprt/gtk: clipboard confirmation dialog (Phase B) — ClipboardConfirmationDialog
+2026-07-18,20,0,0,1,0,0,,,
+2026-07-18,21,0,0,1,0,0,,,
+2026-07-18,22,0,0,0,0,0,,,
+2026-07-18,23,5,5,0,4145,388,42749b5e3,docs: Linux/GTK manual test plan — full parity checklist vs ghostty,docs: Linux/GTK manual test plan — full parity checklist vs ghostty
+2026-07-19,0,0,0,0,0,0,,,
+2026-07-19,1,0,0,6,0,0,,,
+2026-07-19,2,3,3,11,2208,40,4006e602a,docs: winproto arms implemented — update test plan + ledger; only dcimgui inspector remain…,docs: winproto arms implemented — update test plan + ledger; only dcimgui inspector remains
+2026-07-19,3,0,0,7,0,0,,,
+2026-07-19,4,5,5,1,609,15,2b023c672,inspector(gtk): fill Key::imgui_key + enable imgui in the gtk build (Task 3),inspector(gtk): fill Key::imgui_key + enable imgui in the gtk build (Task 3)
+2026-07-19,5,5,5,1,1788,19,3c06c21b6,inspector(gtk): ImguiWidget — ImGui-over-GLArea host (Task 4),inspector(gtk): ImguiWidget — ImGui-over-GLArea host (Task 4)
+2026-07-19,6,4,4,7,235,36,79ee684d3,gtk: +new-window -e/--command/--working-directory/--title argv override (ghostty parity),gtk: +new-window -e/--command/--working-directory/--title argv override (ghostty parity)
+2026-07-19,7,10,10,4,864,185,abe38f1c6,gtk/winproto(wayland): pump the registry wl queue via a GSource so set_urgent completes (g…,gtk/winproto(wayland): pump the registry wl queue via a GSource so set_urgent completes (ghostty parity)
+2026-07-19,8,1,1,10,21,8,8e024f3f7,gtk: wire toggle_quick_terminal quit open_config GAction handlers,gtk: wire toggle_quick_terminal / quit / open_config GAction handlers
+2026-07-19,9,3,3,13,96,21,d90beb6d4,gtk: port estimateInitialSize — window-width/height now honored (full ghostty alignment),gtk: port estimateInitialSize — window-width/height now honored (full ghostty alignment)
+2026-07-19,10,5,5,8,378,29,88800793b,gtk: color-scheme propagation + ghostty-mirrored opt-in v4_20 prefers-color-scheme,gtk: color-scheme propagation + ghostty-mirrored opt-in v4_20 prefers-color-scheme
+2026-07-19,11,0,0,0,0,0,,,
+2026-07-19,12,3,3,3,2295,108,89dde0f38,xev: port ThreadPool (lock-free work-stealing pool) + mirihar Miri proof (Task 1),xev: port ThreadPool (lock-free work-stealing pool) + mirihar Miri proof (Task 1)
+2026-07-19,13,4,4,0,3758,89,fd7084323,xev: port TCP watcher (Task 3),xev: port TCP watcher (Task 3)
+2026-07-19,14,2,2,0,6378,547,ac87a723d,xev: port File watcher + epoll ThreadPool integration (Task 5),xev: port File watcher + epoll ThreadPool integration (Task 5)
+2026-07-19,15,5,5,7,591,91,5a75a0bec,xev: File/TCP/UDP/ThreadPool complete on Linux — libxev surface parity (Task 6),xev: File/TCP/UDP/ThreadPool complete on Linux — libxev surface parity (Task 6)
+2026-07-19,16,1,1,2,98,0,6e6f4d1ae,port: VERIFICATION_DEBT.md — recipes for environment-gated checks,port: VERIFICATION_DEBT.md — recipes for environment-gated checks
+2026-07-19,17,0,0,0,0,0,,,
+2026-07-19,18,0,0,0,0,0,,,
+2026-07-19,19,0,0,0,0,0,,,
+2026-07-19,20,0,0,0,0,0,,,
+2026-07-19,21,0,0,0,0,0,,,
+2026-07-19,22,0,0,0,0,0,,,
+2026-07-19,23,0,0,0,0,0,,,
+2026-07-20,0,0,0,0,0,0,,,
+2026-07-20,1,0,0,0,0,0,,,
+2026-07-20,2,0,0,0,0,0,,,
+2026-07-20,3,0,0,0,0,0,,,
+2026-07-20,4,0,0,0,0,0,,,
+2026-07-20,5,0,0,0,0,0,,,
+2026-07-20,6,0,0,0,0,0,,,
+2026-07-20,7,0,0,0,0,0,,,
+2026-07-20,8,0,0,0,0,0,,,
+2026-07-20,9,0,0,0,0,0,,,
+2026-07-20,10,0,0,0,0,0,,,
+2026-07-20,11,0,0,0,0,0,,,
+2026-07-20,12,0,0,0,0,0,,,
+2026-07-20,13,0,0,0,0,0,,,
+2026-07-20,14,0,0,0,0,0,,,
+2026-07-20,15,0,0,0,0,0,,,
+2026-07-20,16,0,0,0,0,0,,,
+2026-07-20,17,0,0,0,0,0,,,
+2026-07-20,18,0,0,0,0,0,,,
+2026-07-20,19,0,0,0,0,0,,,
+2026-07-20,20,0,0,0,0,0,,,
+2026-07-20,21,0,0,0,0,0,,,
+2026-07-20,22,0,0,0,0,0,,,
+2026-07-20,23,0,0,0,0,0,,,
+2026-07-21,0,0,0,0,0,0,,,
+2026-07-21,1,0,0,0,0,0,,,
+2026-07-21,2,0,0,0,0,0,,,
+2026-07-21,3,0,0,0,0,0,,,
+2026-07-21,4,0,0,0,0,0,,,
+2026-07-21,5,0,0,0,0,0,,,
+2026-07-21,6,0,0,0,0,0,,,
+2026-07-21,7,0,0,0,0,0,,,
+2026-07-21,8,0,0,0,0,0,,,
+2026-07-21,9,0,0,0,0,0,,,
+2026-07-21,10,0,0,0,0,0,,,
+2026-07-21,11,0,0,0,0,0,,,
+2026-07-21,12,0,0,0,0,0,,,
+2026-07-21,13,0,0,1,0,0,,,
+2026-07-21,14,0,0,0,0,0,,,
+2026-07-21,15,0,0,0,0,0,,,
+2026-07-21,16,0,0,0,0,0,,,
+2026-07-21,17,0,0,0,0,0,,,
+2026-07-21,18,0,0,0,0,0,,,
+2026-07-21,19,0,0,0,0,0,,,
+2026-07-21,20,0,0,0,0,0,,,
+2026-07-21,21,0,0,0,0,0,,,
+2026-07-21,22,0,0,0,0,0,,,
+2026-07-21,23,0,0,0,0,0,,,
+2026-07-22,0,0,0,0,0,0,,,
+2026-07-22,1,0,0,0,0,0,,,
+2026-07-22,2,0,0,0,0,0,,,
+2026-07-22,3,0,0,0,0,0,,,
+2026-07-22,4,0,0,0,0,0,,,
+2026-07-22,5,0,0,0,0,0,,,
+2026-07-22,6,0,0,0,0,0,,,
+2026-07-22,7,0,0,0,0,0,,,
+2026-07-22,8,0,0,0,0,0,,,
+2026-07-22,9,0,0,0,0,0,,,
+2026-07-22,10,0,0,0,0,0,,,
+2026-07-22,11,0,0,0,0,0,,,
+2026-07-22,12,0,0,0,0,0,,,
+2026-07-22,13,0,0,0,0,0,,,
+2026-07-22,14,0,0,0,0,0,,,
+2026-07-22,15,0,0,0,0,0,,,
+2026-07-22,16,0,0,0,0,0,,,
+2026-07-22,17,0,0,0,0,0,,,
+2026-07-22,18,0,0,0,0,0,,,
+2026-07-22,19,0,0,0,0,0,,,
+2026-07-22,20,0,0,0,0,0,,,
+2026-07-22,21,2,2,14,298,89,0abe9ec89,gtk/winproto(wayland): queue-pending GSource — set_urgent token done now dispatches (last …,gtk/winproto(wayland): queue-pending GSource — set_urgent token done now dispatches (last GTK deferral)
+2026-07-22,22,1,1,5,236,8,cddffa093,gtk: port loadRuntimeCss — implement the empty runtime-CSS placeholder-leaf,gtk: port loadRuntimeCss — implement the empty runtime-CSS placeholder-leaf
+2026-07-22,23,7,7,1,374,61,9b3897b0e,gtk: implement on_notify_vadjustment placeholder-leaf (faithful to surface.zig:2441-2465 p…,gtk: implement on_notify_vadjustment placeholder-leaf (faithful to surface.zig:2441-2465 propVAdjustment)
+2026-07-23,0,0,0,0,0,0,,,
+2026-07-23,1,0,0,0,0,0,,,
+2026-07-23,2,0,0,0,0,0,,,
+2026-07-23,3,0,0,0,0,0,,,
+2026-07-23,4,0,0,0,0,0,,,
+2026-07-23,5,0,0,0,0,0,,,
+2026-07-23,6,0,0,1,0,0,,,
+2026-07-23,7,0,0,0,0,0,,,
+2026-07-23,8,1,1,14,7,6,e47728fcb,fix(macos): restore cross-platform build after the Linux/xev merges,fix(macos): restore cross-platform build after the Linux/xev merges
+2026-07-23,9,1,1,0,6631,0,b914feff3,docs: rustty completion program — roadmap + detailed plans (no-deferrals pass),docs: rustty completion program — roadmap + WS1-WS5 detailed plans (no-deferrals pass)
+2026-07-23,10,0,0,3,0,0,,,
+2026-07-23,11,19,17,0,973,190,5e411384c,rustty-apprt/embedded: platform_host_view helper + iOS/non-darwin KATs; truthful §2.6/§2.9…,rustty-apprt/embedded: platform_host_view helper + iOS/non-darwin KATs; truthful §2.6/§2.9 ledger (WS3-C)
+2026-07-23,12,3,3,2,248,1,2221e1136,rustty-os: pkg/macos os_log unified-logging binding,rustty-os: pkg/macos os_log unified-logging binding (WS4 T2)
+2026-07-23,13,21,20,0,4128,599,44d0b8fab,vt-c: color utility module — parse/parse_x11/palette/luminance/contrast/x11 table,vt-c: color utility module — parse/parse_x11/palette/luminance/contrast/x11 table (WS5 T5)
+2026-07-23,14,7,6,1,950,35,86cce9dd4,fix(vt-c): WriteResult FFI return is open (repr(transparent) i32) — sound against out-of-r…,"fix(vt-c): WriteResult FFI return is open (repr(transparent) i32) — sound against out-of-range C returns, matches oracle open enum (WS5 review)"
+2026-07-23,15,0,0,0,0,0,,,
+2026-07-23,16,0,0,0,0,0,,,
+2026-07-23,17,0,0,0,0,0,,,
+2026-07-23,18,0,0,0,0,0,,,
+2026-07-23,19,0,0,0,0,0,,,
+2026-07-23,20,0,0,0,0,0,,,
+2026-07-23,21,0,0,0,0,0,,,
+2026-07-23,22,0,0,0,0,0,,,
+2026-07-23,23,0,0,0,0,0,,,
+2026-07-24,0,0,0,0,0,0,,,
+2026-07-24,1,0,0,0,0,0,,,
+2026-07-24,2,0,0,0,0,0,,,
+2026-07-24,3,0,0,0,0,0,,,
+2026-07-24,4,0,0,0,0,0,,,
+2026-07-24,5,0,0,0,0,0,,,
+2026-07-24,6,0,0,0,0,0,,,
+2026-07-24,7,0,0,0,0,0,,,
+2026-07-24,8,0,0,0,0,0,,,
+2026-07-24,9,0,0,0,0,0,,,
+2026-07-24,10,0,0,0,0,0,,,
+2026-07-24,11,0,0,0,0,0,,,
+2026-07-24,12,0,0,0,0,0,,,
+2026-07-24,13,0,0,0,0,0,,,
+2026-07-24,14,0,0,0,0,0,,,
+2026-07-24,15,0,0,0,0,0,,,
+2026-07-24,16,0,0,0,0,0,,,
+2026-07-24,17,0,0,0,0,0,,,
+2026-07-24,18,0,0,0,0,0,,,
+2026-07-24,19,0,0,0,0,0,,,
+2026-07-24,20,0,0,0,0,0,,,
+2026-07-24,21,0,0,0,0,0,,,
+2026-07-24,22,0,0,0,0,0,,,
+2026-07-24,23,0,0,0,0,0,,,
+2026-07-25,0,0,0,0,0,0,,,
+2026-07-25,1,0,0,0,0,0,,,
+2026-07-25,2,0,0,0,0,0,,,
+2026-07-25,3,0,0,0,0,0,,,
+2026-07-25,4,0,0,0,0,0,,,
+2026-07-25,5,0,0,0,0,0,,,
+2026-07-25,6,0,0,0,0,0,,,
+2026-07-25,7,0,0,0,0,0,,,
+2026-07-25,8,0,0,0,0,0,,,
+2026-07-25,9,0,0,0,0,0,,,
+2026-07-25,10,0,0,0,0,0,,,
+2026-07-25,11,0,0,0,0,0,,,
+2026-07-25,12,0,0,0,0,0,,,
+2026-07-25,13,0,0,0,0,0,,,
+2026-07-25,14,0,0,0,0,0,,,
+2026-07-25,15,0,0,0,0,0,,,
+2026-07-25,16,0,0,0,0,0,,,
+2026-07-25,17,0,0,0,0,0,,,
+2026-07-25,18,0,0,0,0,0,,,
+2026-07-25,19,0,0,0,0,0,,,
+2026-07-25,20,0,0,0,0,0,,,
+2026-07-25,21,0,0,0,0,0,,,
+2026-07-25,22,0,0,0,0,0,,,
+2026-07-25,23,0,0,0,0,0,,,
+2026-07-26,0,0,0,0,0,0,,,
+2026-07-26,1,0,0,0,0,0,,,
+2026-07-26,2,0,0,0,0,0,,,
+2026-07-26,3,0,0,0,0,0,,,
+2026-07-26,4,0,0,0,0,0,,,
+2026-07-26,5,0,0,0,0,0,,,
+2026-07-26,6,0,0,0,0,0,,,
+2026-07-26,7,0,0,0,0,0,,,
+2026-07-26,8,0,0,0,0,0,,,
+2026-07-26,9,0,0,0,0,0,,,
+2026-07-26,10,0,0,0,0,0,,,
+2026-07-26,11,0,0,0,0,0,,,
+2026-07-26,12,0,0,0,0,0,,,
+2026-07-26,13,0,0,0,0,0,,,
+2026-07-26,14,0,0,0,0,0,,,
+2026-07-26,15,0,0,0,0,0,,,
+2026-07-26,16,0,0,0,0,0,,,
+2026-07-26,17,0,0,0,0,0,,,
+2026-07-26,18,0,0,0,0,0,,,
+2026-07-26,19,0,0,0,0,0,,,
+2026-07-26,20,0,0,0,0,0,,,
+2026-07-26,21,0,0,0,0,0,,,
+2026-07-26,22,0,0,0,0,0,,,
+2026-07-26,23,0,0,0,0,0,,,
+2026-07-27,0,0,0,0,0,0,,,
+2026-07-27,1,0,0,0,0,0,,,
+2026-07-27,2,0,0,0,0,0,,,
+2026-07-27,3,0,0,0,0,0,,,
+2026-07-27,4,0,0,0,0,0,,,
+2026-07-27,5,0,0,0,0,0,,,
+2026-07-27,6,0,0,0,0,0,,,
+2026-07-27,7,0,0,0,0,0,,,
+2026-07-27,8,0,0,0,0,0,,,
+2026-07-27,9,0,0,0,0,0,,,
+2026-07-27,10,0,0,0,0,0,,,
+2026-07-27,11,0,0,0,0,0,,,
+2026-07-27,12,0,0,0,0,0,,,
+2026-07-27,13,0,0,0,0,0,,,
+2026-07-27,14,0,0,0,0,0,,,
+2026-07-27,15,0,0,0,0,0,,,
+2026-07-27,16,0,0,0,0,0,,,
+2026-07-27,17,0,0,0,0,0,,,
+2026-07-27,18,0,0,0,0,0,,,
+2026-07-27,19,0,0,0,0,0,,,
+2026-07-27,20,0,0,0,0,0,,,
+2026-07-27,21,0,0,0,0,0,,,
+2026-07-27,22,0,0,0,0,0,,,
+2026-07-27,23,0,0,0,0,0,,,
+2026-07-28,0,0,0,0,0,0,,,
+2026-07-28,1,0,0,0,0,0,,,
+2026-07-28,2,0,0,0,0,0,,,
+2026-07-28,3,0,0,0,0,0,,,
+2026-07-28,4,0,0,0,0,0,,,
+2026-07-28,5,0,0,0,0,0,,,
+2026-07-28,6,0,0,0,0,0,,,
+2026-07-28,7,0,0,0,0,0,,,
+2026-07-28,8,0,0,0,0,0,,,
+2026-07-28,9,0,0,0,0,0,,,
+2026-07-28,10,0,0,0,0,0,,,
+2026-07-28,11,0,0,0,0,0,,,
+2026-07-28,12,0,0,0,0,0,,,
+2026-07-28,13,0,0,0,0,0,,,
+2026-07-28,14,0,0,0,0,0,,,
+2026-07-28,15,0,0,0,0,0,,,
+2026-07-28,16,0,0,0,0,0,,,
+2026-07-28,17,0,0,0,0,0,,,
+2026-07-28,18,0,0,0,0,0,,,
+2026-07-28,19,0,0,4,0,0,,,
+2026-07-28,20,37,37,3,18293,510,89bb17258,"ws9 review: host-safety leftover recovery, non-vacuous archive assertions, robust link-dir…","ws9 review: host-safety leftover recovery, non-vacuous archive assertions, robust link-directive parsing"
+2026-07-28,21,7,5,0,1233,304,5513a158c,vt-c: expose kitty graphics + image generation stamps (bdc0b6c19),"vt-c: expose kitty graphics + image generation stamps (BL-6 bdc0b6c19, WS8 T16)"
+2026-07-28,22,4,2,2,25,2,c43fa8926,vt/compress: Phase A review fixes + miri-run.sh worktree bug,vt/compress: WS7 Phase A review fixes + miri-run.sh worktree bug
+2026-07-28,23,0,0,0,0,0,,,
+2026-07-29,0,0,0,0,0,0,,,
+2026-07-29,1,0,0,0,0,0,,,
+2026-07-29,2,0,0,0,0,0,,,
+2026-07-29,3,0,0,0,0,0,,,
+2026-07-29,4,0,0,0,0,0,,,
+2026-07-29,5,0,0,0,0,0,,,
+2026-07-29,6,0,0,0,0,0,,,
+2026-07-29,7,10,10,1,8026,1126,ef7621a8d,"docs: VM-track plans — GlobalShortcuts, X11 winproto, verification debt","docs: VM-track plans — WS15 GlobalShortcuts, WS16 X11 winproto, WS17 verification debt"
+2026-07-29,8,14,14,1,2369,276,cef782b57,fix(ws15): assert dispatch (not just signal delivery) in the live gate; split out the Open…,fix(ws15): assert dispatch (not just signal delivery) in the live gate; split out the OpenURI deferral
+2026-07-29,9,11,10,2,1560,312,5d636c35c,test(miri): scenario selection + unbuffered progress in the pagelist harness,test(miri): scenario selection + unbuffered progress in the pagelist harness
+2026-07-29,10,9,7,0,580,24,2f4f24f1c,test(release-lane): gate 19 failure-injection tests on debug_assertions,test(release-lane): gate 19 failure-injection tests on debug_assertions
+2026-07-29,11,0,0,1,0,0,,,
+2026-07-29,12,8,8,3,1385,128,f3cd7c792,fix(termio/test): drain the pty master across teardown in subprocess_drop_repro,fix(termio/test): drain the pty master across teardown in subprocess_drop_repro
+2026-07-29,13,0,0,1,0,0,,,
+2026-07-29,14,8,7,1,1253,241,91522cfbb,"fix(termio): review follow-ups — drop SIGKILL escalation, delete vacuous guard, record res…","fix(termio): review follow-ups — drop SIGKILL escalation, delete vacuous guard, record residuals"
+2026-07-29,15,8,6,2,2233,17,3d79b3ba2,docs(.port): record the oracle sync point — pinned baseline 4749c4e93,docs(.port): record the oracle sync point — pinned baseline 4749c4e93
+2026-07-29,16,2,1,0,252,5,f333a779f,review: Phase C fixes — + (gate/ledger hygiene),review: WS7 Phase C fixes — I1/I2 + M1-M5 (gate/ledger hygiene)
+2026-07-29,17,25,18,2,4459,174,e1b58936c,docs: i18n and man-pages plan,docs: WS13 i18n and man-pages plan
+2026-07-29,18,3,2,1,797,5,d94fbe815,"renderer: schedule idle scrollback compression, debounced by activity","renderer: schedule idle scrollback compression, debounced by activity (WS7 D3)"
+2026-07-29,19,4,3,6,94147,17,e0d5f23ab,"port: Phase 3 upstream-resync artifacts — full pin..head diff (365 commits, 507 files, +37…","port: Phase 3 upstream-resync artifacts — full pin..head diff (365 commits, 507 files, +37683/-11323)"
+2026-07-29,20,29,17,0,13997,408,e908e1192,docs: Phase 3 upstream-resync master plan,docs: Phase 3 upstream-resync master plan
+2026-07-29,21,19,18,4,5042,987,1bbd29f1b,"os/wasm: resurrect the 9dc2e5978-deleted host-ownership tracker + its 2 reference tests, f…","os/wasm: resurrect the 9dc2e5978-deleted host-ownership tracker + its 2 reference tests, feature-gated (WS14 T3)"
+2026-07-29,22,26,26,0,15578,4701,71ba48634,"rustty-vaxis: image tier LIVE — transmit_image/load_image over rustty-zigimg, draw/cell_si…","rustty-vaxis: image tier LIVE — transmit_image/load_image over rustty-zigimg, draw/cell_size geometry (WS12 T8-T11)"
+2026-07-29,23,2,2,0,1007,18,4a20b1822,"port: turnkey hw-GL probe, KDE globals discharged under a live KWin, restated","port: WS17 V2 turnkey hw-GL probe, V3 KDE globals discharged under a live KWin, V5 restated (WS17 V2/V3/V5)"
+2026-07-30,0,0,0,0,0,0,,,
+2026-07-30,1,0,0,0,0,0,,,
+2026-07-30,2,0,0,0,0,0,,,
+2026-07-30,3,0,0,0,0,0,,,
+2026-07-30,4,0,0,0,0,0,,,
+2026-07-30,5,0,0,0,0,0,,,
+2026-07-30,6,0,0,0,0,0,,,
+2026-07-30,7,25,15,3,3298,697,751f11912,rustty-extra: escape non-ASCII as \[uXXXX] + join filled runs before the inline pass; rust…,rustty-extra: escape non-ASCII as \[uXXXX] + join filled runs before the inline pass; rustty-apprt/build: msgfmt --check gate (WS13 T7/T9)
+2026-07-30,8,1,0,1,0,0,,,
+2026-07-30,9,5,4,6,715,66,9fa5967f8,font-shaper: port the web_canvas DeferredFace payload (no deferral),font-shaper: port the web_canvas DeferredFace payload (no deferral)
+2026-07-30,10,16,13,0,11063,664,58ca1cd47,"termio/os: wire the flatpak spawn tier — real FlatpakHostCommand, waitXev/flatpakExit, kil…","termio/os: wire the flatpak spawn tier — real FlatpakHostCommand, waitXev/flatpakExit, killCommandFlatpak (WS20)"
+2026-07-30,11,18,14,2,6214,466,e896e2d4c,xev: instantiate the libxev WATCHER layer against iocp + wasi_poll,xev: instantiate the libxev WATCHER layer against iocp + wasi_poll (WS20)
+2026-07-30,12,9,8,0,1977,140,ae48e3bf2,"vt/stream: CSI fast paths — direct final dispatch, bulk param parse, inline entry","vt/stream: CSI fast paths — direct final dispatch, bulk param parse, inline entry (WS10 T13+T14)"
+2026-07-30,13,6,6,0,4855,374,56dba9c81,vt/render: render state update optimizations + c/render surface,vt/render: render state update optimizations + c/render surface (WS10 T19)
+2026-07-30,14,12,10,2,5974,404,f0a205b52,fix(linux): repair the Linux build/test/clippy lane,fix(linux): repair the Linux build/test/clippy lane
+2026-07-30,15,10,10,1,1191,65,a16e17917,renderer/metal: fix the sizeof-squared buffer over-allocation and the stale len on realloc…,renderer/metal: fix the sizeof-squared buffer over-allocation and the stale len on realloc (oracle 4a22eed6d); re-affirm the 14 remaining quirk sites against the range (P3-W0 T5)
+2026-07-30,16,5,4,2,709,113,10044a59a,"vt/pagelist: width-aware pin traversal and wrap math (oracle d6e24d985 end state, 0ff4e41b…","vt/pagelist: width-aware pin traversal and wrap math (oracle d6e24d985 end state, 0ff4e41b2 tests) (P3-W1 T1)"
+2026-07-30,17,5,5,1,1073,129,f79d83a6a,"vt: feed grapheme breaks to the state machine, use stored page widths in clear/cursor path…","vt: feed grapheme breaks to the state machine, use stored page widths in clear/cursor paths, floor zero-capacity growth, restore the pool-zeroing asserts (oracle b287f6d1a e727a3658 a55850c98 8307349ec c442eb4b3) (P3-W1 T4)"
+2026-07-30,18,7,5,9,1057,21,c45abb06b,vt/page: audit hash-map key/value pointer lifetimes against backward-shift deletion (oracl…,vt/page: audit hash-map key/value pointer lifetimes against backward-shift deletion (oracle fedd42e8d prerequisite) (P3-W2 T1)
+2026-07-30,19,17,15,0,6463,2018,b4219b748,os/termio: byte-type the environment family (fixes a live non-UTF-8 surface-creation panic…,os/termio: byte-type the environment family (fixes a live non-UTF-8 surface-creation panic) and move append/prepend into their consumers (oracle e8525c0fd env.zig deletion) (P3-W7 T2)
+2026-07-30,20,8,6,0,1757,214,2035be343,z2d/font: native Path::offset replaces the two-surface inner-stroke mask; drawE0B5 forces …,z2d/font: native Path::offset replaces the two-surface inner-stroke mask; drawE0B5 forces perpendicular butt caps; 6 goldens regolded (oracle d0e72a3ab) (P3-W8 T3)
+2026-07-30,21,6,5,1,754,124,1911f1466,apprt/gtk: honor xdg_toplevel suspended and clamp the max window size to the current monit…,"apprt/gtk: honor xdg_toplevel suspended and clamp the max window size to the current monitor (oracle 2f3814ca5 004c88e41) (P3-W8 T5, steps 1-2)"
+2026-07-30,22,13,13,0,7278,1696,01c5ca06e,extra: re-vendor the iterm2 theme corpus at 20260720-153658-97e244c with a per-file digest…,extra: re-vendor the iterm2 theme corpus at 20260720-153658-97e244c with a per-file digest manifest gate (oracle 4c1d69696 b513f1b20 02504bcce 07a56d08b dc8d38503) (P3-W9 T5)
+2026-07-30,23,10,7,0,1235,231,01437ec66,vt/screen: make resize failure-safe with tripwire fail points and an allocation-free curso…,vt/screen: make resize failure-safe with tripwire fail points and an allocation-free cursor restore (oracle dde3d4d6b) (P3-W4 T1)
+2026-07-31,0,9,8,0,4280,617,1535471fe,"vt: Terminal.Resize with cell geometry, sync-output reset and alt-screen recovery, threade…","vt: Terminal.Resize with cell geometry, sync-output reset and alt-screen recovery, threaded through stream_terminal, termio and the C API (oracle 89b103dd5 b988efcfe) (P3-W4 T2)"
+2026-07-31,1,5,4,0,1678,206,dbccae405,vt/dcs: DECRQSS encodes its own response into a fixed buffer; termio and the C API consume…,vt/dcs: DECRQSS encodes its own response into a fixed buffer; termio and the C API consume it (oracle 39ae85f04) (P3-W4 T6)
+2026-07-31,2,14,11,0,2587,279,a8855af04,"vt/screen: fast in-page scroll-region rotate with raw-pointer pin fixups, Miri-proven (ora…","vt/screen: fast in-page scroll-region rotate with raw-pointer pin fixups, Miri-proven (oracle 77190bd02) (P3-W5 T3)"
+2026-07-31,3,8,6,0,1604,214,1a139c834,vt/search: reuse viewport fingerprint storage with a single-pass update (oracle 9659167ec …,vt/search: reuse viewport fingerprint storage with a single-pass update (oracle 9659167ec bc8bb6c0f) (P3-W11 T3 / P3-W6 T6)
+2026-07-31,4,2,1,0,2512,279,e858d5d91,"apprt/gtk: vendor vicinae-hotkey-v1 and bind global shortcuts through the Wayland manager,…","apprt/gtk: vendor vicinae-hotkey-v1 and bind global shortcuts through the Wayland manager, with a per-binding bind-failed notification channel (oracle 88bd4fdce 0a117e079 c3b5cab94 7ee3ac9ec 0075c75b6 3024c5d19) (P3-W11 T4 / P3-W8 T6+T7)"
+2026-07-31,5,1,1,0,85,1,a1b63daa1,docs: give the wire-path row a live owner and a genuinely runnable recipe,docs(V22): give the wire-path row a live owner (P3-W12) and a genuinely runnable recipe
+2026-07-31,6,2,2,1,1024,103,048d965fd,test: drive the vicinae_hotkey_v1 wire path against a fake compositor,test(P3-W12): drive the vicinae_hotkey_v1 wire path against a fake compositor (V22)
+2026-07-31,7,3,2,4,761,51,0efe06a1c,port: advance the oracle sync point to 6ad1fe7d8 (working tree moved),port: advance the oracle sync point to 6ad1fe7d8 (working tree moved) (P3-W10 T3)
+2026-07-31,8,6,5,0,121,26,bb2cbbf32,fix(gate): repair the compressed-page leak harness; triage the advance's gate flips,fix(gate): repair the G6b compressed-page leak harness; triage the advance's gate flips (P3-W10 T4)
+2026-07-31,9,6,5,6,1063,1,58693dade,test(vt): port 3 unported oracle PageList compression tests (live-oracle audit),test(vt): port 3 unported oracle PageList compression tests (live-oracle audit)
+2026-07-31,10,32,22,0,6888,803,d4c97b6da,"port: close 4 unowned re-audit deferrals (wayland map shape, os_signpost, iOS gating, Thre…","port: close 4 unowned re-audit deferrals (wayland map shape, os_signpost, iOS gating, Thread.zig G3b)"
+2026-07-31,11,7,5,4,602,825,6bf1888ab,merge-fix(vt): dedupe 16 PageList tests two lanes ported independently,merge-fix(vt): dedupe 16 PageList tests two lanes ported independently
+2026-07-31,12,0,0,0,0,0,,,
+2026-07-31,13,5,4,0,21778,166,07a61e769,miri(adversarial): break 2 of 4 exception families — remove 3 bogus ignores,miri(adversarial): break 2 of 4 exception families — remove 3 bogus ignores
+2026-07-31,14,3,2,0,162,10,dc054bbc8,"gate: a broken done-status probe was a SILENT SKIP, and could be a silent green","gate(G6): a broken done-status probe was a SILENT SKIP, and could be a silent green"
+2026-07-31,15,0,0,1,0,0,,,
+2026-07-31,16,0,0,0,0,0,,,
+2026-07-31,17,0,0,0,0,0,,,
+2026-07-31,18,0,0,0,0,0,,,
+2026-07-31,19,0,0,0,0,0,,,
+2026-07-31,20,0,0,0,0,0,,,
+2026-07-31,21,0,0,0,0,0,,,
+2026-07-31,22,0,0,0,0,0,,,
+2026-07-31,23,0,0,0,0,0,,,
+2026-08-01,0,0,0,0,0,0,,,
+2026-08-01,1,0,0,0,0,0,,,
+2026-08-01,2,0,0,0,0,0,,,
+2026-08-01,3,0,0,0,0,0,,,
+2026-08-01,4,0,0,0,0,0,,,
+2026-08-01,5,0,0,0,0,0,,,
+2026-08-01,6,0,0,0,0,0,,,
+2026-08-01,7,0,0,0,0,0,,,
+2026-08-01,8,0,0,0,0,0,,,
+2026-08-01,9,0,0,0,0,0,,,
+2026-08-01,10,0,0,0,0,0,,,
+2026-08-01,11,0,0,0,0,0,,,
+2026-08-01,12,0,0,0,0,0,,,
+2026-08-01,13,0,0,3,0,0,,,
+2026-08-01,14,0,0,0,0,0,,,
+2026-08-01,15,0,0,0,0,0,,,
+2026-08-01,16,0,0,0,0,0,,,
+2026-08-01,17,0,0,0,0,0,,,
+2026-08-01,18,0,0,0,0,0,,,
+2026-08-01,19,0,0,0,0,0,,,
+2026-08-01,20,0,0,0,0,0,,,
+2026-08-01,21,0,0,0,0,0,,,
+2026-08-01,22,0,0,0,0,0,,,
+2026-08-01,23,0,0,0,0,0,,,
+2026-08-02,0,0,0,0,0,0,,,
+2026-08-02,1,0,0,0,0,0,,,
+2026-08-02,2,0,0,0,0,0,,,
+2026-08-02,3,0,0,0,0,0,,,
+2026-08-02,4,0,0,0,0,0,,,
+2026-08-02,5,0,0,0,0,0,,,
+2026-08-02,6,0,0,0,0,0,,,
+2026-08-02,7,0,0,0,0,0,,,
+2026-08-02,8,0,0,0,0,0,,,
+2026-08-02,9,0,0,0,0,0,,,
+2026-08-02,10,0,0,0,0,0,,,
+2026-08-02,11,0,0,0,0,0,,,
+2026-08-02,12,0,0,0,0,0,,,
+2026-08-02,13,0,0,0,0,0,,,
+2026-08-02,14,0,0,0,0,0,,,
+2026-08-02,15,0,0,0,0,0,,,
+2026-08-02,16,0,0,0,0,0,,,
+2026-08-02,17,0,0,0,0,0,,,
+2026-08-02,18,0,0,0,0,0,,,
+2026-08-02,19,0,0,0,0,0,,,
+2026-08-02,20,0,0,0,0,0,,,
+2026-08-02,21,0,0,0,0,0,,,
+2026-08-02,22,0,0,0,0,0,,,
+2026-08-02,23,0,0,0,0,0,,,
+2026-08-03,0,0,0,0,0,0,,,
+2026-08-03,1,0,0,0,0,0,,,
+2026-08-03,2,0,0,0,0,0,,,
+2026-08-03,3,0,0,0,0,0,,,
+2026-08-03,4,0,0,0,0,0,,,
+2026-08-03,5,0,0,0,0,0,,,
+2026-08-03,6,0,0,0,0,0,,,
+2026-08-03,7,0,0,0,0,0,,,
+2026-08-03,8,0,0,0,0,0,,,
+2026-08-03,9,0,0,0,0,0,,,
+2026-08-03,10,0,0,0,0,0,,,
+2026-08-03,11,0,0,0,0,0,,,
+2026-08-03,12,0,0,0,0,0,,,
+2026-08-03,13,0,0,0,0,0,,,
+2026-08-03,14,0,0,0,0,0,,,
+2026-08-03,15,0,0,0,0,0,,,
+2026-08-03,16,0,0,0,0,0,,,
+2026-08-03,17,0,0,0,0,0,,,
+2026-08-03,18,0,0,0,0,0,,,
+2026-08-03,19,0,0,0,0,0,,,
+2026-08-03,20,0,0,0,0,0,,,
+2026-08-03,21,0,0,0,0,0,,,
+2026-08-03,22,0,0,0,0,0,,,
+2026-08-03,23,0,0,0,0,0,,,
+2026-08-04,0,0,0,0,0,0,,,
+2026-08-04,1,0,0,0,0,0,,,
+2026-08-04,2,0,0,0,0,0,,,
+2026-08-04,3,0,0,0,0,0,,,
+2026-08-04,4,0,0,0,0,0,,,
+2026-08-04,5,0,0,0,0,0,,,
+2026-08-04,6,0,0,0,0,0,,,
+2026-08-04,7,0,0,0,0,0,,,
+2026-08-04,8,0,0,0,0,0,,,
+2026-08-04,9,0,0,0,0,0,,,
+2026-08-04,10,0,0,0,0,0,,,
+2026-08-04,11,0,0,0,0,0,,,
+2026-08-04,12,0,0,0,0,0,,,
+2026-08-04,13,0,0,0,0,0,,,
+2026-08-04,14,0,0,0,0,0,,,
+2026-08-04,15,0,0,0,0,0,,,
+2026-08-04,16,0,0,0,0,0,,,
+2026-08-04,17,0,0,0,0,0,,,
+2026-08-04,18,0,0,0,0,0,,,
+2026-08-04,19,0,0,0,0,0,,,
+2026-08-04,20,0,0,0,0,0,,,
+2026-08-04,21,0,0,0,0,0,,,
+2026-08-04,22,0,0,0,0,0,,,
+2026-08-04,23,0,0,0,0,0,,,
+2026-08-05,0,0,0,0,0,0,,,
+2026-08-05,1,0,0,0,0,0,,,
+2026-08-05,2,0,0,0,0,0,,,
+2026-08-05,3,0,0,0,0,0,,,
+2026-08-05,4,0,0,0,0,0,,,
+2026-08-05,5,0,0,0,0,0,,,
+2026-08-05,6,0,0,0,0,0,,,
+2026-08-05,7,0,0,0,0,0,,,
+2026-08-05,8,0,0,0,0,0,,,
+2026-08-05,9,0,0,0,0,0,,,
+2026-08-05,10,0,0,0,0,0,,,
+2026-08-05,11,0,0,0,0,0,,,
+2026-08-05,12,0,0,0,0,0,,,
+2026-08-05,13,0,0,0,0,0,,,
+2026-08-05,14,0,0,0,0,0,,,
+2026-08-05,15,0,0,0,0,0,,,
+2026-08-05,16,0,0,0,0,0,,,
+2026-08-05,17,0,0,0,0,0,,,
+2026-08-05,18,0,0,0,0,0,,,
+2026-08-05,19,0,0,0,0,0,,,
+2026-08-05,20,0,0,0,0,0,,,
+2026-08-05,21,0,0,0,0,0,,,
+2026-08-05,22,0,0,0,0,0,,,
+2026-08-05,23,0,0,0,0,0,,,
+2026-08-06,0,0,0,0,0,0,,,
+2026-08-06,1,0,0,0,0,0,,,
+2026-08-06,2,0,0,0,0,0,,,
+2026-08-06,3,0,0,0,0,0,,,
+2026-08-06,4,0,0,0,0,0,,,
+2026-08-06,5,0,0,0,0,0,,,
+2026-08-06,6,0,0,0,0,0,,,
+2026-08-06,7,0,0,0,0,0,,,
+2026-08-06,8,0,0,0,0,0,,,
+2026-08-06,9,0,0,0,0,0,,,
+2026-08-06,10,0,0,0,0,0,,,
+2026-08-06,11,0,0,0,0,0,,,
+2026-08-06,12,0,0,0,0,0,,,
+2026-08-06,13,0,0,0,0,0,,,
+2026-08-06,14,0,0,0,0,0,,,
+2026-08-06,15,0,0,0,0,0,,,
+2026-08-06,16,0,0,0,0,0,,,
+2026-08-06,17,0,0,0,0,0,,,
+2026-08-06,18,0,0,0,0,0,,,
+2026-08-06,19,0,0,0,0,0,,,
+2026-08-06,20,0,0,0,0,0,,,
+2026-08-06,21,0,0,0,0,0,,,
+2026-08-06,22,0,0,0,0,0,,,
+2026-08-06,23,0,0,0,0,0,,,
+2026-08-07,0,0,0,0,0,0,,,
+2026-08-07,1,0,0,0,0,0,,,
+2026-08-07,2,0,0,0,0,0,,,
+2026-08-07,3,0,0,0,0,0,,,
+2026-08-07,4,0,0,0,0,0,,,
+2026-08-07,5,0,0,0,0,0,,,
+2026-08-07,6,0,0,0,0,0,,,
+2026-08-07,7,0,0,0,0,0,,,
+2026-08-07,8,0,0,0,0,0,,,
+2026-08-07,9,0,0,0,0,0,,,
+2026-08-07,10,0,0,0,0,0,,,
+2026-08-07,11,0,0,0,0,0,,,
+2026-08-07,12,0,0,0,0,0,,,
+2026-08-07,13,0,0,0,0,0,,,
+2026-08-07,14,0,0,0,0,0,,,
+2026-08-07,15,0,0,0,0,0,,,
+2026-08-07,16,0,0,0,0,0,,,
+2026-08-07,17,0,0,0,0,0,,,
+2026-08-07,18,0,0,0,0,0,,,
+2026-08-07,19,0,0,0,0,0,,,
+2026-08-07,20,0,0,0,0,0,,,
+2026-08-07,21,0,0,0,0,0,,,
+2026-08-07,22,0,0,0,0,0,,,
+2026-08-07,23,0,0,0,0,0,,,
+2026-08-08,0,0,0,0,0,0,,,
+2026-08-08,1,0,0,0,0,0,,,
+2026-08-08,2,0,0,0,0,0,,,
+2026-08-08,3,0,0,0,0,0,,,
+2026-08-08,4,0,0,0,0,0,,,
+2026-08-08,5,0,0,0,0,0,,,
+2026-08-08,6,0,0,0,0,0,,,
+2026-08-08,7,0,0,0,0,0,,,
+2026-08-08,8,0,0,0,0,0,,,
+2026-08-08,9,0,0,0,0,0,,,
+2026-08-08,10,0,0,0,0,0,,,
+2026-08-08,11,0,0,0,0,0,,,
+2026-08-08,12,0,0,0,0,0,,,
+2026-08-08,13,0,0,0,0,0,,,
+2026-08-08,14,0,0,0,0,0,,,
+2026-08-08,15,0,0,0,0,0,,,
+2026-08-08,16,0,0,0,0,0,,,
+2026-08-08,17,0,0,0,0,0,,,
+2026-08-08,18,0,0,0,0,0,,,
+2026-08-08,19,0,0,0,0,0,,,
+2026-08-08,20,0,0,0,0,0,,,
+2026-08-08,21,0,0,0,0,0,,,
+2026-08-08,22,0,0,0,0,0,,,
+2026-08-08,23,0,0,0,0,0,,,
+2026-08-09,0,0,0,0,0,0,,,
+2026-08-09,1,0,0,0,0,0,,,
+2026-08-09,2,0,0,0,0,0,,,
+2026-08-09,3,0,0,0,0,0,,,
+2026-08-09,4,0,0,0,0,0,,,
+2026-08-09,5,0,0,0,0,0,,,
+2026-08-09,6,0,0,0,0,0,,,
+2026-08-09,7,0,0,0,0,0,,,
+2026-08-09,8,0,0,0,0,0,,,
+2026-08-09,9,0,0,0,0,0,,,
+2026-08-09,10,0,0,0,0,0,,,
+2026-08-09,11,0,0,0,0,0,,,
+2026-08-09,12,0,0,0,0,0,,,
+2026-08-09,13,0,0,0,0,0,,,
+2026-08-09,14,0,0,0,0,0,,,
+2026-08-09,15,0,0,0,0,0,,,
+2026-08-09,16,0,0,0,0,0,,,
+2026-08-09,17,0,0,0,0,0,,,
+2026-08-09,18,0,0,0,0,0,,,
+2026-08-09,19,0,0,0,0,0,,,
+2026-08-09,20,0,0,0,0,0,,,
+2026-08-09,21,0,0,0,0,0,,,
+2026-08-09,22,0,0,0,0,0,,,
+2026-08-09,23,0,0,0,0,0,,,
+2026-08-10,0,0,0,0,0,0,,,
+2026-08-10,1,0,0,0,0,0,,,
+2026-08-10,2,0,0,0,0,0,,,
+2026-08-10,3,0,0,0,0,0,,,
+2026-08-10,4,0,0,0,0,0,,,
+2026-08-10,5,0,0,0,0,0,,,
+2026-08-10,6,0,0,0,0,0,,,
+2026-08-10,7,0,0,0,0,0,,,
+2026-08-10,8,0,0,0,0,0,,,
+2026-08-10,9,0,0,0,0,0,,,
+2026-08-10,10,0,0,0,0,0,,,
+2026-08-10,11,0,0,0,0,0,,,
+2026-08-10,12,0,0,0,0,0,,,
+2026-08-10,13,1,1,3,4,23637,d34cc1549,untrack codex stuff,untrack codex stuff
+2026-08-10,14,0,0,0,0,0,,,
+2026-08-10,15,0,0,0,0,0,,,
+2026-08-10,16,0,0,0,0,0,,,
+2026-08-10,17,0,0,1,0,0,,,
+2026-08-10,18,0,0,0,0,0,,,
+2026-08-10,19,0,0,1,0,0,,,
+2026-08-10,20,0,0,0,0,0,,,
+2026-08-10,21,0,0,0,0,0,,,
+2026-08-10,22,0,0,0,0,0,,,
+2026-08-10,23,0,0,0,0,0,,,
+2026-08-11,0,0,0,0,0,0,,,
+2026-08-11,1,0,0,0,0,0,,,
+2026-08-11,2,0,0,0,0,0,,,
+2026-08-11,3,0,0,0,0,0,,,
+2026-08-11,4,0,0,0,0,0,,,
+2026-08-11,5,0,0,0,0,0,,,
+2026-08-11,6,0,0,0,0,0,,,
+2026-08-11,7,0,0,0,0,0,,,
+2026-08-11,8,0,0,0,0,0,,,
+2026-08-11,9,0,0,0,0,0,,,
+2026-08-11,10,0,0,0,0,0,,,
+2026-08-11,11,0,0,0,0,0,,,
+2026-08-11,12,0,0,0,0,0,,,
+2026-08-11,13,0,0,2,0,0,,,
+2026-08-11,14,0,0,0,0,0,,,
+2026-08-11,15,0,0,0,0,0,,,
+2026-08-11,16,0,0,1,0,0,,,
+2026-08-11,17,0,0,0,0,0,,,
+2026-08-11,18,0,0,0,0,0,,,
+2026-08-11,19,0,0,0,0,0,,,
+2026-08-11,20,0,0,0,0,0,,,
+2026-08-11,21,0,0,1,0,0,,,
+2026-08-11,22,1,1,0,50128,4844,8120dd10d,"codex-vet: vet all 147 audited parity findings, remediate 140, restore Windows","codex-vet: vet all 147 audited parity findings, remediate 140, restore Windows"
+2026-08-11,23,0,0,0,0,0,,,
+2026-08-12,0,0,0,0,0,0,,,
+2026-08-12,1,0,0,0,0,0,,,
+2026-08-12,2,0,0,0,0,0,,,
+2026-08-12,3,0,0,0,0,0,,,
+2026-08-12,4,0,0,0,0,0,,,
+2026-08-12,5,0,0,0,0,0,,,
+2026-08-12,6,0,0,0,0,0,,,
+2026-08-12,7,0,0,0,0,0,,,
+2026-08-12,8,0,0,3,0,0,,,
+2026-08-12,9,0,0,0,0,0,,,
+2026-08-12,10,0,0,0,0,0,,,
+2026-08-12,11,0,0,0,0,0,,,
+2026-08-12,12,0,0,0,0,0,,,
+2026-08-12,13,0,0,0,0,0,,,
+2026-08-12,14,0,0,0,0,0,,,
+2026-08-12,15,0,0,0,0,0,,,
+2026-08-12,16,0,0,0,0,0,,,
+2026-08-12,17,0,0,0,0,0,,,
+2026-08-12,18,0,0,0,0,0,,,
+2026-08-12,19,0,0,0,0,0,,,
+2026-08-12,20,0,0,0,0,0,,,
+2026-08-12,21,0,0,0,0,0,,,
+2026-08-12,22,0,0,0,0,0,,,
+2026-08-12,23,0,0,0,0,0,,,
+2026-08-13,0,0,0,0,0,0,,,
+2026-08-13,1,0,0,0,0,0,,,
+2026-08-13,2,0,0,0,0,0,,,
+2026-08-13,3,0,0,0,0,0,,,
+2026-08-13,4,0,0,0,0,0,,,
+2026-08-13,5,0,0,0,0,0,,,
+2026-08-13,6,0,0,0,0,0,,,
+2026-08-13,7,0,0,0,0,0,,,
+2026-08-13,8,0,0,0,0,0,,,
+2026-08-13,9,0,0,0,0,0,,,
+2026-08-13,10,0,0,0,0,0,,,
+2026-08-13,11,0,0,0,0,0,,,
+2026-08-13,12,0,0,0,0,0,,,
+2026-08-13,13,0,0,0,0,0,,,
+2026-08-13,14,0,0,0,0,0,,,
+2026-08-13,15,0,0,0,0,0,,,
+2026-08-13,16,0,0,0,0,0,,,
+2026-08-13,17,0,0,0,0,0,,,
+2026-08-13,18,0,0,0,0,0,,,
+2026-08-13,19,0,0,0,0,0,,,
+2026-08-13,20,0,0,0,0,0,,,
+2026-08-13,21,0,0,0,0,0,,,
+2026-08-13,22,0,0,0,0,0,,,
+2026-08-13,23,0,0,0,0,0,,,
+2026-08-14,0,0,0,4,0,0,,,
+2026-08-14,1,0,0,1,0,0,,,
+2026-08-14,2,0,0,0,0,0,,,
+2026-08-14,3,0,0,0,0,0,,,
+2026-08-14,4,0,0,0,0,0,,,
+2026-08-14,5,0,0,0,0,0,,,
+2026-08-14,6,0,0,0,0,0,,,
+2026-08-14,7,0,0,0,0,0,,,
+2026-08-14,8,0,0,0,0,0,,,
+2026-08-14,9,0,0,0,0,0,,,
+2026-08-14,10,0,0,0,0,0,,,
+2026-08-14,11,0,0,0,0,0,,,
+2026-08-14,12,0,0,0,0,0,,,
+2026-08-14,13,0,0,0,0,0,,,
+2026-08-14,14,0,0,0,0,0,,,
+2026-08-14,15,0,0,0,0,0,,,
+2026-08-14,16,0,0,0,0,0,,,
+2026-08-14,17,0,0,0,0,0,,,
+2026-08-14,18,0,0,0,0,0,,,
+2026-08-14,19,0,0,0,0,0,,,
+2026-08-14,20,0,0,0,0,0,,,
+2026-08-14,21,0,0,0,0,0,,,
+2026-08-14,22,0,0,0,0,0,,,
+2026-08-14,23,0,0,0,0,0,,,
+2026-08-15,0,0,0,0,0,0,,,
+2026-08-15,1,0,0,0,0,0,,,
+2026-08-15,2,0,0,0,0,0,,,
+2026-08-15,3,0,0,0,0,0,,,
+2026-08-15,4,0,0,0,0,0,,,
+2026-08-15,5,0,0,0,0,0,,,
+2026-08-15,6,0,0,0,0,0,,,
+2026-08-15,7,0,0,0,0,0,,,
+2026-08-15,8,0,0,0,0,0,,,
+2026-08-15,9,0,0,0,0,0,,,
+2026-08-15,10,0,0,0,0,0,,,
+2026-08-15,11,0,0,0,0,0,,,
+2026-08-15,12,0,0,0,0,0,,,
+2026-08-15,13,0,0,0,0,0,,,
+2026-08-15,14,0,0,0,0,0,,,
+2026-08-15,15,0,0,0,0,0,,,
+2026-08-15,16,0,0,0,0,0,,,
+2026-08-15,17,0,0,0,0,0,,,
+2026-08-15,18,0,0,0,0,0,,,
+2026-08-15,19,0,0,0,0,0,,,
+2026-08-15,20,0,0,0,0,0,,,
+2026-08-15,21,0,0,0,0,0,,,
+2026-08-15,22,0,0,0,0,0,,,
+2026-08-15,23,0,0,0,0,0,,,
+2026-08-16,0,0,0,0,0,0,,,
+2026-08-16,1,0,0,0,0,0,,,
+2026-08-16,2,0,0,0,0,0,,,
+2026-08-16,3,0,0,0,0,0,,,
+2026-08-16,4,0,0,0,0,0,,,
+2026-08-16,5,0,0,0,0,0,,,
+2026-08-16,6,0,0,0,0,0,,,
+2026-08-16,7,0,0,0,0,0,,,
+2026-08-16,8,0,0,0,0,0,,,
+2026-08-16,9,0,0,0,0,0,,,
+2026-08-16,10,0,0,0,0,0,,,
+2026-08-16,11,0,0,0,0,0,,,
+2026-08-16,12,0,0,0,0,0,,,
+2026-08-16,13,0,0,0,0,0,,,
+2026-08-16,14,0,0,0,0,0,,,
+2026-08-16,15,0,0,0,0,0,,,
+2026-08-16,16,0,0,0,0,0,,,
+2026-08-16,17,0,0,0,0,0,,,
+2026-08-16,18,0,0,0,0,0,,,
+2026-08-16,19,0,0,0,0,0,,,
+2026-08-16,20,0,0,0,0,0,,,
+2026-08-16,21,0,0,0,0,0,,,
+2026-08-16,22,0,0,0,0,0,,,
+2026-08-16,23,0,0,0,0,0,,,
+2026-08-17,0,0,0,0,0,0,,,
+2026-08-17,1,0,0,0,0,0,,,
+2026-08-17,2,0,0,0,0,0,,,
+2026-08-17,3,0,0,0,0,0,,,
+2026-08-17,4,0,0,0,0,0,,,
+2026-08-17,5,0,0,0,0,0,,,
+2026-08-17,6,0,0,0,0,0,,,
+2026-08-17,7,0,0,0,0,0,,,
+2026-08-17,8,0,0,0,0,0,,,
+2026-08-17,9,0,0,0,0,0,,,
+2026-08-17,10,0,0,0,0,0,,,
+2026-08-17,11,0,0,0,0,0,,,
+2026-08-17,12,0,0,0,0,0,,,
+2026-08-17,13,0,0,0,0,0,,,
+2026-08-17,14,0,0,0,0,0,,,
+2026-08-17,15,0,0,0,0,0,,,
+2026-08-17,16,0,0,0,0,0,,,
+2026-08-17,17,0,0,0,0,0,,,
+2026-08-17,18,0,0,0,0,0,,,
+2026-08-17,19,0,0,0,0,0,,,
+2026-08-17,20,0,0,0,0,0,,,
+2026-08-17,21,0,0,4,0,0,,,
+2026-08-17,22,2,2,1,106544,10,c8e76c6eb,"phase-4: advance the oracle pin 6ad1fe7d8 -> 12967b68f (543 commits, +72,554/-8,106) with …","phase-4: advance the oracle pin 6ad1fe7d8 -> 12967b68f (543 commits, +72,554/-8,106) with before/after gate evidence"
+2026-08-17,23,3,3,4,34146,5640,3d6fd16e9,"phase-4 par-1: ssh-terminfo cache, config bundle, po/ i18n end-state mirror, .github mirro…","phase-4 par-1: ssh-terminfo cache, config bundle, po/ i18n end-state mirror, .github mirrors, crash no-global-state"
+2026-08-18,0,0,0,0,0,0,,,
+2026-08-18,1,0,0,0,0,0,,,
+2026-08-18,2,0,0,0,0,0,,,
+2026-08-18,3,0,0,0,0,0,,,
+2026-08-18,4,0,0,0,0,0,,,
+2026-08-18,5,0,0,0,0,0,,,
+2026-08-18,6,1,1,1,1435,3,027e6fa36,phase-4: PageList Builder/allocatePage end state + RefCountedSet iterator + snapshot re-ex…,phase-4 W2: PageList Builder/allocatePage end state + RefCountedSet iterator + snapshot re-export seam
+2026-08-18,7,2,2,3,11624,3540,95beca864,"phase-4 par-2: kitty end-state + security, formatter PinMap bundle, input, modes DECECM, t…","phase-4 par-2: kitty end-state + security, formatter PinMap bundle, input, modes DECECM, termio MemoryPool, renderer cell storage, notifications, macOS wave, font — G1b fully GREEN"
+2026-08-18,8,0,0,1,0,0,,,
+2026-08-18,9,0,0,0,0,0,,,
+2026-08-18,10,0,0,0,0,0,,,
+2026-08-18,11,0,0,1,0,0,,,
+2026-08-18,12,1,1,0,13594,919,bd157deed,"phase-4 par-3: reflow end-state chain (SB+TB Miri-proven), terminal tail, snapshot scaffol…","phase-4 par-3: reflow end-state chain (SB+TB Miri-proven), terminal tail, snapshot scaffold+records, GTK wave, E-tail, themes re-vendor"
+2026-08-18,13,0,0,0,0,0,,,
+2026-08-18,14,1,1,0,15157,1884,7a93446e6,"phase-4 par-4: snapshot grid/page/history + C-API bundles T,R,M,K + embed-header bundle E","phase-4 par-4: snapshot grid/page/history + C-API bundles T,R,M,K + embed-header bundle E"
+2026-08-18,15,0,0,0,0,0,,,
+2026-08-18,16,0,0,0,0,0,,,
+2026-08-18,17,0,0,0,0,0,,,
+2026-08-18,18,0,0,0,0,0,,,
+2026-08-18,19,0,0,0,0,0,,,
+2026-08-18,20,0,0,0,0,0,,,
+2026-08-18,21,0,0,0,0,0,,,
+2026-08-18,22,0,0,0,0,0,,,
+2026-08-18,23,0,0,0,0,0,,,
+2026-08-19,0,0,0,0,0,0,,,
+2026-08-19,1,0,0,0,0,0,,,
+2026-08-19,2,0,0,0,0,0,,,
+2026-08-19,3,0,0,0,0,0,,,
+2026-08-19,4,0,0,0,0,0,,,
+2026-08-19,5,0,0,0,0,0,,,
+2026-08-19,6,0,0,0,0,0,,,
+2026-08-19,7,0,0,0,0,0,,,
+2026-08-19,8,0,0,0,0,0,,,
+2026-08-19,9,0,0,0,0,0,,,
+2026-08-19,10,0,0,0,0,0,,,
+2026-08-19,11,0,0,0,0,0,,,
+2026-08-19,12,0,0,0,0,0,,,
+2026-08-19,13,0,0,0,0,0,,,
+2026-08-19,14,0,0,0,0,0,,,
+2026-08-19,15,0,0,0,0,0,,,
+2026-08-19,16,0,0,0,0,0,,,
+2026-08-19,17,0,0,0,0,0,,,
+2026-08-19,18,0,0,0,0,0,,,
+2026-08-19,19,0,0,0,0,0,,,
+2026-08-19,20,0,0,0,0,0,,,
+2026-08-19,21,0,0,0,0,0,,,
+2026-08-19,22,0,0,0,0,0,,,
+2026-08-19,23,0,0,0,0,0,,,
+2026-08-20,0,0,0,0,0,0,,,
+2026-08-20,1,0,0,0,0,0,,,
+2026-08-20,2,0,0,0,0,0,,,
+2026-08-20,3,0,0,0,0,0,,,
+2026-08-20,4,0,0,0,0,0,,,
+2026-08-20,5,0,0,0,0,0,,,
+2026-08-20,6,0,0,0,0,0,,,
+2026-08-20,7,0,0,0,0,0,,,
+2026-08-20,8,0,0,0,0,0,,,
+2026-08-20,9,0,0,0,0,0,,,
+2026-08-20,10,0,0,0,0,0,,,
+2026-08-20,11,0,0,0,0,0,,,
+2026-08-20,12,0,0,0,0,0,,,
+2026-08-20,13,0,0,0,0,0,,,
+2026-08-20,14,0,0,0,0,0,,,
+2026-08-20,15,0,0,0,0,0,,,
+2026-08-20,16,0,0,0,0,0,,,
+2026-08-20,17,0,0,0,0,0,,,
+2026-08-20,18,0,0,0,0,0,,,
+2026-08-20,19,0,0,0,0,0,,,
+2026-08-20,20,0,0,0,0,0,,,
+2026-08-20,21,0,0,0,0,0,,,
+2026-08-20,22,0,0,0,0,0,,,
+2026-08-20,23,0,0,0,0,0,,,
+2026-08-21,0,0,0,0,0,0,,,
+2026-08-21,1,0,0,0,0,0,,,
+2026-08-21,2,0,0,0,0,0,,,
+2026-08-21,3,0,0,0,0,0,,,
+2026-08-21,4,0,0,0,0,0,,,
+2026-08-21,5,0,0,0,0,0,,,
+2026-08-21,6,0,0,0,0,0,,,
+2026-08-21,7,0,0,0,0,0,,,
+2026-08-21,8,0,0,0,0,0,,,
+2026-08-21,9,0,0,0,0,0,,,
+2026-08-21,10,0,0,0,0,0,,,
+2026-08-21,11,0,0,0,0,0,,,
+2026-08-21,12,0,0,0,0,0,,,
+2026-08-21,13,0,0,0,0,0,,,
+2026-08-21,14,0,0,0,0,0,,,
+2026-08-21,15,0,0,0,0,0,,,
+2026-08-21,16,0,0,0,0,0,,,
+2026-08-21,17,0,0,0,0,0,,,
+2026-08-21,18,0,0,0,0,0,,,
+2026-08-21,19,0,0,0,0,0,,,
+2026-08-21,20,0,0,0,0,0,,,
+2026-08-21,21,0,0,0,0,0,,,
+2026-08-21,22,0,0,0,0,0,,,
+2026-08-21,23,0,0,0,0,0,,,
+2026-08-22,0,0,0,0,0,0,,,
+2026-08-22,1,0,0,0,0,0,,,
+2026-08-22,2,0,0,0,0,0,,,
+2026-08-22,3,0,0,0,0,0,,,
+2026-08-22,4,0,0,0,0,0,,,
+2026-08-22,5,0,0,0,0,0,,,
+2026-08-22,6,0,0,0,0,0,,,
+2026-08-22,7,0,0,0,0,0,,,
+2026-08-22,8,0,0,0,0,0,,,
+2026-08-22,9,0,0,0,0,0,,,
+2026-08-22,10,0,0,1,0,0,,,
+2026-08-22,11,0,0,0,0,0,,,
+2026-08-22,12,0,0,0,0,0,,,
+2026-08-22,13,0,0,0,0,0,,,
+2026-08-22,14,0,0,0,0,0,,,
+2026-08-22,15,0,0,0,0,0,,,
+2026-08-22,16,0,0,0,0,0,,,
+2026-08-22,17,0,0,0,0,0,,,
+2026-08-22,18,0,0,0,0,0,,,
+2026-08-22,19,0,0,0,0,0,,,
+2026-08-22,20,0,0,0,0,0,,,
+2026-08-22,21,0,0,0,0,0,,,
+2026-08-22,22,0,0,0,0,0,,,
+2026-08-22,23,0,0,0,0,0,,,
+2026-08-23,0,0,0,0,0,0,,,
+2026-08-23,1,0,0,0,0,0,,,
+2026-08-23,2,0,0,0,0,0,,,
+2026-08-23,3,0,0,0,0,0,,,
+2026-08-23,4,0,0,0,0,0,,,
+2026-08-23,5,0,0,0,0,0,,,
+2026-08-23,6,0,0,0,0,0,,,
+2026-08-23,7,0,0,0,0,0,,,
+2026-08-23,8,0,0,0,0,0,,,
+2026-08-23,9,0,0,0,0,0,,,
+2026-08-23,10,0,0,0,0,0,,,
+2026-08-23,11,0,0,0,0,0,,,
+2026-08-23,12,0,0,0,0,0,,,
+2026-08-23,13,0,0,0,0,0,,,
+2026-08-23,14,0,0,0,0,0,,,
+2026-08-23,15,0,0,0,0,0,,,
+2026-08-23,16,0,0,0,0,0,,,
+2026-08-23,17,0,0,0,0,0,,,
+2026-08-23,18,0,0,0,0,0,,,
+2026-08-23,19,0,0,0,0,0,,,
+2026-08-23,20,0,0,0,0,0,,,
+2026-08-23,21,0,0,0,0,0,,,
+2026-08-23,22,0,0,0,0,0,,,
+2026-08-23,23,0,0,0,0,0,,,
+2026-08-24,0,0,0,0,0,0,,,
+2026-08-24,1,0,0,0,0,0,,,
+2026-08-24,2,0,0,0,0,0,,,
+2026-08-24,3,0,0,0,0,0,,,
+2026-08-24,4,0,0,0,0,0,,,
+2026-08-24,5,0,0,0,0,0,,,
+2026-08-24,6,0,0,0,0,0,,,
+2026-08-24,7,0,0,0,0,0,,,
+2026-08-24,8,0,0,0,0,0,,,
+2026-08-24,9,0,0,0,0,0,,,
+2026-08-24,10,0,0,0,0,0,,,
+2026-08-24,11,0,0,0,0,0,,,
+2026-08-24,12,0,0,0,0,0,,,
+2026-08-24,13,0,0,0,0,0,,,
+2026-08-24,14,0,0,0,0,0,,,
+2026-08-24,15,0,0,0,0,0,,,
+2026-08-24,16,0,0,0,0,0,,,
+2026-08-24,17,0,0,0,0,0,,,
+2026-08-24,18,0,0,0,0,0,,,
+2026-08-24,19,0,0,0,0,0,,,
+2026-08-24,20,0,0,0,0,0,,,
+2026-08-24,21,0,0,0,0,0,,,
+2026-08-24,22,0,0,0,0,0,,,
+2026-08-24,23,0,0,0,0,0,,,
+2026-08-25,0,0,0,0,0,0,,,
+2026-08-25,1,0,0,0,0,0,,,
+2026-08-25,2,0,0,0,0,0,,,
+2026-08-25,3,0,0,0,0,0,,,
+2026-08-25,4,0,0,0,0,0,,,
+2026-08-25,5,0,0,0,0,0,,,
+2026-08-25,6,0,0,0,0,0,,,
+2026-08-25,7,0,0,1,0,0,,,
+2026-08-25,8,0,0,0,0,0,,,
+2026-08-25,9,0,0,0,0,0,,,
+2026-08-25,10,0,0,0,0,0,,,
+2026-08-25,11,2,2,0,20166,738,47b2dbbb7,phase-4 par-5: snapshot subsystem COMPLETE + C-API bundles S and W + benches — fully GREEN…,"phase-4 par-5: snapshot subsystem COMPLETE + C-API bundles S and W + benches — A5 fully GREEN, two Miri-found bugs fixed"
+2026-08-25,12,2,2,2,43525,230,cc8c65309,"phase-5: advance the oracle pin 12967b68f -> 683d8db64 (245 commits, +25,534/-3,360); asse…","phase-5: advance the oracle pin 12967b68f -> 683d8db64 (245 commits, +25,534/-3,360); assessments + master plan"
+2026-08-25,13,1,1,0,1906,55,5a8f9e839,"phase-5: leaf prerequisites — simd base64 strict+streaming, wuffs swizzle end state (live …","phase-5 W1: leaf prerequisites — simd base64 strict+streaming, wuffs swizzle end state (live gaToRgba divergence FIXED), paste core, sys randomSecure hook, config clipboard limit"
+2026-08-25,14,2,2,2,13800,1360,b0685c0d6,"phase-5 tier-2a: kitty spec-conformance + relative placements, OSC 99 desktop notification…","phase-5 tier-2a: kitty spec-conformance + relative placements, OSC 99 desktop notifications, platform tail"
+2026-08-25,15,0,0,0,0,0,,,
+2026-08-25,16,0,0,0,0,0,,,
+2026-08-25,17,1,1,1,5641,464,cafab6f10,phase-5 tier-3a: OSC 5522 clipboard VT side + OSC 72 DnD VT side (dispatch stage follows),phase-5 tier-3a: OSC 5522 clipboard VT side + OSC 72 DnD VT side (dispatch stage follows)
+2026-08-25,18,1,1,0,5536,568,211ff7ef9,"phase-5 tier-3b: unified OSC 5522/72 dispatch — stream_terminal, Surface, termio; GREEN","phase-5 tier-3b: unified OSC 5522/72 dispatch — stream_terminal, Surface, termio; G1b GREEN"
+2026-08-25,19,0,0,0,0,0,,,
+2026-08-25,20,2,2,0,10057,2144,4e9d5e10c,"phase-5: UI tiers merged onto (oracle-arbitrated, 54 regions) — macOS kitty clipboard, ren…","phase-5 W7: UI tiers merged onto W6 (oracle-arbitrated, 54 regions) — macOS kitty clipboard, renderer GPU-release + animation clock, KeyboardLayout wave"
+2026-08-25,21,1,1,0,273,8,815459b13,"phase-5 finale(1): comment sweep — termio GREEN, 9 comments restored; 6 MISSED upstream co…","phase-5 finale(1): comment sweep — termio G3b GREEN, 9 comments restored; 6 MISSED upstream commits exposed"
+2026-08-25,22,1,1,0,1328,272,29da15fe9,"phase-5 finale(2): the six missed commits ported — GREEN (1,536 -> 0), GREEN, all fidelity…","phase-5 finale(2): the six missed commits ported — G3b GREEN (1,536 -> 0), G1b GREEN, all fidelity gates re-greened"
+2026-08-25,23,0,0,3,0,0,,,
+2026-08-26,0,9,9,5,6668,3596,8a9b23fbf,chore(fmt): re-run cargo fmt — step 1 of ci.sh was RED on main,chore(fmt): re-run cargo fmt — step 1 of ci.sh was RED on main
+2026-08-26,1,15,15,1,3577,424,fc4b7a9f3,"build: Nix flake, Phase A — librustty-vt + dev shell, verified on Linux","build: Nix flake, Phase A — librustty-vt + dev shell, verified on Linux"
+2026-08-26,2,8,7,6,2429,127,7d895be6a,"build: Nix VMs + tests.nix — all 16 VM modules, six launcher apps evaluate","build: Nix VMs + tests.nix — all 16 VM modules, six launcher apps evaluate"
+2026-08-26,3,3,2,0,382,198,3043ff28c,"docs: finalize the build-system gap audit — sixteen defects, two blocked items","docs: finalize the build-system gap audit — sixteen defects, two blocked items"
+2026-08-26,4,1,1,0,4,0,258f535a4,fix: untrack the lib-vt source tarball — .gitignore pattern did not match,fix: untrack the lib-vt source tarball — .gitignore pattern did not match
+2026-08-26,5,0,0,0,0,0,,,
+2026-08-26,6,1,0,1,0,0,,,
+2026-08-26,7,1,0,1,0,0,,,
+2026-08-26,8,0,0,1,0,0,,,
+2026-08-26,9,3,2,1,502,22,a1aae0f5c,"build: four more oracle lanes — blueprints, translations, valgrind, flatpak CI","build: four more oracle lanes — blueprints, translations, valgrind, flatpak CI"
+2026-08-26,10,3,2,0,543,112,3b3b404ce,"build: fuzz targets wired, VM tests runnable, XCFramework gate — and two wrong claims corr…","build: fuzz targets wired, VM tests runnable, XCFramework gate — and two wrong claims corrected"
+2026-08-26,11,0,0,1,0,0,,,
+2026-08-26,12,0,0,2,0,0,,,
+2026-08-26,13,3,3,3,1598,61,e3578a394,wip: G_VARIANT_TYPE macro expansion,wip: G_VARIANT_TYPE macro expansion
+2026-08-26,14,5,5,0,256,48,e0f33d119,"flatpak.yml: assert the build option reached the binary, not just that it runs","flatpak.yml: assert the build option reached the binary, not just that it runs"
+2026-08-26,15,4,3,1,83,18,a8afb3191,"macos: finish the xcframework relocation — drop the now-dead copy, correct the finding","macos: finish the xcframework relocation — drop the now-dead copy, correct the finding"
+2026-08-26,16,0,0,0,0,0,,,
+2026-08-26,17,0,0,0,0,0,,,
+2026-08-26,18,0,0,0,0,0,,,
+2026-08-26,19,0,0,1,0,0,,,
+2026-08-26,20,0,0,0,0,0,,,
+2026-08-26,21,1,1,0,12,7,e7daf2574,gates: give check_valgrind.sh's suppressions toggle its WHY (rule c),gates: give check_valgrind.sh's suppressions toggle its WHY (D6 rule c)
+2026-08-26,22,0,0,0,0,0,,,
+2026-08-26,23,0,0,0,0,0,,,
+2026-08-27,0,0,0,0,0,0,,,
+2026-08-27,1,0,0,0,0,0,,,
+2026-08-27,2,0,0,0,0,0,,,
+2026-08-27,3,0,0,0,0,0,,,
+2026-08-27,4,0,0,0,0,0,,,
+2026-08-27,5,0,0,0,0,0,,,
+2026-08-27,6,0,0,0,0,0,,,
+2026-08-27,7,0,0,0,0,0,,,
+2026-08-27,8,0,0,0,0,0,,,
+2026-08-27,9,0,0,0,0,0,,,
+2026-08-27,10,0,0,0,0,0,,,
+2026-08-27,11,0,0,0,0,0,,,
+2026-08-27,12,0,0,0,0,0,,,
+2026-08-27,13,0,0,0,0,0,,,
+2026-08-27,14,0,0,0,0,0,,,
+2026-08-27,15,0,0,0,0,0,,,
+2026-08-27,16,0,0,0,0,0,,,
+2026-08-27,17,0,0,0,0,0,,,
+2026-08-27,18,0,0,0,0,0,,,
+2026-08-27,19,0,0,0,0,0,,,
+2026-08-27,20,0,0,0,0,0,,,
+2026-08-27,21,0,0,0,0,0,,,
+2026-08-27,22,0,0,0,0,0,,,
+2026-08-27,23,0,0,0,0,0,,,
+2026-08-28,0,0,0,0,0,0,,,
+2026-08-28,1,0,0,0,0,0,,,
+2026-08-28,2,0,0,0,0,0,,,
+2026-08-28,3,0,0,0,0,0,,,
+2026-08-28,4,0,0,0,0,0,,,
+2026-08-28,5,0,0,0,0,0,,,
+2026-08-28,6,0,0,0,0,0,,,
+2026-08-28,7,0,0,0,0,0,,,
+2026-08-28,8,0,0,0,0,0,,,
+2026-08-28,9,0,0,0,0,0,,,
+2026-08-28,10,0,0,0,0,0,,,
+2026-08-28,11,0,0,0,0,0,,,
+2026-08-28,12,0,0,0,0,0,,,
+2026-08-28,13,0,0,0,0,0,,,
+2026-08-28,14,0,0,0,0,0,,,
+2026-08-28,15,0,0,0,0,0,,,
+2026-08-28,16,0,0,0,0,0,,,
+2026-08-28,17,0,0,0,0,0,,,
+2026-08-28,18,0,0,0,0,0,,,
+2026-08-28,19,0,0,5,0,0,,,
+2026-08-28,20,0,0,4,0,0,,,
+2026-08-28,21,0,0,1,0,0,,,
+2026-08-28,22,2,2,4,1524,171,1d50073f6,perf: close the Zig-winning bench gaps — restore comptime/inline semantics,perf: close the Zig-winning bench gaps — restore comptime/inline semantics
+2026-08-28,23,0,0,0,0,0,,,
+2026-08-29,0,0,0,0,0,0,,,
+2026-08-29,1,0,0,0,0,0,,,
+2026-08-29,2,0,0,0,0,0,,,
+2026-08-29,3,0,0,0,0,0,,,
+2026-08-29,4,0,0,0,0,0,,,
+2026-08-29,5,0,0,0,0,0,,,
+2026-08-29,6,0,0,0,0,0,,,
+2026-08-29,7,0,0,0,0,0,,,
+2026-08-29,8,0,0,0,0,0,,,
+2026-08-29,9,0,0,0,0,0,,,
+2026-08-29,10,0,0,0,0,0,,,
+2026-08-29,11,0,0,0,0,0,,,
+2026-08-29,12,0,0,2,0,0,,,
+2026-08-29,13,0,0,0,0,0,,,
+2026-08-29,14,0,0,0,0,0,,,
+2026-08-29,15,0,0,0,0,0,,,
+2026-08-29,16,0,0,0,0,0,,,
+2026-08-29,17,0,0,0,0,0,,,
+2026-08-29,18,0,0,0,0,0,,,
+2026-08-29,19,0,0,0,0,0,,,
+2026-08-29,20,0,0,0,0,0,,,
+2026-08-29,21,0,0,0,0,0,,,
+2026-08-29,22,0,0,0,0,0,,,
+2026-08-29,23,0,0,0,0,0,,,
+2026-08-30,0,0,0,0,0,0,,,
+2026-08-30,1,0,0,0,0,0,,,
+2026-08-30,2,0,0,0,0,0,,,
+2026-08-30,3,0,0,0,0,0,,,
+2026-08-30,4,0,0,0,0,0,,,
+2026-08-30,5,0,0,0,0,0,,,
+2026-08-30,6,0,0,0,0,0,,,
+2026-08-30,7,0,0,0,0,0,,,
+2026-08-30,8,0,0,0,0,0,,,
+2026-08-30,9,0,0,0,0,0,,,
+2026-08-30,10,0,0,0,0,0,,,
+2026-08-30,11,0,0,0,0,0,,,
+2026-08-30,12,0,0,0,0,0,,,
+2026-08-30,13,0,0,0,0,0,,,
+2026-08-30,14,0,0,0,0,0,,,
+2026-08-30,15,0,0,0,0,0,,,
+2026-08-30,16,0,0,0,0,0,,,
+2026-08-30,17,0,0,0,0,0,,,
+2026-08-30,18,0,0,0,0,0,,,
+2026-08-30,19,0,0,0,0,0,,,
+2026-08-30,20,0,0,0,0,0,,,
+2026-08-30,21,0,0,0,0,0,,,
+2026-08-30,22,0,0,0,0,0,,,
+2026-08-30,23,0,0,0,0,0,,,
+2026-08-31,0,0,0,0,0,0,,,
+2026-08-31,1,0,0,0,0,0,,,
+2026-08-31,2,0,0,0,0,0,,,
+2026-08-31,3,0,0,0,0,0,,,
+2026-08-31,4,0,0,0,0,0,,,
+2026-08-31,5,0,0,0,0,0,,,
+2026-08-31,6,0,0,0,0,0,,,
+2026-08-31,7,0,0,0,0,0,,,
+2026-08-31,8,0,0,0,0,0,,,
+2026-08-31,9,0,0,0,0,0,,,
+2026-08-31,10,0,0,0,0,0,,,
+2026-08-31,11,0,0,0,0,0,,,
+2026-08-31,12,0,0,0,0,0,,,
+2026-08-31,13,0,0,0,0,0,,,
+2026-08-31,14,0,0,0,0,0,,,
+2026-08-31,15,0,0,0,0,0,,,
+2026-08-31,16,0,0,0,0,0,,,
+2026-08-31,17,0,0,0,0,0,,,
+2026-08-31,18,0,0,0,0,0,,,
+2026-08-31,19,0,0,0,0,0,,,
+2026-08-31,20,0,0,0,0,0,,,
+2026-08-31,21,0,0,0,0,0,,,
+2026-08-31,22,0,0,0,0,0,,,
+2026-08-31,23,0,0,0,0,0,,,
+2026-09-01,0,0,0,0,0,0,,,
+2026-09-01,1,9,9,3,13451,307,62c1690d9,"phase-6: advance the oracle pin 88f57ee66 -> 20abdb50a (121 commits, +6,261/-1,269) with b…","phase-6: advance the oracle pin 88f57ee66 -> 20abdb50a (121 commits, +6,261/-1,269) with before/after gate evidence + master plan"
+2026-09-01,2,22,17,0,6500,1748,27497b954,po: re-mirror fr/ru/uk and add the Serbian catalogs sr + sr@latin (range end state),po: re-mirror fr/ru/uk and add the Serbian catalogs sr + sr@latin (range end state)
+2026-09-01,3,3,2,0,3485,28,9f3f187b9,"phase-6: search C API — c/search.zig (17 tests), rustty_search_* exports + `search` featur…","phase-6/W3: search C API — c/search.zig (17 tests), rustty_search_* exports + `search` feature, headers, c-vt-search example (oracle 32601cd79, f9202919f, f0c918fc4, 76d9fcefe, 674abd8a1)"
+2026-09-01,4,0,0,0,0,0,,,
+2026-09-01,5,0,0,0,0,0,,,
+2026-09-01,6,0,0,0,0,0,,,
+2026-09-01,7,2,2,3,349,34,a964e142c,phase-6 finale(1): census ledger at 20abdb50a (+26 test blocks +201 assertions +2 files ov…,phase-6 finale(1): census ledger at 20abdb50a (+26 test blocks / +201 assertions / +2 files over 88f57ee66) + G1b/G3b finale evidence
+2026-09-01,8,0,0,1,0,0,,,
+2026-09-01,9,0,0,0,0,0,,,
+2026-09-01,10,0,0,0,0,0,,,
+2026-09-01,11,0,0,0,0,0,,,
+2026-09-01,12,0,0,1,0,0,,,
+2026-09-01,13,0,0,0,0,0,,,
+2026-09-01,14,0,0,0,0,0,,,
+2026-09-01,15,0,0,0,0,0,,,
+2026-09-01,16,0,0,0,0,0,,,
+2026-09-01,17,0,0,0,0,0,,,
+2026-09-01,18,0,0,0,0,0,,,
+2026-09-01,19,0,0,0,0,0,,,
+2026-09-01,20,0,0,0,0,0,,,
+2026-09-01,21,0,0,0,0,0,,,
+2026-09-01,22,0,0,0,0,0,,,
+2026-09-01,23,0,0,0,0,0,,,
+2026-09-02,0,0,0,0,0,0,,,
+2026-09-02,1,0,0,0,0,0,,,
+2026-09-02,2,0,0,0,0,0,,,
+2026-09-02,3,0,0,0,0,0,,,
+2026-09-02,4,0,0,0,0,0,,,
+2026-09-02,5,0,0,0,0,0,,,
+2026-09-02,6,0,0,0,0,0,,,
+2026-09-02,7,0,0,0,0,0,,,
+2026-09-02,8,0,0,0,0,0,,,
+2026-09-02,9,0,0,0,0,0,,,
+2026-09-02,10,0,0,0,0,0,,,
+2026-09-02,11,0,0,0,0,0,,,
+2026-09-02,12,0,0,0,0,0,,,
+2026-09-02,13,0,0,0,0,0,,,
+2026-09-02,14,0,0,0,0,0,,,
+2026-09-02,15,0,0,0,0,0,,,
+2026-09-02,16,0,0,0,0,0,,,
+2026-09-02,17,0,0,0,0,0,,,
+2026-09-02,18,0,0,0,0,0,,,
+2026-09-02,19,0,0,0,0,0,,,
+2026-09-02,20,0,0,0,0,0,,,
+2026-09-02,21,0,0,0,0,0,,,
+2026-09-02,22,0,0,0,0,0,,,
+2026-09-02,23,0,0,0,0,0,,,
+2026-09-03,0,0,0,0,0,0,,,
+2026-09-03,1,0,0,0,0,0,,,
+2026-09-03,2,0,0,0,0,0,,,
+2026-09-03,3,0,0,0,0,0,,,
+2026-09-03,4,0,0,0,0,0,,,
+2026-09-03,5,0,0,0,0,0,,,
+2026-09-03,6,0,0,0,0,0,,,
+2026-09-03,7,0,0,0,0,0,,,
+2026-09-03,8,0,0,0,0,0,,,
+2026-09-03,9,0,0,0,0,0,,,
+2026-09-03,10,0,0,0,0,0,,,
+2026-09-03,11,0,0,0,0,0,,,
+2026-09-03,12,0,0,0,0,0,,,
+2026-09-03,13,0,0,0,0,0,,,
+2026-09-03,14,0,0,0,0,0,,,
+2026-09-03,15,0,0,0,0,0,,,
+2026-09-03,16,0,0,0,0,0,,,
+2026-09-03,17,0,0,0,0,0,,,
+2026-09-03,18,0,0,0,0,0,,,
+2026-09-03,19,0,0,0,0,0,,,
+2026-09-03,20,0,0,0,0,0,,,
+2026-09-03,21,0,0,0,0,0,,,
+2026-09-03,22,0,0,0,0,0,,,
+2026-09-03,23,0,0,0,0,0,,,
+2026-09-04,0,0,0,0,0,0,,,
+2026-09-04,1,0,0,0,0,0,,,
+2026-09-04,2,0,0,0,0,0,,,
+2026-09-04,3,0,0,0,0,0,,,
+2026-09-04,4,0,0,0,0,0,,,
+2026-09-04,5,0,0,0,0,0,,,
+2026-09-04,6,0,0,0,0,0,,,
+2026-09-04,7,0,0,0,0,0,,,
+2026-09-04,8,0,0,0,0,0,,,
+2026-09-04,9,0,0,0,0,0,,,
+2026-09-04,10,0,0,0,0,0,,,
+2026-09-04,11,0,0,0,0,0,,,
+2026-09-04,12,0,0,0,0,0,,,
+2026-09-04,13,0,0,0,0,0,,,
+2026-09-04,14,0,0,0,0,0,,,
+2026-09-04,15,0,0,0,0,0,,,
+2026-09-04,16,0,0,0,0,0,,,
+2026-09-04,17,0,0,0,0,0,,,
+2026-09-04,18,0,0,0,0,0,,,
+2026-09-04,19,0,0,0,0,0,,,
+2026-09-04,20,0,0,0,0,0,,,
+2026-09-04,21,0,0,0,0,0,,,
+2026-09-04,22,0,0,0,0,0,,,
+2026-09-04,23,0,0,0,0,0,,,
+2026-09-05,0,0,0,0,0,0,,,
+2026-09-05,1,0,0,0,0,0,,,
+2026-09-05,2,0,0,0,0,0,,,
+2026-09-05,3,0,0,0,0,0,,,
+2026-09-05,4,0,0,0,0,0,,,
+2026-09-05,5,0,0,0,0,0,,,
+2026-09-05,6,0,0,0,0,0,,,
+2026-09-05,7,0,0,0,0,0,,,
+2026-09-05,8,0,0,0,0,0,,,
+2026-09-05,9,0,0,0,0,0,,,
+2026-09-05,10,0,0,0,0,0,,,
+2026-09-05,11,0,0,0,0,0,,,
+2026-09-05,12,0,0,0,0,0,,,
+2026-09-05,13,0,0,0,0,0,,,
+2026-09-05,14,0,0,0,0,0,,,
+2026-09-05,15,0,0,0,0,0,,,
+2026-09-05,16,0,0,0,0,0,,,
+2026-09-05,17,0,0,0,0,0,,,
+2026-09-05,18,0,0,0,0,0,,,
+2026-09-05,19,0,0,0,0,0,,,
+2026-09-05,20,0,0,0,0,0,,,
+2026-09-05,21,0,0,0,0,0,,,
+2026-09-05,22,0,0,0,0,0,,,
+2026-09-05,23,0,0,0,0,0,,,
+2026-09-06,0,0,0,0,0,0,,,
+2026-09-06,1,0,0,0,0,0,,,
+2026-09-06,2,0,0,0,0,0,,,
+2026-09-06,3,0,0,0,0,0,,,
+2026-09-06,4,0,0,0,0,0,,,
+2026-09-06,5,0,0,0,0,0,,,
+2026-09-06,6,0,0,0,0,0,,,
+2026-09-06,7,0,0,0,0,0,,,
+2026-09-06,8,0,0,0,0,0,,,
+2026-09-06,9,0,0,0,0,0,,,
+2026-09-06,10,0,0,0,0,0,,,
+2026-09-06,11,0,0,0,0,0,,,
+2026-09-06,12,0,0,0,0,0,,,
+2026-09-06,13,0,0,0,0,0,,,
+2026-09-06,14,0,0,0,0,0,,,
+2026-09-06,15,0,0,0,0,0,,,
+2026-09-06,16,0,0,0,0,0,,,
+2026-09-06,17,0,0,0,0,0,,,
+2026-09-06,18,0,0,0,0,0,,,
+2026-09-06,19,0,0,0,0,0,,,
+2026-09-06,20,0,0,0,0,0,,,
+2026-09-06,21,0,0,0,0,0,,,
+2026-09-06,22,0,0,0,0,0,,,
+2026-09-06,23,0,0,0,0,0,,,
+2026-09-07,0,0,0,0,0,0,,,
+2026-09-07,1,0,0,0,0,0,,,
+2026-09-07,2,0,0,0,0,0,,,
+2026-09-07,3,0,0,0,0,0,,,
+2026-09-07,4,0,0,0,0,0,,,
+2026-09-07,5,0,0,0,0,0,,,
+2026-09-07,6,0,0,0,0,0,,,
+2026-09-07,7,0,0,3,0,0,,,
+2026-09-07,8,0,0,0,0,0,,,
+2026-09-07,9,0,0,0,0,0,,,
+2026-09-07,10,0,0,0,0,0,,,
+2026-09-07,11,0,0,1,0,0,,,
+2026-09-07,12,0,0,0,0,0,,,
+2026-09-07,13,0,0,0,0,0,,,
+2026-09-07,14,0,0,0,0,0,,,
+2026-09-07,15,0,0,0,0,0,,,
+2026-09-07,16,0,0,0,0,0,,,
+2026-09-07,17,0,0,0,0,0,,,
+2026-09-07,18,0,0,0,0,0,,,
+2026-09-07,19,0,0,0,0,0,,,
+2026-09-07,20,0,0,0,0,0,,,
+2026-09-07,21,0,0,0,0,0,,,
+2026-09-07,22,0,0,0,0,0,,,
+2026-09-07,23,0,0,0,0,0,,,
+2026-09-08,0,0,0,0,0,0,,,
+2026-09-08,1,0,0,0,0,0,,,
+2026-09-08,2,0,0,0,0,0,,,
+2026-09-08,3,0,0,0,0,0,,,
+2026-09-08,4,0,0,0,0,0,,,
+2026-09-08,5,0,0,0,0,0,,,
+2026-09-08,6,0,0,0,0,0,,,
+2026-09-08,7,0,0,0,0,0,,,
+2026-09-08,8,0,0,0,0,0,,,
+2026-09-08,9,0,0,0,0,0,,,
+2026-09-08,10,0,0,0,0,0,,,
+2026-09-08,11,0,0,0,0,0,,,
+2026-09-08,12,0,0,4,0,0,,,
+2026-09-08,13,0,0,0,0,0,,,
+2026-09-08,14,0,0,0,0,0,,,
+2026-09-08,15,0,0,0,0,0,,,
+2026-09-08,16,1,1,2,9278,0,56ab587aa,docs(parity-audit): exhaustive rustty<->ghostty functional-parity audit at pin 20abdb50a,docs(parity-audit): exhaustive rustty<->ghostty functional-parity audit at pin 20abdb50a
+2026-09-08,17,4,3,0,169,64,d38b014ba,fix(linux): example build.sh aborts on non-macOS hosts; clippy field-reassign in a cfg(not…,fix(linux): example build.sh aborts on non-macOS hosts; clippy field-reassign in a cfg(not(macos)) test
+2026-09-08,18,0,0,1,0,0,,,
+2026-09-08,19,3,3,3,4415,28,209d56e8b,plan: comprehensive closure of all 497 parity-audit findings,plan: comprehensive closure of all 497 parity-audit findings
+2026-09-08,20,7,7,0,571,95,96a084d1d,parity-closure: adjudicate batch 2d DISPUTED findings (28 rows),parity-closure: adjudicate batch 2d DISPUTED findings (28 rows)
+2026-09-08,21,7,7,0,578,168,5b869d6e5,fixup(task-3 review): header-pin the command_s ABI freeze; ledger byte-fix,fixup(task-3 review): header-pin the command_s ABI freeze; ledger byte-fix
+2026-09-08,22,4,4,0,589,64,accc140d4,fix(vt): clipboard-codepoint-map is silently inert (closes),fix(vt): clipboard-codepoint-map is silently inert (closes S151-F1)
+2026-09-08,23,4,4,0,288,6,2dae289d1,fix(apprt): re-sync captured environ after ensureLocale (closes),fix(apprt): re-sync captured environ after ensureLocale (closes S43-F1)
+2026-09-09,0,4,4,0,741,106,eb3edbb96,fix(highway-sys): port oracle's PowerPC/s390x/RISC-V target detection,"fix(highway-sys): port oracle's PowerPC/s390x/RISC-V target detection, closes S34-F4/F5/F6"
+2026-09-09,1,0,0,0,0,0,,,
+2026-09-09,2,0,0,0,0,0,,,
+2026-09-09,3,2,2,0,31,17,b48479412,style(highway-sys): cargo fmt the PPC/s390x/RISC-V detection tests,style(highway-sys): cargo fmt the PPC/s390x/RISC-V detection tests
+2026-09-09,4,1,1,0,313,0,a3b49b173,phase-6/task-13: DECISION doc for the logging-facade class (86 LOG findings),phase-6/task-13: DECISION doc for the logging-facade class (86 LOG findings)
+2026-09-09,5,0,0,0,0,0,,,
+2026-09-09,6,0,0,2,0,0,,,
+2026-09-09,7,0,0,0,0,0,,,
+2026-09-09,8,0,0,0,0,0,,,
+2026-09-09,9,0,0,0,0,0,,,
+2026-09-09,10,0,0,0,0,0,,,
+2026-09-09,11,0,0,0,0,0,,,
+2026-09-09,12,0,0,0,0,0,,,
+2026-09-09,13,0,0,0,0,0,,,
+2026-09-09,14,0,0,0,0,0,,,
+2026-09-09,15,0,0,0,0,0,,,
+2026-09-09,16,0,0,0,0,0,,,
+2026-09-09,17,1,1,0,716,20,06e68156b,task-14a: log facade infra + fix rustty-vt-c's eprintln! sink bypass,task-14a: log facade infra + fix rustty-vt-c's eprintln! sink bypass
+2026-09-09,18,1,1,0,562,19,12a5f351a,"task-14a review fixes: contain the max-level clobber, add the app-build backend","task-14a review fixes: contain the max-level clobber, add the app-build backend"
+2026-09-09,19,3,3,1,702,81,c3cfd0b3d,"task-14a review round 3: fix bootstrap timing, add the wasm artifact backend","task-14a review round 3: fix bootstrap timing, add the wasm artifact backend"
+2026-09-09,20,2,2,0,1355,262,089b3925f,task-14b: restore rustty-vt logging diagnostics (18/19 LOG rows),task-14b: restore rustty-vt logging diagnostics (18/19 LOG rows)
+2026-09-09,21,4,4,0,496,64,a7fe7c6f4,"task-14wasm: wasm32-only release_max_level_off, correct DECISION-logging.md §6","task-14wasm: wasm32-only release_max_level_off, correct DECISION-logging.md §6"
+2026-09-09,22,8,8,0,1824,241,9f81bdff2,task-14r-a fix-review r1: make log_capture actually isolated; correct stale PORT NOTE coun…,task-14r-a fix-review r1: make log_capture actually isolated; correct stale PORT NOTE counts
+2026-09-09,23,0,0,0,0,0,,,
+2026-09-10,0,0,0,0,0,0,,,
+2026-09-10,1,0,0,0,0,0,,,
+2026-09-10,2,0,0,0,0,0,,,
+2026-09-10,3,0,0,0,0,0,,,
+2026-09-10,4,0,0,0,0,0,,,
+2026-09-10,5,0,0,0,0,0,,,
+2026-09-10,6,0,0,0,0,0,,,
+2026-09-10,7,12,12,1,1853,253,3a3334862,"parity-closure: record that the ledger's cited anchors are approximate, and the method tha…","parity-closure: record that the ledger's cited anchors are approximate, and the method that replaces them"
+2026-09-10,8,21,21,3,2449,308,2ca1a947f,task-14wasm-proof: execute a restored wasm logging site end to end in Node,task-14wasm-proof: execute a restored wasm logging site end to end in Node
+2026-09-10,9,6,6,0,1836,148,595d03550,restore Surface.zig's dropped diagnostics (closes; waives),task-14d-1: restore Surface.zig's dropped diagnostics (closes S42-F2; waives S41-F1)
+2026-09-10,10,6,6,0,1912,109,c2ece7240,"14gate: — reconcile diagnostics per ORACLE FILE, not per audit row","14gate(1/2): G-LOGFILE — reconcile diagnostics per ORACLE FILE, not per audit row"
+2026-09-10,11,13,13,0,2391,278,cb7bf7858,lockfiles: catch two auxiliary workspaces up with the log dependency,lockfiles: catch two auxiliary workspaces up with the log dependency
+2026-09-10,12,11,11,0,1643,513,613698b2f,14d-3: test-only capture logger for rustty-apprt,14d-3: test-only capture logger for rustty-apprt
+2026-09-10,13,16,16,0,963,240,855c0e017,14d-3: write the log-scope naming rule into PARITY_NAMING.md; correct two numbers in DECIS…,14d-3: write the log-scope naming rule into PARITY_NAMING.md; correct two numbers in DECISION-logging.md
+2026-09-10,14,3,3,0,1915,138,835b6e943,"restore src/termio/Exec.zig's 58 log sites, ratchet all 7 allowances, close","task-14e-1(4/4): restore src/termio/Exec.zig's 58 log sites, ratchet all 7 allowances, close S212-F5"
+2026-09-10,15,9,9,0,3558,202,1e3217234,"14gate round 5: compares message TEXT, not only counts; stale comments machine-checked","14gate round 5: G-LOGFILE compares message TEXT, not only counts (N21); stale comments machine-checked (N20)"
+2026-09-10,16,5,5,0,1759,124,7186251d0,"rustty-bench — 52 of 53 diagnostics, plus the bin-side backend","task-14e-2: rustty-bench — 52 of 53 diagnostics, plus the bin-side backend"
+2026-09-10,17,4,4,0,930,127,7e4b7b0d9,14gate round 6: the content check manufactured three findings and I declared them,14gate round 6: the content check manufactured three findings and I declared them
+2026-09-10,18,4,4,0,1406,373,7a6fb8dec,"closes: checkGhosttyHEnum reads the real C header, not itself","closes S45-F1: checkGhosttyHEnum reads the real C header, not itself (+N26, N27)"
+2026-09-10,19,0,0,0,0,0,,,
+2026-09-10,20,2,2,0,514,223,bfccd6fac,"fix round 1: bind the henum key list to the Rust enums, unbreak the Linux lint, finish the…","fix round 1: bind the henum key list to the Rust enums (N29), unbreak the Linux lint, finish the N28 sweep"
+2026-09-10,21,3,3,0,955,67,2df6ba024,parity: closes,"parity: closes S110-F1, S4-F3, S171-F1, S174-F5, S141-F3"
+2026-09-10,22,0,0,1,0,0,,,
+2026-09-10,23,3,3,0,662,116,f426d92cc,"parity: ledger for task 16 — 19 ALLOC rows CLOSED, 6 left OPEN with narrowed owners","parity: ledger for task 16 — 19 ALLOC rows CLOSED, 6 left OPEN with narrowed owners"
+2026-09-11,0,2,2,0,804,127,c651b1ac8,parity: closes,"parity: closes S167-F1, S209-F3, S189-F3, S189-F1, S166-F2, S86-F3, S86-F4, S83-F3, S90-F5"
+2026-09-11,1,9,9,0,1035,203,5413c76fa,"parity: closes;; ports (Linux-only, unverified)","parity: closes S111-F10, S42-F3, S77-F2; ports S117-F2 (Linux-only, unverified)"
+2026-09-11,2,2,2,0,77,26,ae4a492f7,"parity task 16 fix round 2: move two qualifications out of the report and into the code, a…","parity task 16 fix round 2: move two qualifications out of the report and into the code, and correct S206-F1's ledger cell"
+2026-09-11,3,7,7,0,1157,256,84c91e99c,task-18: port +version's GTK block and give portal tokens a CSPRNG,task-18: port +version's GTK block (S70-F1) and give portal tokens a CSPRNG (S48-F4)
+2026-09-11,4,6,6,0,1035,346,d5f92612a,parity task 19 (2/n): bind the hand-typed enum key lists to their enums,parity task 19 (2/n): bind the hand-typed enum key lists to their enums
+2026-09-11,5,0,0,0,0,0,,,
+2026-09-11,6,0,0,0,0,0,,,
+2026-09-11,7,0,0,5,0,0,,,
+2026-09-11,8,1,1,0,2,2,3451bcbc2,parity task 19 review: close (VM-verified under broadway; plain headless run is vacuous),parity task 19 review: close S48-F1 (VM-verified under broadway; plain headless run is vacuous)
+2026-09-11,9,3,3,1,347,106,abbadac2a,"parity task 19 fix round 1: restore osc_52 null fixture; henum_type! observes duplicates, …","parity task 19 fix round 1: restore osc_52 null fixture; henum_type! observes duplicates, key binding and tag type"
+2026-09-11,10,12,12,1,2351,464,bef2ef016,"parity task 20 (6/n): GTK apprt behaviour, GObject properties and missing structure","parity task 20 (6/n): GTK apprt behaviour, GObject properties and missing structure"
+2026-09-11,11,6,6,0,1221,124,886fa0c7d,parity task: tmux control-mode input no longer reaches reference traps,parity task R13-A (3/4): tmux control-mode input no longer reaches reference traps
+2026-09-11,12,8,8,0,594,58,7091f1b9f,parity task 20 fix round 2: trap X errors on winproto property calls; .previous empty-list…,"parity task 20 fix round 2: trap X errors on winproto property calls (M110, R13); .previous empty-list case"
+2026-09-11,13,13,13,0,2223,300,1ec776dc5,"parity task:, cell-relative colours leave custom-shader uniforms unchanged","parity task R13-B (2/6): M5, cell-relative colours leave custom-shader uniforms unchanged"
+2026-09-11,14,3,3,0,193,3,9e5a92d01,"parity task (records): -; closed (reversal), pointer","parity task R13-B (records): UD57-UD61, N45-N49, S42-F4 closed (R13 reversal), U2 pointer"
+2026-09-11,15,13,13,1,1782,111,508b834d1,"parity task (2/n): malformed snapshot bytes no longer reach a trap, an overflow or a 4 GiB…","parity task R13-S (2/n): malformed snapshot bytes no longer reach a trap, an overflow or a 4 GiB allocation"
+2026-09-11,16,0,0,0,0,0,,,
+2026-09-11,17,0,0,0,0,0,,,
+2026-09-11,18,0,0,0,0,0,,,
+2026-09-11,19,0,0,1,0,0,,,
+2026-09-11,20,0,0,0,0,0,,,
+2026-09-11,21,0,0,0,0,0,,,
+2026-09-11,22,0,0,0,0,0,,,
+2026-09-11,23,0,0,0,0,0,,,
+2026-09-12,0,0,0,0,0,0,,,
+2026-09-12,1,0,0,0,0,0,,,
+2026-09-12,2,0,0,0,0,0,,,
+2026-09-12,3,0,0,0,0,0,,,
+2026-09-12,4,0,0,0,0,0,,,
+2026-09-12,5,0,0,0,0,0,,,
+2026-09-12,6,0,0,0,0,0,,,
+2026-09-12,7,0,0,0,0,0,,,
+2026-09-12,8,0,0,0,0,0,,,
+2026-09-12,9,0,0,0,0,0,,,
+2026-09-12,10,0,0,0,0,0,,,
+2026-09-12,11,0,0,0,0,0,,,
+2026-09-12,12,0,0,0,0,0,,,
+2026-09-12,13,0,0,0,0,0,,,
+2026-09-12,14,0,0,0,0,0,,,
+2026-09-12,15,0,0,0,0,0,,,
+2026-09-12,16,0,0,0,0,0,,,
+2026-09-12,17,0,0,0,0,0,,,
+2026-09-12,18,0,0,0,0,0,,,
+2026-09-12,19,0,0,0,0,0,,,
+2026-09-12,20,0,0,0,0,0,,,
+2026-09-12,21,0,0,0,0,0,,,
+2026-09-12,22,0,0,0,0,0,,,
+2026-09-12,23,0,0,0,0,0,,,
+2026-09-13,0,0,0,0,0,0,,,
+2026-09-13,1,0,0,0,0,0,,,
+2026-09-13,2,0,0,0,0,0,,,
+2026-09-13,3,0,0,0,0,0,,,
+2026-09-13,4,0,0,0,0,0,,,
+2026-09-13,5,0,0,0,0,0,,,
+2026-09-13,6,0,0,0,0,0,,,
+2026-09-13,7,0,0,0,0,0,,,
+2026-09-13,8,0,0,0,0,0,,,
+2026-09-13,9,0,0,0,0,0,,,
+2026-09-13,10,0,0,0,0,0,,,
+2026-09-13,11,0,0,0,0,0,,,
+2026-09-13,12,0,0,0,0,0,,,
+2026-09-13,13,0,0,0,0,0,,,
+2026-09-13,14,0,0,0,0,0,,,
+2026-09-13,15,0,0,0,0,0,,,
+2026-09-13,16,0,0,0,0,0,,,
+2026-09-13,17,0,0,0,0,0,,,
+2026-09-13,18,0,0,0,0,0,,,
+2026-09-13,19,0,0,0,0,0,,,
+2026-09-13,20,0,0,0,0,0,,,
+2026-09-13,21,0,0,0,0,0,,,
+2026-09-13,22,0,0,0,0,0,,,
+2026-09-13,23,0,0,0,0,0,,,
+2026-09-14,0,0,0,0,0,0,,,
+2026-09-14,1,0,0,0,0,0,,,
+2026-09-14,2,0,0,0,0,0,,,
+2026-09-14,3,0,0,0,0,0,,,
+2026-09-14,4,0,0,0,0,0,,,
+2026-09-14,5,0,0,0,0,0,,,
+2026-09-14,6,0,0,0,0,0,,,
+2026-09-14,7,0,0,0,0,0,,,
+2026-09-14,8,0,0,0,0,0,,,
+2026-09-14,9,0,0,0,0,0,,,
+2026-09-14,10,0,0,0,0,0,,,
+2026-09-14,11,0,0,0,0,0,,,
+2026-09-14,12,0,0,0,0,0,,,
+2026-09-14,13,0,0,0,0,0,,,
+2026-09-14,14,0,0,0,0,0,,,
+2026-09-14,15,0,0,0,0,0,,,
+2026-09-14,16,0,0,0,0,0,,,
+2026-09-14,17,0,0,0,0,0,,,
+2026-09-14,18,0,0,0,0,0,,,
+2026-09-14,19,0,0,0,0,0,,,
+2026-09-14,20,0,0,0,0,0,,,
+2026-09-14,21,0,0,0,0,0,,,
+2026-09-14,22,0,0,0,0,0,,,
+2026-09-14,23,0,0,0,0,0,,,
+2026-09-15,0,0,0,0,0,0,,,
+2026-09-15,1,0,0,0,0,0,,,
+2026-09-15,2,0,0,0,0,0,,,
+2026-09-15,3,0,0,0,0,0,,,
+2026-09-15,4,0,0,0,0,0,,,
+2026-09-15,5,0,0,0,0,0,,,
+2026-09-15,6,0,0,0,0,0,,,
+2026-09-15,7,0,0,0,0,0,,,
+2026-09-15,8,0,0,0,0,0,,,
+2026-09-15,9,0,0,0,0,0,,,
+2026-09-15,10,0,0,0,0,0,,,
+2026-09-15,11,0,0,0,0,0,,,
+2026-09-15,12,0,0,0,0,0,,,
+2026-09-15,13,0,0,0,0,0,,,
+2026-09-15,14,0,0,0,0,0,,,
+2026-09-15,15,0,0,0,0,0,,,
+2026-09-15,16,0,0,0,0,0,,,
+2026-09-15,17,0,0,0,0,0,,,
+2026-09-15,18,0,0,0,0,0,,,
+2026-09-15,19,0,0,0,0,0,,,
+2026-09-15,20,0,0,0,0,0,,,
+2026-09-15,21,0,0,0,0,0,,,
+2026-09-15,22,0,0,0,0,0,,,
+2026-09-15,23,0,0,0,0,0,,,
+2026-09-16,0,0,0,0,0,0,,,
+2026-09-16,1,0,0,0,0,0,,,
+2026-09-16,2,0,0,0,0,0,,,
+2026-09-16,3,0,0,0,0,0,,,
+2026-09-16,4,0,0,0,0,0,,,
+2026-09-16,5,0,0,0,0,0,,,
+2026-09-16,6,0,0,0,0,0,,,
+2026-09-16,7,0,0,0,0,0,,,
+2026-09-16,8,0,0,1,0,0,,,
+2026-09-16,9,0,0,0,0,0,,,
+2026-09-16,10,0,0,0,0,0,,,
+2026-09-16,11,0,0,0,0,0,,,
+2026-09-16,12,0,0,0,0,0,,,
+2026-09-16,13,0,0,0,0,0,,,
+2026-09-16,14,0,0,0,0,0,,,
+2026-09-16,15,0,0,0,0,0,,,
+2026-09-16,16,0,0,0,0,0,,,
+2026-09-16,17,0,0,0,0,0,,,
+2026-09-16,18,0,0,0,0,0,,,
+2026-09-16,19,0,0,0,0,0,,,
+2026-09-16,20,0,0,0,0,0,,,
+2026-09-16,21,0,0,0,0,0,,,
+2026-09-16,22,0,0,0,0,0,,,
+2026-09-16,23,0,0,0,0,0,,,
+2026-09-17,0,0,0,0,0,0,,,
+2026-09-17,1,0,0,0,0,0,,,
+2026-09-17,2,0,0,0,0,0,,,
+2026-09-17,3,0,0,0,0,0,,,
+2026-09-17,4,0,0,0,0,0,,,
+2026-09-17,5,0,0,0,0,0,,,
+2026-09-17,6,0,0,0,0,0,,,
+2026-09-17,7,0,0,0,0,0,,,
+2026-09-17,8,0,0,0,0,0,,,
+2026-09-17,9,0,0,0,0,0,,,
+2026-09-17,10,0,0,0,0,0,,,
+2026-09-17,11,0,0,0,0,0,,,
+2026-09-17,12,0,0,0,0,0,,,
+2026-09-17,13,0,0,0,0,0,,,
+2026-09-17,14,0,0,0,0,0,,,
+2026-09-17,15,1,1,0,491,44,6c3627734,"Make the vendored FreeType, HarfBuzz and Fontconfig edges optional so an embedder can link…","Make the vendored FreeType, HarfBuzz and Fontconfig edges optional so an embedder can link its own"
+2026-09-17,16,1,1,0,187,187,8d7e04d13,"Derive `harfbuzz_shaper` from the build backend, so the CoreText face is `.coretext`","Derive `harfbuzz_shaper` from the build backend, so the CoreText face is `.coretext`"
+2026-09-17,17,0,0,0,0,0,,,
+2026-09-17,18,0,0,0,0,0,,,
+2026-09-17,19,1,1,0,324,91,9a32f64d6,"Gate the sentry-native link on `-Dsentry`, as `SharedDeps.zig` does","Gate the sentry-native link on `-Dsentry`, as `SharedDeps.zig` does"
+2026-09-17,20,0,0,0,0,0,,,
+2026-09-17,21,1,1,0,177,3,260114fc3,Let an embedder resize the offscreen surface it composites,Let an embedder resize the offscreen surface it composites
+2026-09-17,22,0,0,0,0,0,,,
+2026-09-17,23,0,0,0,0,0,,,
+2026-09-18,0,0,0,0,0,0,,,
+2026-09-18,1,0,0,0,0,0,,,
+2026-09-18,2,0,0,0,0,0,,,
+2026-09-18,3,0,0,0,0,0,,,
+2026-09-18,4,0,0,0,0,0,,,
+2026-09-18,5,0,0,0,0,0,,,
+2026-09-18,6,0,0,0,0,0,,,
+2026-09-18,7,0,0,0,0,0,,,
+2026-09-18,8,0,0,0,0,0,,,
+2026-09-18,9,0,0,0,0,0,,,
+2026-09-18,10,0,0,0,0,0,,,
+2026-09-18,11,0,0,0,0,0,,,
+2026-09-18,12,0,0,0,0,0,,,
+2026-09-18,13,0,0,0,0,0,,,
+2026-09-18,14,0,0,0,0,0,,,
+2026-09-18,15,0,0,1,0,0,,,
+2026-09-18,16,0,0,0,0,0,,,
+2026-09-18,17,0,0,0,0,0,,,
+2026-09-18,18,0,0,0,0,0,,,
+2026-09-18,19,0,0,0,0,0,,,
+2026-09-18,20,0,0,0,0,0,,,
+2026-09-18,21,0,0,0,0,0,,,
+2026-09-18,22,0,0,0,0,0,,,
+2026-09-18,23,0,0,0,0,0,,,
+2026-09-19,0,0,0,0,0,0,,,
+2026-09-19,1,0,0,0,0,0,,,
+2026-09-19,2,0,0,0,0,0,,,
+2026-09-19,3,0,0,0,0,0,,,
+2026-09-19,4,0,0,0,0,0,,,
+2026-09-19,5,0,0,0,0,0,,,
+2026-09-19,6,0,0,0,0,0,,,
+2026-09-19,7,0,0,0,0,0,,,
+2026-09-19,8,0,0,0,0,0,,,
+2026-09-19,9,0,0,0,0,0,,,
+2026-09-19,10,0,0,0,0,0,,,
+2026-09-19,11,0,0,0,0,0,,,
+2026-09-19,12,0,0,0,0,0,,,
+2026-09-19,13,0,0,0,0,0,,,
+2026-09-19,14,0,0,0,0,0,,,
+2026-09-19,15,0,0,0,0,0,,,
+2026-09-19,16,0,0,0,0,0,,,
+2026-09-19,17,0,0,0,0,0,,,
+2026-09-19,18,0,0,0,0,0,,,
+2026-09-19,19,0,0,0,0,0,,,
+2026-09-19,20,0,0,0,0,0,,,
+2026-09-19,21,0,0,0,0,0,,,
+2026-09-19,22,0,0,0,0,0,,,
+2026-09-19,23,0,0,0,0,0,,,
+2026-09-20,0,0,0,0,0,0,,,
+2026-09-20,1,0,0,0,0,0,,,
+2026-09-20,2,0,0,0,0,0,,,
+2026-09-20,3,0,0,0,0,0,,,
+2026-09-20,4,0,0,0,0,0,,,
+2026-09-20,5,0,0,0,0,0,,,
+2026-09-20,6,0,0,0,0,0,,,
+2026-09-20,7,0,0,0,0,0,,,
+2026-09-20,8,0,0,0,0,0,,,
+2026-09-20,9,0,0,0,0,0,,,
+2026-09-20,10,0,0,0,0,0,,,
+2026-09-20,11,0,0,0,0,0,,,
+2026-09-20,12,0,0,0,0,0,,,
+2026-09-20,13,0,0,0,0,0,,,
+2026-09-20,14,0,0,0,0,0,,,
+2026-09-20,15,0,0,0,0,0,,,
+2026-09-20,16,0,0,0,0,0,,,
+2026-09-20,17,0,0,0,0,0,,,
+2026-09-20,18,0,0,0,0,0,,,
+2026-09-20,19,0,0,0,0,0,,,
+2026-09-20,20,0,0,0,0,0,,,
+2026-09-20,21,0,0,0,0,0,,,
+2026-09-20,22,0,0,0,0,0,,,
+2026-09-20,23,0,0,0,0,0,,,
+2026-09-21,0,0,0,0,0,0,,,
+2026-09-21,1,0,0,0,0,0,,,
+2026-09-21,2,0,0,0,0,0,,,
+2026-09-21,3,0,0,0,0,0,,,
+2026-09-21,4,0,0,0,0,0,,,
+2026-09-21,5,0,0,0,0,0,,,
+2026-09-21,6,0,0,0,0,0,,,
+2026-09-21,7,0,0,0,0,0,,,
+2026-09-21,8,0,0,0,0,0,,,
+2026-09-21,9,0,0,0,0,0,,,
+2026-09-21,10,0,0,0,0,0,,,
+2026-09-21,11,0,0,0,0,0,,,
+2026-09-21,12,0,0,0,0,0,,,
+2026-09-21,13,0,0,0,0,0,,,
+2026-09-21,14,0,0,0,0,0,,,
+2026-09-21,15,0,0,0,0,0,,,
+2026-09-21,16,0,0,0,0,0,,,
+2026-09-21,17,0,0,0,0,0,,,
+2026-09-21,18,0,0,0,0,0,,,
+2026-09-21,19,0,0,0,0,0,,,
+2026-09-21,20,0,0,0,0,0,,,
+2026-09-21,21,0,0,0,0,0,,,
+2026-09-21,22,0,0,0,0,0,,,
+2026-09-21,23,0,0,0,0,0,,,
+2026-09-22,0,0,0,0,0,0,,,
+2026-09-22,1,0,0,0,0,0,,,
+2026-09-22,2,0,0,0,0,0,,,
+2026-09-22,3,0,0,0,0,0,,,
+2026-09-22,4,0,0,0,0,0,,,
+2026-09-22,5,0,0,0,0,0,,,
+2026-09-22,6,0,0,0,0,0,,,
+2026-09-22,7,0,0,0,0,0,,,
+2026-09-22,8,0,0,0,0,0,,,
+2026-09-22,9,0,0,0,0,0,,,
+2026-09-22,10,0,0,0,0,0,,,
+2026-09-22,11,0,0,0,0,0,,,
+2026-09-22,12,0,0,0,0,0,,,
+2026-09-22,13,0,0,0,0,0,,,
+2026-09-22,14,0,0,0,0,0,,,
+2026-09-22,15,0,0,0,0,0,,,
+2026-09-22,16,0,0,0,0,0,,,
+2026-09-22,17,0,0,0,0,0,,,
+2026-09-22,18,7,7,6,499,183,92c3f1991,parity task (2/n): pin the three gesture float casts,parity task R13-P2 (2/n): pin the three gesture float casts (UD62)
+2026-09-22,19,18,18,2,2485,292,6d0ad2671,parity task (2/n): test the streaming half of the string-length bound,parity task R13-S2 (2/n): test the streaming half of the A3/A4 string-length bound (UD66)
+2026-09-22,20,44,44,2,3631,536,529e8635a,parity task part: no environment input points a gate at another oracle,parity task R13-G part F2: no environment input points a gate at another oracle (R5)
+2026-09-22,21,18,18,0,3439,409,9cbb840e7,parity task part: absent/off-pin oracle is BLOCKED; every oracle read strips GIT_*,parity task R13-G part F3: absent/off-pin oracle is BLOCKED; every oracle read strips GIT_* (R5)
+2026-09-22,22,9,9,0,1432,150,2b80eed37,"parity task: PageEntry.Id shares its payload bytes as the reference union does, so the was…","parity task R13-L2 (2/4): PageEntry.Id shares its payload bytes as the reference union does, so the wasm32 hyperlink item is the reference's 28/4 (N91); G-REFGEOM drift guard"
+2026-09-22,23,5,5,0,1246,84,0e33d7e16,parity task: row-copy loops degrade to defaults instead of crashing at the style-set ceili…,parity task R13-X: row-copy loops degrade to defaults instead of crashing at the style-set ceiling (UD131/N80)
+2026-09-23,0,1,1,0,1202,151,3588fb201,"parity task: the row-copy degrade is per dimension; mixed-row tests against a control, rel…","parity task R13-X2: the UD131 row-copy degrade is per dimension; mixed-row tests against a control, release VT tests of every route, once-per-copy log test, debug re-clone counter (UD131/N80)"
+2026-09-23,1,2,2,0,461,59,ccdba0a19,parity task (code): reachable on 80x24 (PSL overflow) + log-site:775,parity task R13-X3 (code): UD131 reachable on 80x24 (PSL overflow) + log-site :775
+2026-09-23,2,1,1,0,11,11,48cda13ad,"parity task merge: input size is about 1.2 KB, and IL does not reach it at 80x24","parity task R13-X3 merge: UD131 input size is about 1.2 KB, and IL does not reach it at 80x24"
+2026-09-23,3,0,0,0,0,0,,,
+2026-09-23,4,0,0,0,0,0,,,
+2026-09-23,5,0,0,0,0,0,,,
+2026-09-23,6,0,0,0,0,0,,,
+2026-09-23,7,0,0,0,0,0,,,
+2026-09-23,8,0,0,3,0,0,,,
+2026-09-23,9,46,46,0,12741,2094,ef1b37574,parity task T-C: port std.fmt.parseInt/parseFloat into rustty-args; int/float fields and t…,"parity task T-C: port std.fmt.parseInt/parseFloat into rustty-args; int/float fields and the ssh-cache timestamp accept the reference grammar (closes S67-F3, S67-F4, S71-F2; N120)"
+2026-09-23,10,22,22,0,6577,494,00e689407,"parity task tail-s1b (gate): test-only reference sites, LOG-ABSENT-SITES, LOG-ATTRIBUTION;…","parity task tail-s1b (gate): test-only reference sites, LOG-ABSENT-SITES, LOG-ATTRIBUTION; allowances honest"
+2026-09-23,11,0,0,0,0,0,,,
+2026-09-23,12,0,0,0,0,0,,,
+2026-09-23,13,0,0,0,0,0,,,
+2026-09-23,14,0,0,0,0,0,,,
+2026-09-23,15,0,0,0,0,0,,,
+2026-09-23,16,8,8,0,416,93,c4f39f2cc,parity tail T-E fix round: std.json port enforces Stringify's 256-level limit as an error;…,parity tail T-E fix round: std.json port enforces Stringify's 256-level limit as an error; iterative Value drop (UD182)
+2026-09-23,17,37,37,0,3719,1833,e966575d7,"parity T-A fix round: clipboard replies apply their side effects inside reply, as the refe…","parity T-A fix round: clipboard replies apply their side effects inside reply, as the reference does (S166-F1)"
+2026-09-23,18,36,36,0,6728,833,a4ee37b9a,parity T-F: Modifier.parse and the keybind action numbers use ported Zig parseInt/parseFlo…,"parity T-F: Modifier.parse and the keybind action numbers use ported Zig parseInt/parseFloat (closes S85-F1, S100-F1)"
+2026-09-23,19,11,11,1,1203,233,382f7f5b3,"parity tail: Decision A (run-time artifact for mode 5522, gate); panic note corrected","parity tail T-H2: S6-F2 Decision A (run-time artifact for mode 5522, gate G-ARTIFACT); S43-F6 panic note corrected"
+2026-09-23,20,26,26,0,3137,410,d7d598948,parity T-G: io threads set their crash thread_state; termio Error carries the three failur…,"parity T-G: io threads set their crash thread_state; termio Error carries the three failure-screen members (closes S212-F1, S212-F2; S211-F2 POSIX closed, Windows build pending)"
+2026-09-23,21,20,20,0,2006,2472,d833b00bb,"parity tail-s9: one port of Zig's std.fmt number parsers, in rustty-zigstd","parity tail-s9: one port of Zig's std.fmt number parsers, in rustty-zigstd (N120, N150)"
+2026-09-23,22,21,18,0,1750,445,ff351484d,parity tail: dirnamePosix moves to rustty_zigstd::fs_path so rustty-vt-c builds on wasm32 …,parity tail: dirnamePosix moves to rustty_zigstd::fs_path so rustty-vt-c builds on wasm32 again
+2026-09-23,23,18,15,0,1593,217,5805b4dc8,parity tail: clone batches style runs that land on a different id in the new page,parity tail S-4: clone batches style runs that land on a different id in the new page (N93)
+2026-09-24,0,18,14,0,5704,2517,0778a1b08,"parity tail: rustty-vaxis uucode 0.1.0 -> 2826a37a (UCD 17.0.0, ghostty's wiring) and the …","parity tail S-10b: rustty-vaxis uucode 0.1.0 -> 2826a37a (UCD 17.0.0, ghostty's wiring) and the nextCodePoint API; UD260"
+2026-09-24,1,18,15,0,1916,196,1235d2653,"parity tail: allocator design study — -ALLOCATOR-DESIGN.md (reference routing, options A/B…","parity tail S-7a: allocator design study — S7-ALLOCATOR-DESIGN.md (reference routing, options A/B/C, measured prototype, recommendation B + plan closing S174-F3, S175-F1, S176-F1, S179-F2, S4-F2)"
+2026-09-24,2,18,17,0,6490,2286,ca3257547,"parity tail: import swap to the runtime allocator handle and PageList::init(alloc, opts) s…","parity tail S7-2: import swap to the runtime allocator handle and PageList::init(alloc, opts) signature parity (N264); no behaviour change"
+2026-09-24,3,17,13,0,3272,590,f1c1639b0,parity tail: NOT-CARRIED ledger — audited allowance for deliberately-not-carried reference…,"parity tail S-8d: G3b NOT-CARRIED ledger — audited allowance for deliberately-not-carried reference comments (N283); getMut recorded NON-PORT (N281); 64 rows (bin 35, apprt 29)"
+2026-09-24,4,12,11,0,4285,1665,920b1d1eb,"parity tail: PageList, Screen and Terminal internals through the allocator handle given at…","parity tail S7-3: PageList, Screen and Terminal internals through the allocator handle given at init"
+2026-09-24,5,20,17,0,2254,590,bcd56f297,parity tail: harden the NOT-CARRIED validator (review -); ledger 64 -> 35 rows,parity tail S-8e: harden the G3b NOT-CARRIED validator (review W1-W4); ledger 64 -> 35 rows
+2026-09-24,6,11,7,4,2617,956,a3e92e1d6,"parity tail: user ratified strip-gag-prose for code comments (drop jokes, keep facts)","parity tail: user ratified strip-gag-prose for code comments (drop jokes, keep facts)"
+2026-09-24,7,18,18,0,5302,1758,c3e95b823,"parity tail: kitty graphics, APC builders and glyph payloads through the caller's allocato…","parity tail S7-4: kitty graphics, APC builders and glyph payloads through the caller's allocator"
+2026-09-24,8,4,4,4,151,31,09ae8c5cb,parity tail: the C-API failure sweep reaches the continuation tracker and the clipboard tr…,parity tail S7-4: the C-API failure sweep reaches the continuation tracker and the clipboard trampolines' spill arrays
+2026-09-24,9,0,0,0,0,0,,,
+2026-09-24,10,0,0,0,0,0,,,
+2026-09-24,11,0,0,0,0,0,,,
+2026-09-24,12,0,0,0,0,0,,,
+2026-09-24,13,0,0,0,0,0,,,
+2026-09-24,14,0,0,0,0,0,,,
+2026-09-24,15,0,0,0,0,0,,,
+2026-09-24,16,0,0,0,0,0,,,
+2026-09-24,17,0,0,0,0,0,,,
+2026-09-24,18,0,0,0,0,0,,,
+2026-09-24,19,0,0,0,0,0,,,
+2026-09-24,20,0,0,0,0,0,,,
+2026-09-24,21,0,0,0,0,0,,,
+2026-09-24,22,0,0,0,0,0,,,
+2026-09-24,23,0,0,0,0,0,,,
+2026-09-25,0,0,0,0,0,0,,,
+2026-09-25,1,0,0,0,0,0,,,
+2026-09-25,2,0,0,0,0,0,,,
+2026-09-25,3,0,0,0,0,0,,,
+2026-09-25,4,0,0,0,0,0,,,
+2026-09-25,5,0,0,0,0,0,,,
+2026-09-25,6,0,0,0,0,0,,,
+2026-09-25,7,0,0,0,0,0,,,
+2026-09-25,8,0,0,0,0,0,,,
+2026-09-25,9,0,0,0,0,0,,,
+2026-09-25,10,0,0,0,0,0,,,
+2026-09-25,11,0,0,0,0,0,,,
+2026-09-25,12,0,0,0,0,0,,,
+2026-09-25,13,0,0,0,0,0,,,
+2026-09-25,14,0,0,0,0,0,,,
+2026-09-25,15,0,0,0,0,0,,,
+2026-09-25,16,0,0,0,0,0,,,
+2026-09-25,17,0,0,0,0,0,,,
+2026-09-25,18,0,0,0,0,0,,,
+2026-09-25,19,0,0,0,0,0,,,
+2026-09-25,20,0,0,0,0,0,,,
+2026-09-25,21,0,0,0,0,0,,,
+2026-09-25,22,0,0,0,0,0,,,
+2026-09-25,23,0,0,0,0,0,,,
+2026-09-26,0,0,0,0,0,0,,,
+2026-09-26,1,0,0,0,0,0,,,
+2026-09-26,2,0,0,0,0,0,,,
+2026-09-26,3,0,0,0,0,0,,,
+2026-09-26,4,0,0,0,0,0,,,
+2026-09-26,5,0,0,0,0,0,,,
+2026-09-26,6,0,0,0,0,0,,,
+2026-09-26,7,0,0,0,0,0,,,
+2026-09-26,8,0,0,0,0,0,,,
+2026-09-26,9,0,0,3,0,0,,,
+2026-09-26,10,0,0,0,0,0,,,
+2026-09-26,11,12,10,1,620,193,8586aae1c,parity tail: the PNG seam hands the decoder's buffer over; decodePng copies it fallibly an…,parity tail S7-4b: the PNG seam hands the decoder's buffer over; decodePng copies it fallibly and frees it through the decode allocator (review F1)
+2026-09-26,12,25,22,0,3202,501,4d5ee8996,parity tail: rustty-vt ports its commented-out reference log sites,parity tail S-1c: rustty-vt ports its commented-out reference log sites (N310)
+2026-09-26,13,15,14,0,4505,1733,dd6599180,parity tail: OSC commands borrow the parser's storage; color and kitty-color lists on pars…,"parity tail S7-7: OSC commands borrow the parser's storage; color and kitty-color lists on parser.alloc (S174-F3, N263)"
+2026-09-26,14,11,8,0,2176,931,b0ceb577d,parity tail: search allocations go through the search's allocator; the registry entry and …,parity tail S7-6: search allocations go through the search's allocator; the registry entry and tracked pins stay on the terminal's (N262)
+2026-09-26,15,6,5,0,1915,15,b9b72bd23,"parity tail: search routing tests, failure sweeps, and a feed/run that report OutOfMemory …","parity tail S7-6: search routing tests, failure sweeps, and a feed/run that report OutOfMemory instead of spinning (R13 UD305)"
+2026-09-26,16,16,15,0,2167,344,9d3132fc1,"parity tail: the C API's allocating writers (formatter and selection format_alloc, snapsho…","parity tail S7-8: the C API's allocating writers (formatter and selection format_alloc, snapshot encode_alloc, continuation_alloc, restoreContinuation, the snapshot's continuation copy) grow through the reference's allocator and hand their buffer over with toOwnedSlice (N331); the snapshot FailingAllocator test runs as written"
+2026-09-26,17,0,0,0,0,0,,,
+2026-09-26,18,0,0,0,0,0,,,
+2026-09-26,19,0,0,0,0,0,,,
+2026-09-26,20,0,0,0,0,0,,,
+2026-09-26,21,0,0,0,0,0,,,
+2026-09-26,22,0,0,0,0,0,,,
+2026-09-26,23,0,0,0,0,0,,,
+2026-09-27,0,0,0,0,0,0,,,
+2026-09-27,1,0,0,0,0,0,,,
+2026-09-27,2,0,0,0,0,0,,,
+2026-09-27,3,0,0,0,0,0,,,
+2026-09-27,4,0,0,0,0,0,,,
+2026-09-27,5,0,0,0,0,0,,,
+2026-09-27,6,0,0,0,0,0,,,
+2026-09-27,7,0,0,1,0,0,,,
+2026-09-27,8,0,0,2,0,0,,,
+2026-09-27,9,7,6,5,453,76,16ef8680e,parity tail: glyph_protocol_checks_the_glossary_allocator tears the terminal down before r…,parity tail: glyph_protocol_checks_the_glossary_allocator tears the terminal down before re-raising its expected panic (Miri reported the leak)
+2026-09-27,10,9,8,0,1379,200,99aac6742,"parity tail:, — rustty-termio's Windows arms compile and run","parity tail W-1: S211-F2, S211-F3 — rustty-termio's Windows arms compile and run"
+2026-09-27,11,4,4,0,683,119,897eca45b,"parity tail: records — filed, allocator call-shape residuals, Tier 3 recorded, design outc…","parity tail S7-9: records — N260-N264 filed, N360 allocator call-shape residuals, F-008 Tier 3 recorded, design outcome"
+2026-09-27,12,12,12,4,2195,382,ca2ef434b,parity tail: the application tier compiles and runs on Windows,parity tail W-2: the application tier compiles and runs on Windows (N351)
+2026-09-27,13,16,16,5,9818,140,b2cb732a0,"parity tail: the Windows exe differential (rustty.exe vs Ghostty's exe at the pin), its go…","parity tail W-4: the Windows exe differential (rustty.exe vs Ghostty's exe at the pin), its goldens, the CI step, and docs/windows.md"
+2026-09-27,14,21,19,1,2047,256,98d9c5d08,parity tail: EnvMap folds names like Zig's EnvNameHashContext on Windows (toUpperWtf16) an…,"parity tail W-5: EnvMap folds names like Zig's EnvNameHashContext on Windows (toUpperWtf16) and Environ reads the live environment there (N340, N352)"
+2026-09-27,15,4,4,0,109,16,e9a68aa69,parity tail: records: fixed + ghostty-bug-fixes row; closed with Windows evidence; (POSIX …,"parity tail W-5: records: UD344 fixed (R13) + ghostty-bug-fixes row; N340, N352 closed with Windows evidence; N381 (POSIX createMap first-wins vs Zig last-wins, recorded)"
+2026-09-27,16,3,3,6,470,96,b4d5ce6c6,parity tail: POSIX createMap/getAlloc keep the last duplicate as Zig does; map-based conta…,parity tail W-5b: POSIX createMap/getAlloc keep the last duplicate as Zig does; map-based contains/containsUnempty; +edit-config probes with containsUnempty (N381)
+2026-09-27,17,0,0,0,0,0,,,
+2026-09-27,18,7,7,2,1749,1578,8a7f49a8f,parity tail: prettier --write the 25 Markdown files flags,parity tail C-1: prettier --write the 25 Markdown files G-LINT flags
+2026-09-27,19,0,0,0,0,0,,,
+2026-09-27,20,10,10,0,907,181,4b47c738a,parity tail: rustty-font-shaper's 88 memcheck leaks fixed; SharedGrid::init frees the reso…,"parity tail L-5: rustty-font-shaper's 88 memcheck leaks fixed; SharedGrid::init frees the resolver it consumed on error (N404, UD350 R13)"
+2026-09-27,21,5,4,0,255,14,7d8a101a8,parity tail: records: (tool-BLOCKED gates run green; font-shaper and xev leaks fixed; valg…,"parity tail L-5: records: N400-N407 (tool-BLOCKED gates run green; font-shaper and xev leaks fixed; valgrind scope survey), UD350 (SharedGridSet.ref leaks the collection when SharedGrid.init fails, R13)"
+2026-09-27,22,1,1,0,101,0,f2c7d0180,parity tail: rustty-vt-c Miri lane green: 5 OS-boundary and 7 budget exceptions,parity tail C-1: rustty-vt-c Miri lane green: 5 OS-boundary and 7 budget exceptions (G6)
+2026-09-27,23,0,0,0,0,0,,,
+2026-09-28,0,0,0,0,0,0,,,
+2026-09-28,1,0,0,0,0,0,,,
+2026-09-28,2,0,0,0,0,0,,,
+2026-09-28,3,5,5,0,441,7,26453ffbd,"parity tail: rustty-vt Miri triage: 34 tests move to, 20 both-lane and 12 OS-boundary/budg…","parity tail C-1: rustty-vt Miri triage: 34 tests move to G6c, 20 both-lane and 12 OS-boundary/budget exceptions (G6)"
+2026-09-28,4,0,0,0,0,0,,,
+2026-09-28,5,0,0,0,0,0,,,
+2026-09-28,6,0,0,0,0,0,,,
+2026-09-28,7,0,0,2,0,0,,,
+2026-09-28,8,12,11,2,2248,265,40320c7e1,parity tail: wasm simd128 default and -Dstrip defaults (items 6 and 8),"parity tail B-2: wasm simd128 default and -Dstrip defaults (N422, N377 items 6 and 8)"
+2026-09-28,9,13,12,0,2046,222,cf27859fe,"parity tail: covers the whole workspace (62 entries), sharded into ci.yml's own valgrind j…","parity tail L-6: G-VALGRIND covers the whole workspace (62 entries), sharded into ci.yml's own valgrind job; child summaries count; llvmpipe suppressions with a C probe as evidence; build failures RED (N412, N413, N416, N417)"
+2026-09-28,10,7,7,0,405,58,c05110179,parity tail: port the -Dpie default: RUSTTY_PIE (unset/false = -no-pie for the Linux/FreeB…,"parity tail B-2b: port the -Dpie default: RUSTTY_PIE (unset/false = -no-pie for the Linux/FreeBSD rustty exe, true = PIE, other values refused); nix and both flatpak manifests set RUSTTY_PIE=true (review B-2 F2)"
+2026-09-28,11,1,1,0,22,7,40e6bbd64,"parity tail: three late rustty-vt Miri timeouts: two to, one both-lane (ASan: 1 passed)","parity tail C-1: three late rustty-vt Miri timeouts: two to G6c, one both-lane (ASan: 1 passed)"
+2026-09-28,12,2,2,0,56,11,8b00cda0d,parity tail: 's c-vt goldens re-recorded at the pin; leg B masks the OSC 5522 password; c-…,parity tail C-1: N395 G4's c-vt goldens re-recorded at the pin; leg B masks the OSC 5522 password; c-vt-search and c-vt-snapshot covered
+2026-09-28,13,11,11,0,4619,2053,feeae4d6b,"parity tail: every xev backend runs through a raw *mut Loop, callers that re-enter through…","parity tail X-2: every xev backend runs through a raw *mut Loop, callers that re-enter through a stored loop pointer enter through run_raw (N431, N430)"
+2026-09-28,14,27,19,4,3543,225,7fb384741,"parity tail: ci.yml ports the remaining test.yml jobs (gaps 3-5, 7, 9, 11, 13-16, 18-21; A…","parity tail CI-1: ci.yml ports the remaining test.yml jobs (N376 gaps 3-5, 7, 9, 11, 13-16, 18-21; N429 Android; the N420/N421/N422 test-simd, test-i18n and build-nix legs), the reference's on:/concurrency, skip recorded in NON_PORTS G13 §6"
+2026-09-28,15,18,14,0,1795,336,7fba88fe4,parity-closure Task 41 step 5: closure record; the audit README points at it,parity-closure Task 41 step 5: closure record; the audit README points at it
+2026-09-28,16,1,1,8,188,1,079cc21e7,parity-closure: keep the prototype harness in-tree; document how to continue the remaining…,parity-closure: keep the S7 prototype harness in-tree; document how to continue the remaining work
+2026-09-28,17,5,5,3,4805,159,284d59d62,phase 7 plan: defer benchmarks and full lanes until after the port,phase 7 plan: defer benchmarks and full lanes until after the port
+2026-09-28,18,2,2,0,351,6,c5000e050,gates: tracks the <-> docs check in ci.sh,gates: G-UDDOCS tracks the UD <-> docs check in ci.sh (P7-W0 T2)
+2026-09-28,19,7,7,0,69019,3739,d08c5e6de,"renderer: GL leaves of the EGL + DMA-BUF redesign — per-thread GL table, EGL image export,…","renderer: GL leaves of the EGL + DMA-BUF redesign — per-thread GL table, EGL image export, Dmabuf, texture-backed Target (adf161473, 590ab157f, fa2ec3a6a, ab34b8b13, cc140d478, 8619becb2) (P7-W7 T1)"
+2026-09-28,20,19,14,1,5314,1012,07240cdab,terminal: hash map and RefCountedSet init from zeroed memory; map caches capacity and entr…,"terminal: hash map and RefCountedSet init from zeroed memory; map caches capacity and entry pointers (c0a4f80d8, 6112935a2) (P7-W1 T2)"
+2026-09-28,21,12,11,2,8752,4729,85101adbe,"i18n/themes/version: re-mirror 10 po catalogs, revendor themes 606->617, trim std.ascii.wh…","i18n/themes/version: re-mirror 10 po catalogs, revendor themes 606->617, trim std.ascii.whitespace in GitVersion (5ca09acf6, 11d1cc4fc, 75166e9eb) (P7-W10 T3)"
+2026-09-28,22,0,0,0,0,0,,,
+2026-09-28,23,0,0,0,0,0,,,
+2026-09-29,0,0,0,0,0,0,,,
+2026-09-29,1,0,0,0,0,0,,,
+2026-09-29,2,0,0,0,0,0,,,
+2026-09-29,3,0,0,0,0,0,,,
+2026-09-29,4,0,0,0,0,0,,,
+2026-09-29,5,0,0,0,0,0,,,
+2026-09-29,6,0,0,0,0,0,,,
+2026-09-29,7,0,0,0,0,0,,,
+2026-09-29,8,0,0,0,0,0,,,
+2026-09-29,9,0,0,0,0,0,,,
+2026-09-29,10,0,0,0,0,0,,,
+2026-09-29,11,0,0,0,0,0,,,
+2026-09-29,12,0,0,0,0,0,,,
+2026-09-29,13,0,0,0,0,0,,,
+2026-09-29,14,0,0,0,0,0,,,
+2026-09-29,15,4,4,14,7299,3926,9dbe4cdeb,"renderer, apprt: renderer-owned EGL frames, LatestFrame, GTK RenderSurface with fractional…","renderer, apprt: renderer-owned EGL frames, LatestFrame, GTK RenderSurface with fractional scaling (2f0b65346) (P7-W7 T2)"
+2026-09-29,16,17,12,0,3373,1018,301d72d60,terminal: DECRQM answers ANSI queries and keeps 16-bit mode numbers; modes looked up throu…,"terminal: DECRQM answers ANSI queries and keeps 16-bit mode numbers; modes looked up through a const sorted ComptimeIntSet (9dc0d974e, 3beb6d717, 079502e23) (P7-W4 T2)"
+2026-09-29,17,9,6,0,2088,399,7043dc96e,"terminal: batch DEC-special/British charset print, fix reverse-wrap cursor jump, fix word-…","terminal: batch DEC-special/British charset print, fix reverse-wrap cursor jump, fix word-selection hard breaks and wide chars (a4f0d9f4a, d4f45bee3, c4f15c884, a3e80a685) (P7-W4 T3)"
+2026-09-29,18,19,14,1,4971,1387,c239609a6,"core: free the out-of-line renderer after deinit, raw-self core and embedded App entries a…","core: free the out-of-line renderer after deinit, raw-self core and embedded App entries across host callbacks, snapshot performAllAction's surface list (N441, N442, N443, N448) (P7-W7 T5b fix round 1)"
+2026-09-29,19,15,10,0,2342,570,60b995159,renderer: refresh the OffscreenContext drop comment and the Metal LIFETIMES rows for Metal…,renderer: refresh the OffscreenContext drop comment and the Metal LIFETIMES rows for Metal::deinit (P7-W7 T5b review follow-up)
+2026-09-29,20,15,10,0,3473,631,8fa5ee336,"core: own allocations for the Surface's io, io_thread, renderer_thread, renderer_state and…","core: own allocations for the Surface's io, io_thread, renderer_thread, renderer_state and search state (N444) (P7-W7 T5c)"
+2026-09-29,21,13,10,2,5194,628,d63bae766,termio: raw-self io writer-thread Termio methods and backend chain; &self pty process-info…,termio: raw-self io writer-thread Termio methods and backend chain; &self pty process-info accessors (N449) (P7-W7 T5d)
+2026-09-29,22,12,7,0,4278,1241,3c5e3b282,terminal: raw-self stream dispatch and live-handler routing for re-entrant effect callback…,terminal: raw-self stream dispatch and live-handler routing for re-entrant effect callbacks (N452) (P7-W2 T9)
+2026-09-29,23,2,2,6,921,107,f26d200aa,"apprt: raw-pointer Target::Surface, no protector across perform_action","apprt: raw-pointer Target::Surface, no protector across perform_action (N456) (P7-W6 T3)"
+2026-09-30,0,18,11,0,1739,190,7366d6c8f,gtk: resize the window for CSI 8 t; clamp oversize deltas (219cca932),gtk: resize the window for CSI 8 t; clamp oversize deltas (UD372) (219cca932) (P7-W6 T2)
+2026-09-30,1,11,8,0,273,46,4c2da5c2d,windows: regenerate the show-config goldens at the pin; the exe recipe gains a posix_c scr…,windows: regenerate the show-config goldens at the pin; the exe recipe gains a posix_c scratch change (P7-W12 T1b)
+2026-09-30,2,7,6,0,1747,109,8cd8859ef,"records: Phase 7 finale — tests checklist, phase README, ORACLE_SYNC note, parity-closure …","records: Phase 7 finale — tests checklist, phase README, ORACLE_SYNC note, parity-closure at the new pin (P7-W12 T1)"
+2026-09-30,3,0,0,0,0,0,,,
+2026-09-30,4,0,0,0,0,0,,,
+2026-09-30,5,0,0,0,0,0,,,
+2026-09-30,6,0,0,0,0,0,,,
+2026-09-30,7,0,0,0,0,0,,,
+2026-09-30,8,1,1,5,139,136,c03f11fcb,lint: prettier the ghostty-bug-fixes table; typos ignores the 'Earl Grey' theme name (lane…,lint: prettier the ghostty-bug-fixes table; typos ignores the 'Earl Grey' theme name (P7-W12 T2 lane C G-LINT)
+2026-09-30,9,4,4,0,427,60,3b2e44bd1,lockfiles: refresh the fuzz and mirihar-pagelist-compress lockfiles for the Phase 7 depend…,lockfiles: refresh the fuzz and mirihar-pagelist-compress lockfiles for the Phase 7 dependency graph (P7-W12 T2)
+2026-09-30,10,2,2,0,104,12,4bae2264b,cmake: RUSTTY_CARGO_TARGET_DIR; xtask's CMake tests build in their own target dir,cmake: RUSTTY_CARGO_TARGET_DIR; xtask's CMake tests build in their own target dir (N482) (P7-W12 T3)
+2026-09-30,11,5,4,1,362,65,fe15f5bc9,dcimgui-sys: TextColored takes its colour by pointer; rustc and clang-cl disagreed on the …,dcimgui-sys: TextColored takes its colour by pointer; rustc and clang-cl disagreed on the variadic HFA on Windows ARM64 (N485) (P7-W12 T4)
+2026-09-30,12,2,2,0,341,72,9a0eda24a,"gates: the oracle and the zig cache are located, not hardcoded; restore_zig_deps matches t…","gates: the oracle and the zig cache are located, not hardcoded; restore_zig_deps matches the pin (N483) (P7-W12 T5)"
+2026-09-30,13,0,0,0,0,0,,,
+2026-09-30,14,2,2,2,82,20,a447efb92,"nix: passes on Linux: absolute libdir in the soname links, current library names, formatte…","nix: G-NIX passes on Linux: absolute libdir in the soname links, current library names, formatter check without the dev shell; N487 and N488 closed (P7-W12 T5)"
+2026-09-30,15,4,3,0,688,103,5033457bd,gates: builds the dev shell again (BLOCKED only on); 's main pin check has a negative cont…,gates: G-NIX builds the dev shell again (BLOCKED only on N489); G1b's main() pin check has a negative control; the new resolver users join G-ORACLE-SH-SELF (P7-W12 T5 fix round 1)
+2026-09-30,16,0,0,0,0,0,,,
+2026-09-30,17,0,0,0,0,0,,,
+2026-09-30,18,0,0,0,0,0,,,
+2026-09-30,19,1,1,7,87,1,e3bd7b9f2,miri: the bash shell-integration gate is a isolation exception; opened with the measuremen…,"miri: the bash shell-integration gate is a C-1 isolation exception; N491 opened with the G6 measurements, G6c pending (P7-W12 T6, part 1)"
+2026-09-30,20,3,2,1,65,30,2bfb1c633,miri: four Phase 7 TIMEOUTs move to after passing it under Stacked and Tree Borrows (part …,"miri: four Phase 7 G6 TIMEOUTs move to G6c after passing it under Stacked and Tree Borrows (P7-W12 T6, part 2)"
+2026-09-30,21,0,0,0,0,0,,,
+2026-09-30,22,2,1,0,83,3,f22675873,miri: the missed search/terminal prepend test is excepted from both lanes; three tests sta…,miri: the missed search/terminal prepend test is excepted from both lanes; three S7-6 tests stay in G6 (P7-W12 T6b)
+2026-09-30,23,1,1,0,45,21,1298f91a5,search: four PageListSearch tests reach their PageList through one raw root (Tree Borrows),"search: four PageListSearch tests reach their PageList through one raw root (N492, Tree Borrows)"
+2026-10-01,0,2,1,0,61,5,5f8868aed,"vt tests: raw_all_equal compares in memcmp chunks, tractable under Miri","vt tests: raw_all_equal compares in memcmp chunks, tractable under Miri (N493, P7-W12 T8)"
+2026-10-01,1,0,0,0,0,0,,,
+2026-10-01,2,0,0,0,0,0,,,
+2026-10-01,3,0,0,0,0,0,,,
+2026-10-01,4,0,0,0,0,0,,,
+2026-10-01,5,0,0,0,0,0,,,
+2026-10-01,6,0,0,0,0,0,,,
+2026-10-01,7,0,0,0,0,0,,,
+2026-10-01,8,3,2,1,86,22,7e1d7bc0c,pagelist: two PageAllocation tests reach their PageList through one raw root (Tree Borrows…,"pagelist: two PageAllocation tests reach their PageList through one raw root (N492, Tree Borrows)"
+2026-10-01,9,0,0,1,0,0,,,
+2026-10-01,10,0,0,0,0,0,,,
+2026-10-01,11,0,0,0,0,0,,,
+2026-10-01,12,3,2,0,155,7,d61e6758d,kitty tests that reach the Wuffs FFI no longer abort the vt binary (routing test gets a Mi…,"N494: kitty tests that reach the Wuffs FFI no longer abort the G6 vt binary (routing test gets a Miri corpus; 24 Wuffs-bound tests excepted, ASan-covered)"
+2026-10-01,13,0,0,0,0,0,,,
+2026-10-01,14,0,0,0,0,0,,,
+2026-10-01,15,0,0,4,0,0,,,
+2026-10-01,16,30,19,2,212046,210627,2a24cf6c5,split: rustty-vt terminal.rs into 19 topic files (A),split: rustty-vt terminal.rs into 19 topic files (P7-W13 A)
+2026-10-01,17,1,1,0,2,1,1d857cf3b,termio: the errno table comment names where its host-strerror tests now live (audit follow…,termio: the errno table comment names where its host-strerror tests now live (P7-W13 audit follow-up)
+2026-10-01,18,0,0,1,0,0,,,
+2026-10-01,19,0,0,0,0,0,,,
+2026-10-01,20,0,0,1,0,0,,,
+2026-10-01,21,2,2,4,1038,55,2d04310b0,"docs: memory-safety lanes design (Miri on nextest + ASan/LSan/MSan/TSan matrix), approved …","docs: memory-safety lanes design (Miri on nextest + ASan/LSan/MSan/TSan matrix), approved 2026-10-01"
+2026-10-01,22,1,1,0,36,6,a5e53a938,"gates: first-run triage: allocator_may_return_null, an 8 MiB default stack under the sanit…","gates: G-ASAN first-run triage: allocator_may_return_null, an 8 MiB default stack under the sanitizers, the rustty-vt wuffs lane, Linux feature lanes"
+2026-10-01,23,1,1,0,212,12,92672bd28,"first-run triage (WIP): bench clones freed, test-side leaks/forks, Mesa suppressions, exec…","G-LSAN first-run triage (WIP): UD376 bench clones freed, N496 test-side leaks/forks, Mesa suppressions, executed-test counting"
+2026-10-02,0,2,2,0,258,5,610a4f6dc,triage: rustty_app_free drops the cloned config; records; suppressions register; --crates …,G-LSAN triage: N498 rustty_app_free drops the cloned config; UD376 records; suppressions register; --crates keeps feature commas
+2026-10-02,1,1,1,0,75,17,76cb7f4b0,"phase-1 scope from the rvm probe: 58 members in, glslang-sys/rustty-renderer/xtask out wit…","G-MSAN phase-1 scope from the rvm probe: 58 members in, glslang-sys/rustty-renderer/xtask out with reasons; stat shim only for fontconfig-sys; MSan smoke link; OOM-warning classifier"
+2026-10-02,2,3,3,5,149,35,e7704d2f6,sanitizers.sh: one shared target dir per sanitizer pass by default (--per-crate-target for…,sanitizers.sh: one shared target dir per sanitizer pass by default (--per-crate-target for low-disk hosts); pass wall time in the summary
+2026-10-02,3,1,1,0,34,12,364c0359e,"records: final results, suppressions register; CI job uses --per-crate-target","P7-W14 records: final G-ASAN/G-LSAN/G-MSAN results, suppressions register, V30, CI job uses --per-crate-target"
+2026-10-02,4,1,1,0,536,176,7ddf62ffd,"fix round 1: withdrawn, bench chunks per step; cross-check over every Miri exception by mo…","P7-W14 fix round 1: UD376 withdrawn (N499), bench chunks per step; cross-check over every Miri exception by module path with a per-OS expected-absent list; rustty-renderer in G-MSAN with named skips; self-test arms for scope bookkeeping, BUILD, disk floor, SAN_ONLY; wording fixes"
+2026-10-02,5,4,3,0,173,26,054781071,"fix round 2 (WIP): exact enclosing-mod matching, FAILED expected-absent RED, stale MSAN_SK…","P7-W14 fix round 2 (WIP): exact enclosing-mod matching, FAILED expected-absent RED, stale MSAN_SKIPS RED, narrow renderer opengl skips"
+2026-10-02,6,1,1,0,581,37,5e8cbd918,Miri lanes on cargo miri nextest (run_miri_nextest helper) and the Tree Borrows lane,"P7-W15: Miri lanes on cargo miri nextest (run_miri_nextest helper; G6, G6c) and the Tree Borrows lane G6t"
+2026-10-02,7,0,0,0,0,0,,,
+2026-10-02,8,0,0,5,0,0,,,
+2026-10-02,9,0,0,4,0,0,,,
+2026-10-02,10,7,7,0,1421,277,ac750e2af,runs on macOS (rustc's ASan runtime has a working leak checker); MSan/HWASan BLOCKED reaso…,P7-W16a: G-LSAN runs on macOS (rustc's ASan runtime has a working leak checker); MSan/HWASan BLOCKED reasons cited
+2026-10-02,11,0,0,2,0,0,,,
+2026-10-02,12,1,1,0,30,19,20a586b20,"on macOS GREEN (9,850 tests, 0 findings); cross-check parses prefixed result lines","P7-W16a: G-LSAN on macOS GREEN (9,850 tests, 0 findings); S18; cross-check parses prefixed result lines"
+2026-10-02,13,6,5,0,345,31,18172f1cc,"fix round 1 (WIP): narrowed to two frames, anchored, Darwin negative-control arms in, all-…","P7-W16a fix round 1 (WIP): S9 narrowed to two frames, S4 anchored, Darwin negative-control arms in G-SAN-SELF, N502 all-platform scope and Linux gap, ThreadSharedBox docs"
+2026-10-02,14,2,2,1,141,8,3f8627a1b,"fix round 2 (WIP): per-crate hang bound in sanitizers.sh (HANG is RED, tree killed by PID)…","P7-W16a fix round 2 (WIP): per-crate hang bound in sanitizers.sh (HANG is RED, tree killed by PID), G-SAN-SELF hang arms, N505"
+2026-10-02,15,6,5,0,206,54,04f0a894c,rustty-renderer scoped to its Miri-runnable modules (FFI-bound modules excluded with reaso…,G6t: rustty-renderer scoped to its Miri-runnable modules (FFI-bound modules excluded with reasons; single-test exclusions checked to name one test)
+2026-10-02,16,0,0,0,0,0,,,
+2026-10-02,17,0,0,0,0,0,,,
+2026-10-02,18,0,0,0,0,0,,,
+2026-10-02,19,0,0,0,0,0,,,
+2026-10-02,20,0,0,0,0,0,,,
+2026-10-02,21,0,0,0,0,0,,,
+2026-10-02,22,0,0,0,0,0,,,
+2026-10-02,23,0,0,0,0,0,,,
+2026-10-03,0,0,0,0,0,0,,,
+2026-10-03,1,0,0,0,0,0,,,
+2026-10-03,2,0,0,0,0,0,,,
+2026-10-03,3,0,0,0,0,0,,,
+2026-10-03,4,0,0,0,0,0,,,
+2026-10-03,5,0,0,0,0,0,,,
+2026-10-03,6,0,0,0,0,0,,,
+2026-10-03,7,0,0,0,0,0,,,
+2026-10-03,8,0,0,0,0,0,,,
+2026-10-03,9,0,0,0,0,0,,,
+2026-10-03,10,0,0,0,0,0,,,
+2026-10-03,11,0,0,0,0,0,,,
+2026-10-03,12,0,0,0,0,0,,,
+2026-10-03,13,0,0,0,0,0,,,
+2026-10-03,14,0,0,0,0,0,,,
+2026-10-03,15,0,0,0,0,0,,,
+2026-10-03,16,0,0,0,0,0,,,
+2026-10-03,17,0,0,0,0,0,,,
+2026-10-03,18,0,0,0,0,0,,,
+2026-10-03,19,0,0,0,0,0,,,
+2026-10-03,20,0,0,0,0,0,,,
+2026-10-03,21,0,0,0,0,0,,,
+2026-10-03,22,0,0,0,0,0,,,
+2026-10-03,23,0,0,0,0,0,,,
+2026-10-04,0,0,0,0,0,0,,,
+2026-10-04,1,0,0,0,0,0,,,
+2026-10-04,2,0,0,0,0,0,,,
+2026-10-04,3,0,0,0,0,0,,,
+2026-10-04,4,0,0,0,0,0,,,
+2026-10-04,5,0,0,0,0,0,,,
+2026-10-04,6,0,0,0,0,0,,,
+2026-10-04,7,0,0,0,0,0,,,
+2026-10-04,8,0,0,0,0,0,,,
+2026-10-04,9,0,0,0,0,0,,,
+2026-10-04,10,0,0,0,0,0,,,
+2026-10-04,11,0,0,0,0,0,,,
+2026-10-04,12,0,0,0,0,0,,,
+2026-10-04,13,0,0,0,0,0,,,
+2026-10-04,14,0,0,0,0,0,,,
+2026-10-04,15,0,0,0,0,0,,,
+2026-10-04,16,0,0,0,0,0,,,
+2026-10-04,17,0,0,0,0,0,,,
+2026-10-04,18,0,0,0,0,0,,,
+2026-10-04,19,0,0,0,0,0,,,
+2026-10-04,20,0,0,0,0,0,,,
+2026-10-04,21,0,0,0,0,0,,,
+2026-10-04,22,0,0,0,0,0,,,
+2026-10-04,23,0,0,0,0,0,,,
+2026-10-05,0,0,0,0,0,0,,,
+2026-10-05,1,0,0,0,0,0,,,
+2026-10-05,2,0,0,0,0,0,,,
+2026-10-05,3,0,0,0,0,0,,,
+2026-10-05,4,0,0,0,0,0,,,
+2026-10-05,5,0,0,0,0,0,,,
+2026-10-05,6,0,0,0,0,0,,,
+2026-10-05,7,0,0,0,0,0,,,
+2026-10-05,8,0,0,0,0,0,,,
+2026-10-05,9,0,0,0,0,0,,,
+2026-10-05,10,0,0,0,0,0,,,
+2026-10-05,11,0,0,0,0,0,,,
+2026-10-05,12,0,0,0,0,0,,,
+2026-10-05,13,0,0,0,0,0,,,
+2026-10-05,14,0,0,0,0,0,,,
+2026-10-05,15,0,0,0,0,0,,,
+2026-10-05,16,0,0,0,0,0,,,
+2026-10-05,17,0,0,0,0,0,,,
+2026-10-05,18,0,0,0,0,0,,,
+2026-10-05,19,0,0,0,0,0,,,
+2026-10-05,20,0,0,0,0,0,,,
+2026-10-05,21,0,0,0,0,0,,,
+2026-10-05,22,0,0,0,0,0,,,
+2026-10-05,23,0,0,0,0,0,,,
+2026-10-06,0,0,0,0,0,0,,,
+2026-10-06,1,0,0,0,0,0,,,
+2026-10-06,2,0,0,0,0,0,,,
+2026-10-06,3,0,0,0,0,0,,,
+2026-10-06,4,0,0,0,0,0,,,
+2026-10-06,5,0,0,0,0,0,,,
+2026-10-06,6,0,0,0,0,0,,,
+2026-10-06,7,0,0,0,0,0,,,
+2026-10-06,8,0,0,0,0,0,,,
+2026-10-06,9,0,0,0,0,0,,,
+2026-10-06,10,0,0,0,0,0,,,
+2026-10-06,11,0,0,0,0,0,,,
+2026-10-06,12,0,0,0,0,0,,,
+2026-10-06,13,0,0,0,0,0,,,
+2026-10-06,14,0,0,0,0,0,,,
+2026-10-06,15,0,0,0,0,0,,,
+2026-10-06,16,0,0,0,0,0,,,
+2026-10-06,17,0,0,0,0,0,,,
+2026-10-06,18,0,0,0,0,0,,,
+2026-10-06,19,0,0,3,0,0,,,
+2026-10-06,20,0,0,0,0,0,,,
+2026-10-06,21,0,0,0,0,0,,,
+2026-10-06,22,0,0,0,0,0,,,
+2026-10-06,23,3,2,0,374,90,3ba19cefb,review fixes: every run checks its scope; renderer scope back to the 66 Miri-passing tests,G6t review fixes: every run checks its scope; renderer scope back to the 66 Miri-passing tests (P7-W15)
+2026-10-07,0,3,2,0,512,36,ed830178c,gate: ThreadSanitizer over the threaded crates; Highway dispatch race fixed,gate(G-TSAN): ThreadSanitizer over the threaded crates; UD377 Highway dispatch race fixed (P7-W17)
+2026-10-07,1,0,0,0,0,0,,,
+2026-10-07,2,0,0,0,0,0,,,
+2026-10-07,3,3,2,0,275,24,0dde962fc,"gate: full run on rvm at 1e84e3ff5; Mesa EGL suppressions, renderer read-back test","gate(G-VALGRIND): full run on rvm at 1e84e3ff5; Mesa EGL suppressions (N520), renderer read-back test (N521) (P7-W18)"
+2026-10-07,4,0,0,0,0,0,,,
+2026-10-07,5,2,1,0,144,14,75ce42c45,"perf: oracle rebuilt at the pin for; paired, measured but open","perf: oracle rebuilt at the pin for G8b; V18 paired (N511), V16/V17 measured but open (P7-W19)"
+2026-10-07,6,3,2,0,278,22,03cef0fd3,"stream: gate the NEON APC scan on target_feature = ""neon"" (softfloat aarch64 uses the port…","stream: gate the NEON APC scan on target_feature = ""neon"" (softfloat aarch64 uses the portable form; review P7-W20)"
+2026-10-07,7,6,4,1,885,167,c5cd8c56e,size: librustty_vt_c.dylib 1.30x -> 1.076x Ghostty's; size axis re-based at the pin with p…,"size: librustty_vt_c.dylib 1.30x -> 1.076x Ghostty's; G8 size axis re-based at the pin with per-label tolerances, --strict on (V16 DISCHARGED, N520) (P7-W22)"
+2026-10-07,8,2,1,0,1000,491,b61e273e6,"perf: DISCHARGED: idle run 14/14 wins (-27.9%), BASELINE.json timing rows re-based to the …","perf: V17 DISCHARGED: idle run 14/14 wins (-27.9%), BASELINE.json timing rows re-based to the pinned oracle; G8b + G8 --strict GREEN (P7-W23)"
+2026-10-07,9,0,0,0,0,0,,,
+2026-10-07,10,2,2,1,240,9,0fdb49e45,gate: a live GTK surface test under ASan+LSan in headless sway (Linux gap),"gate(G-LSAN-GTK): a live GTK surface test under ASan+LSan in headless sway (N502 Linux gap, P7-W24)"
+2026-10-07,11,0,0,0,0,0,,,
+2026-10-07,12,0,0,1,0,0,,,
+2026-10-07,13,0,0,1,0,0,,,
+2026-10-07,14,0,0,0,0,0,,,
+2026-10-07,15,3,3,0,363,18,4a32358ae,"records: CLOSED, DISCHARGED (rvm), Linux gap CLOSED;; register //","records(P7-W24): N486 CLOSED, V32 DISCHARGED (rvm), N502 Linux gap CLOSED; N513-N516, V33; register UD378/N517/V34"
+2026-10-07,16,4,3,0,979,394,72e943c14,apprt(gtk): bind template callbacks through GTK's C scope (CLOSED); drop lsan-gtk.supp,apprt(gtk): bind template callbacks through GTK's C scope (N516 CLOSED); drop lsan-gtk.supp G2 (P7-W25)
+2026-10-07,17,0,0,0,0,0,,,
+2026-10-07,18,0,0,0,0,0,,,
+2026-10-07,19,0,0,1,0,0,,,
+2026-10-07,20,8,6,2,14952,93,5e969a4bb,"plan(phase 8): delta reviews, decisions and plan for 12752b2ac → a60e9e2a5","plan(phase 8): delta reviews, decisions and plan for 12752b2ac → a60e9e2a5"
+2026-10-07,21,3,3,2,2584,222,7719ebb4d,"oracle: advance pin 12752b2ac → a60e9e2a5 (107 commits, 69 non-merge)","oracle: advance pin 12752b2ac → a60e9e2a5 (107 commits, 69 non-merge) (P8-W0 T3)"
+2026-10-07,22,23,19,0,8165,1223,0a3e385a5,"vt: placeholder flag, selectLine bound, RIS palette, tmux max_bytes (a573781c6, 13b5ab204,…","vt: placeholder flag, selectLine bound, RIS palette, tmux max_bytes (a573781c6, 13b5ab204, bb20f8e45, 2b1edded2, e8b858cc6) (P8-W2 T1)"
+2026-10-07,23,15,10,1,2641,132,45cd8ea29,"vt: DECRQCRA and XTCHECKSUM (9272a2f7c, 5f0d4febc, b2f557c6c, cc0276778, 01b9f4958)","vt: DECRQCRA and XTCHECKSUM (9272a2f7c, 5f0d4febc, b2f557c6c, cc0276778, 01b9f4958) (P8-W3 T1)"
+2026-10-08,0,2,2,0,699,42,78648989a,"vt: memory usage query and snapshot history compression (8834e161c, 88e66cbc6)","vt: memory usage query and snapshot history compression (8834e161c, 88e66cbc6) (P8-W5 T1)"
+2026-10-08,1,4,3,0,4748,163,509f0eac9,"vt-c: unknown OSC, program status, semantic prompt, reset, memory usage, snapshot compress…","vt-c: unknown OSC, program status, semantic prompt, reset, memory usage, snapshot compression, paste fix (7b11f3dca, 520d8f55a, bae2c3cdb, 7bb45ba34, 02c51decf, 51d3ca168, fa604a170, 2b0ceff7d, aca9bf031, 82ae67b9f, 9a4787d90, b1bfd1d9c, 8834e161c, 88e66cbc6) (P8-W5 T3)"
+2026-10-08,2,8,6,0,2363,694,2bd827023,"examples,ci: memory usage, compression, unknown-OSC effects; Windows DLL check (a141f9bdb …","examples,ci: memory usage, compression, unknown-OSC effects; Windows DLL check (a141f9bdb NON-PORT proven, a7cf951eb) (P8-W5 T4)"
+2026-10-08,3,8,6,0,3353,145,d1f7a4e5b,"test: esctest harness against librustty-vt, report-only CI job, (438d584f0, edcaf6670)","test: esctest harness against librustty-vt, report-only CI job, G-ESCTEST (438d584f0, edcaf6670) (P8-W8 T1)"
+2026-10-08,4,4,4,0,2760,31,f73084e96,gates: re-anchor 19 LOG-ABSENT-SITES rows at the pin; cvt-parity.sh names the pin symbolic…,gates: re-anchor 19 LOG-ABSENT-SITES rows at the pin; cvt-parity.sh names the pin symbolically; lib_vt.zig DllMain doc NOT-CARRIED rows; A5 arm (b) floor 204 (P8-W9 T1)
+2026-10-08,5,0,0,0,0,0,,,
+2026-10-08,6,0,0,1,0,0,,,
+2026-10-08,7,5,3,4,424,78,51e38fba6,records: finale records and /rustty-extra evidence after (fix 1),records: finale records and G3b/rustty-extra evidence after T1a (P8-W9 T1 fix 1)
+2026-10-08,8,9,9,7,3950,24,4969a3404,docs(plan): Ferris icon rebrand implementation plan,docs(plan): Ferris icon rebrand implementation plan
+2026-10-08,9,6,6,4,388,49,67e1fcae8,"icons: plates + style-matched Ferris on Holographic, Microchip, Xray, Glass","icons: plates + style-matched Ferris on Holographic, Microchip, Xray, Glass"
+2026-10-08,10,0,0,1,0,0,,,
+2026-10-08,11,0,0,4,0,0,,,
+2026-10-08,12,1,1,10,2349,0,25f8da30c,records: rvm lanes so far at a60e9e2a5,records: P8-W9 T2 rvm lanes so far at a60e9e2a5 (P8-W9 T2)
+2026-10-08,13,0,0,5,0,0,,,
+2026-10-08,14,0,0,0,0,0,,,
+2026-10-08,15,1,1,0,227,0,c60a518c5,records: rvm ci.sh; at a60e9e2a5,"records: P8-W9 T2 rvm ci.sh, G-LINT, D1, D6, G4 at a60e9e2a5 (P8-W9 T2)"
+2026-10-08,16,0,0,8,0,0,,,
+2026-10-08,17,0,0,2,0,0,,,
+2026-10-08,18,0,0,3,0,0,,,
+2026-10-08,19,0,0,1,0,0,,,
+2026-10-08,20,0,0,0,0,0,,,
+2026-10-08,21,0,0,0,0,0,,,
+2026-10-08,22,0,0,0,0,0,,,
+2026-10-08,23,1,1,1,1463,0,622cd1fba,"records: at a60e9e2a5, RED","records: P8-W9 T2 G6 at a60e9e2a5, RED N600 N601 (P8-W9 T2)"
+2026-10-09,0,1,1,0,800,0,77c3ecdf6,"records: GREEN, RED (Mac) at a60e9e2a5","records: P8-W9 T2 G-ASAN GREEN, G-LSAN RED N602 (Mac) at a60e9e2a5 (P8-W9 T2)"
+2026-10-09,1,15,13,0,987,34,b4c13ce4f,test(vt): reach the induced failure in five prompts so the semantic prompt failure test ru…,test(vt): reach the induced failure in five prompts so the semantic prompt failure test runs under Miri (P8-W9 FX1)
+2026-10-09,2,3,3,0,270,0,4f365cc73,records: 4 shards GREEN at a60e9e2a5,records: P8-W9 T2 G-VALGRIND 4 shards GREEN at a60e9e2a5 (P8-W9 T2)
+2026-10-09,3,0,0,0,0,0,,,
+2026-10-09,4,3,3,0,49,1,8acf44479,records: Windows and DLL step at a60e9e2a5,records: P8-W9 T2 Windows V26 and DLL step at a60e9e2a5 (P8-W9 T2)
+2026-10-09,5,0,0,0,0,0,,,
+2026-10-09,6,0,0,0,0,0,,,
+2026-10-09,7,0,0,0,0,0,,,
+2026-10-09,8,8,5,1,236,3,490a0e122,test(vt-c): serialize every log_fn emitter on the sys guard; assert it under cfg(test),test(vt-c): serialize every log_fn emitter on the sys guard; assert it under cfg(test) (N625) (P8-W9 FX5)
+2026-10-09,9,2,1,0,17,0,d98e9c686,records: closed by,records: N602 closed by S19 (P8-W9 FX3)
+2026-10-09,10,3,2,0,715,27,2926d0f65,records: TSan suppressions for Mesa EGL and llvmpipe; and rvm gate evidence,"records: TSan suppressions T5/T6 for Mesa EGL and llvmpipe, M6, N620-N622 and rvm gate evidence (P8-W9 FX4)"
+2026-10-09,11,0,0,0,0,0,,,
+2026-10-09,12,1,1,3,2,2,fdf81eba7,perf: oracle artifacts rebuilt at a60e9e2a5 (perf prep),perf: oracle artifacts rebuilt at a60e9e2a5 (P8-W9 perf prep)
+2026-10-09,13,16,10,0,761,275,dc9fe73cc,fix(renderer): Renderer::init is an unsafe fn with a # Safety contract for its raw device …,fix(renderer): Renderer::init is an unsafe fn with a # Safety contract for its raw device and font grid (review M1) (P8-W9 FX7)
+2026-10-09,14,2,2,3,1280,171,51476f5bb,"ci: parallel gate scheduler, change-scoped long gates, sharded Valgrind, per-gate target d…","ci: parallel gate scheduler, change-scoped long gates, sharded Valgrind, per-gate target dirs (CI speed-up)"
+2026-10-09,15,10,7,1,727,118,ec7485459,"ci: document --jobs, --changed-since, --prune-targets and the target-dir rules (CI speed-u…","ci: document --jobs, --changed-since, --prune-targets and the target-dir rules (CI speed-up)"
+2026-10-09,16,13,8,11,3558,257,2bf89b95a,oracle: advance pin a60e9e2a5 → 246f70287 (18 commits),oracle: advance pin a60e9e2a5 → 246f70287 (18 commits) (P8-W10 T0)
+2026-10-09,17,7,3,2,1187,104,166461949,gate: CSI ids include intermediates,gate(G9): CSI ids include intermediates (P8-W10 T4)
+2026-10-09,18,5,4,9,140,36,b44652003,"gate: top-level pub fns scope to counterpart files only, no module-stem fallback","gate(G-SYMS): top-level pub fns scope to counterpart files only, no module-stem fallback (P8-W10 FX10)"
+2026-10-09,19,2,1,0,38,8,a50874d7b,test(vt-c): count only the measuring thread's allocations in sys_log_no_alloc,"test(vt-c): count only the measuring thread's allocations in sys_log_no_alloc (N565, P8-W10 FX11)"
+2026-10-09,20,2,1,3,39,10,8f6fc23f8,test(vt): search_thread waits 10 s for completion and joins the search thread before asser…,"test(vt): search_thread waits 10 s for completion and joins the search thread before asserting (N567, P8-W10 FX12)"
+2026-10-09,21,0,0,1,0,0,,,
+2026-10-09,22,2,1,2,24,6,c8f8fffac,ci: shards default to cores heavy-cap memcheck jobs,ci: G-VALGRIND shards default to cores / heavy-cap memcheck jobs (P8-W10 FX13)
+2026-10-09,23,0,0,0,0,0,,,
+2026-10-10,0,0,0,0,0,0,,,
+2026-10-10,1,0,0,2,0,0,,,
+2026-10-10,2,0,0,0,0,0,,,
+2026-10-10,3,0,0,0,0,0,,,
+2026-10-10,4,0,0,0,0,0,,,
+2026-10-10,5,0,0,0,0,0,,,
+2026-10-10,6,0,0,0,0,0,,,
+2026-10-10,7,0,0,2,0,0,,,
+2026-10-10,8,4,3,10,25663,212,48752930c,"records: final bulk validation at f5f2bdf28, fix reruns at 11b4c74d0, perf at 949584651 (F…","records: P8 final bulk validation at f5f2bdf28, fix reruns at 11b4c74d0, perf at 949584651 (P8-W10 FINAL)"
+2026-10-10,9,0,0,0,0,0,,,
+2026-10-10,10,0,0,0,0,0,,,
+2026-10-10,11,0,0,0,0,0,,,
+2026-10-10,12,0,0,0,0,0,,,
+2026-10-10,13,0,0,0,0,0,,,
+2026-10-10,14,0,0,0,0,0,,,
+2026-10-10,15,0,0,0,0,0,,,
+2026-10-10,16,0,0,0,0,0,,,
+2026-10-10,17,0,0,0,0,0,,,
+2026-10-10,18,0,0,0,0,0,,,
+2026-10-10,19,0,0,0,0,0,,,
+2026-10-10,20,0,0,0,0,0,,,
+2026-10-10,21,0,0,0,0,0,,,
+2026-10-10,22,0,0,0,0,0,,,
+2026-10-10,23,0,0,0,0,0,,,

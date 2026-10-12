@@ -1,0 +1,23 @@
+host,command,scope,wall,wall_seconds,cache_state,date_or_rev,provenance,source
+macOS MacBook Pro M4,cargo build -p rustty-vt-c --release,libvt native dylib + deps,31.85 s (user 70.4 s),31.85,empty CARGO_TARGET_DIR (cold),HEAD 1d22ba80d 2026-10-08,MEASURED,"CARGO_TARGET_DIR=<tmp> /usr/bin/time -p cargo build -p rustty-vt-c --release"
+macOS MacBook Pro M4,cargo rustc -p rustty-vt-c --target wasm32-unknown-unknown --release (build-vt-wasm.sh flags),libvt wasm,14.28 s (user 25.6 s),14.28,same tmp dir right after the native build (host build scripts reused),HEAD 1d22ba80d 2026-10-08,MEASURED,same command log
+rvm Fedora 44 aarch64 VM,cargo build --workspace --all-targets --features rustty/gtk,rustty/x11,rustty/wayland,whole workspace incl. tests (debug),3m 11s,191,fresh git-archive clone (target state not recorded),a60e9e2a5 merge 1d22ba80d,DOCUMENTED,.port/phase-8/w9/cross-host-build-at-a60e9e2a5.txt
+rvm Fedora 44 aarch64 VM,cargo clippy --workspace --all-targets (gtk/x11/wayland) -D warnings,lint after build,54.20 s,54.2,after the build above,a60e9e2a5,DOCUMENTED,.port/phase-8/w9/cross-host-build-at-a60e9e2a5.txt
+rvm Fedora 44 aarch64 VM,cargo build --release -p rustty,app binary release,1m 50s,110,after the debug build,a60e9e2a5,DOCUMENTED,.port/phase-8/w9/cross-host-build-at-a60e9e2a5.txt
+rwin Windows 11 ARM64 VM,cargo build --workspace --all-targets --target x86_64-pc-windows-msvc (3 -sys excluded),whole workspace debug,2m 37s,157,fresh clone,a60e9e2a5,DOCUMENTED,.port/phase-8/w9/cross-host-build-at-a60e9e2a5.txt
+rwin Windows 11 ARM64 VM,cargo clippy (same flags) -D warnings,lint,1m 52s,112,after the build,a60e9e2a5,DOCUMENTED,.port/phase-8/w9/cross-host-build-at-a60e9e2a5.txt
+rwin Windows 11 ARM64 VM,cargo build --release -p rustty-vt-c --target x86_64-pc-windows-msvc,libvt release,36.15 s,36.15,after the debug build,a60e9e2a5,DOCUMENTED,.port/phase-8/w9/cross-host-build-at-a60e9e2a5.txt
+rwin Windows 11 ARM64 VM,cargo build -p rustty-font-shaper (fontconfig-freetype) --target x86_64-pc-windows-gnu,font shaper gnu leg,1m 56s,116,first gnu build,a60e9e2a5,DOCUMENTED,.port/phase-8/w9/cross-host-build-at-a60e9e2a5.txt
+macOS (worktree p8-w9b),cargo build --workspace --all-targets,whole workspace debug,49.60 s,49.6,worktree (cache state not recorded; likely warm),a60e9e2a5,DOCUMENTED,.port/phase-8/w9/cross-host-build-at-a60e9e2a5.txt
+macOS MacBook Pro M4,Miri G6 Stacked Borrows on nextest (38 crates),verification lane,13354 s (3 h 43 min); rustty-vt 9525 s,13354,6 parallel processes,04f0a894c 2026-10-06,DOCUMENTED,.port/parity-closure/README.md (Miri lanes on nextest)
+macOS MacBook Pro M4,Miri G6c (debug assertions off; 124 tests),verification lane,1110 s,1110,nextest,04f0a894c,DOCUMENTED,.port/parity-closure/README.md
+macOS MacBook Pro M4,Miri G6 same groups under libtest vs nextest,speed-up,11722 s -> 1687 s (6.9x),1687,V27-V29 groups,P7-W15,DOCUMENTED,.port/parity-closure/README.md
+macOS MacBook Pro M4,G-ASAN (9850 tests),sanitizer lane,~15 min,900,one shared target dir,2026-10-02,DOCUMENTED,.port/parity-closure/README.md; .port/phase-8/delta-review/R4-records-gates-build.md
+macOS MacBook Pro M4,G-LSAN (9850 tests),sanitizer lane,33 min,1980,,2026-10-02,DOCUMENTED,same
+rvm Fedora 44 aarch64 VM,G-LSAN (10087-10111 tests),sanitizer lane,20 min,1200,,2026-10-02,DOCUMENTED,same
+rvm Fedora 44 aarch64 VM,G-MSAN (6183 tests),sanitizer lane,50 min,3000,,2026-10-02,DOCUMENTED,same
+rvm Fedora 44 aarch64 VM,G-HWASAN,sanitizer lane,56-77 min,3360,,P7-W16b,DOCUMENTED,.port/phase-8/delta-review/R4-records-gates-build.md
+macOS MacBook Pro M4,G-TSAN (4380 tests),sanitizer lane,38 min,2280,,P7-W17,DOCUMENTED,same
+rvm Fedora 44 aarch64 VM,G-TSAN,sanitizer lane,21 min,1260,,P7-W17,DOCUMENTED,same
+rvm Fedora 44 aarch64 VM,G-VALGRIND (4 shards; 914 memcheck processes; 6614 tests),verification lane,13451 s (3 h 44 min; prebuild 324 s),13451,,1e84e3ff5 2026-10-07,DOCUMENTED,.port/parity-closure/README.md (G-VALGRIND full run)
+rvm Fedora 44 aarch64 VM,Linux full lane (cargo test --workspace + GTK/release/examples gates),verification lane,~1-2 h (approximate),,,P8 plan,DOCUMENTED (approx),.port/phase-8/delta-review/R4-records-gates-build.md

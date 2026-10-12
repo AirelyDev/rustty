@@ -1,0 +1,31 @@
+method,class,count
+build-system port,intent-breaking,3
+build-system port,latent,1
+"checked arithmetic, casts and bounds",crash,29
+"checked arithmetic, casts and bounds",ub,1
+compiling previously-unanalysed code,intent-breaking,3
+compiling previously-unanalysed code,latent,14
+cross-platform bring-up,crash,6
+cross-platform bring-up,deadlock/hang,2
+cross-platform bring-up,intent-breaking,10
+cross-platform bring-up,latent,5
+cross-platform bring-up,ub,2
+fault injection (allocation/C-API failure),crash,4
+fault injection (allocation/C-API failure),deadlock/hang,1
+fault injection (allocation/C-API failure),intent-breaking,1
+fault injection (allocation/C-API failure),latent,1
+fault injection (allocation/C-API failure),leak,5
+live testing of the port,crash,1
+live testing of the port,deadlock/hang,3
+review/reading,crash,17
+review/reading,deadlock/hang,3
+review/reading,intent-breaking,17
+review/reading,latent,38
+review/reading,leak,7
+review/reading,ub,11
+sanitizer,leak,2
+sanitizer,ub,1
+test port,test-weakness,11
+type/borrow checker,crash,1
+type/borrow checker,ub,4
+withheld,crash,2

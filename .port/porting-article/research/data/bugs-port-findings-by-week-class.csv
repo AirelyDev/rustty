@@ -1,0 +1,31 @@
+week_start,class,count
+2026-09-07,ABI / C header layout,5
+2026-09-07,aliasing UB (Miri SB/TB),1
+2026-09-07,behaviour divergence from Ghostty,13
+2026-09-07,crash / panic,13
+2026-09-07,leak,1
+2026-09-07,logging / diagnostic fidelity,20
+2026-09-21,ABI / C header layout,7
+2026-09-21,aliasing UB (Miri SB/TB),5
+2026-09-21,behaviour divergence from Ghostty,120
+2026-09-21,crash / panic,20
+2026-09-21,data race / deadlock,1
+2026-09-21,leak,8
+2026-09-21,logging / diagnostic fidelity,10
+2026-09-21,verification gate / instrument,7
+2026-09-28,ABI / C header layout,4
+2026-09-28,aliasing UB (Miri SB/TB),7
+2026-09-28,behaviour divergence from Ghostty,45
+2026-09-28,crash / panic,3
+2026-09-28,data race / deadlock,1
+2026-09-28,leak,13
+2026-09-28,logging / diagnostic fidelity,1
+2026-09-28,memory error (ASan/MSan/UAF/OOB),2
+2026-09-28,verification gate / instrument,1
+2026-10-05,ABI / C header layout,1
+2026-10-05,behaviour divergence from Ghostty,13
+2026-10-05,crash / panic,1
+2026-10-05,data race / deadlock,2
+2026-10-05,leak,3
+2026-10-05,memory error (ASan/MSan/UAF/OOB),1
+2026-10-05,verification gate / instrument,3

@@ -1,0 +1,6314 @@
+{
+ "args": {
+  "terminal-parser": "+terminal-parser --data=.port/phase-0/baseline/corpora/utf8.bin",
+  "terminal-stream": "+terminal-stream --data=.port/phase-0/baseline/corpora/ascii.bin",
+  "codepoint-width.noop": "+codepoint-width --mode=noop --data=.port/phase-0/baseline/corpora/utf8.bin",
+  "codepoint-width.table": "+codepoint-width --mode=table --data=.port/phase-0/baseline/corpora/utf8.bin",
+  "codepoint-width.simd": "+codepoint-width --mode=simd --data=.port/phase-0/baseline/corpora/utf8.bin",
+  "codepoint-width.wcwidth": "+codepoint-width --mode=wcwidth --data=.port/phase-0/baseline/corpora/utf8.bin",
+  "grapheme-break.noop": "+grapheme-break --mode=noop --data=.port/phase-0/baseline/corpora/utf8.bin",
+  "grapheme-break.table": "+grapheme-break --mode=table --data=.port/phase-0/baseline/corpora/utf8.bin",
+  "is-symbol.table": "+is-symbol --mode=table --data=.port/phase-0/baseline/corpora/utf8.bin",
+  "is-symbol.uucode": "+is-symbol --mode=uucode --data=.port/phase-0/baseline/corpora/utf8.bin",
+  "osc-parser": "+osc-parser --data=.port/phase-0/baseline/corpora/osc-parser.bin",
+  "screen-clone.noop": "+screen-clone --mode=noop --data=.port/phase-0/baseline/corpora/ascii-small.bin",
+  "screen-clone.clone": "+screen-clone --mode=clone --data=.port/phase-0/baseline/corpora/ascii-small.bin",
+  "screen-clone.render": "+screen-clone --mode=render --data=.port/phase-0/baseline/corpora/ascii-small.bin"
+ },
+ "bench": [
+  "terminal-parser",
+  "terminal-stream",
+  "osc-parser",
+  "screen-clone.clone",
+  "screen-clone.render",
+  "screen-clone.noop",
+  "grapheme-break.table",
+  "grapheme-break.noop",
+  "is-symbol.table",
+  "is-symbol.uucode",
+  "codepoint-width.table",
+  "codepoint-width.wcwidth",
+  "codepoint-width.simd",
+  "codepoint-width.noop"
+ ],
+ "floor": [
+  "codepoint-width.noop",
+  "screen-clone.noop"
+ ],
+ "stages": [
+  {
+   "key": "base",
+   "rf": "perf/rust.jsonl",
+   "zf": "perf/zig.jsonl",
+   "commit": "10cc614",
+   "t": "2026-07-15T23:57:43",
+   "subject": "rustty: phase-2 \u2014 Rust-vs-Zig benchmark head-to-head + synthetic CLI parity design",
+   "label": "First head-to-head, product release profile (overflow checks on)",
+   "kind": "ship",
+   "note": "pre-fix code",
+   "rust": {
+    "terminal-parser": [
+     833.69,
+     811.19,
+     877.64
+    ],
+    "terminal-stream": [
+     577.84,
+     559.5,
+     599.71
+    ],
+    "codepoint-width.noop": [
+     6.92,
+     5.53,
+     8.59
+    ],
+    "codepoint-width.table": [
+     302.02,
+     293.75,
+     310.46
+    ],
+    "codepoint-width.simd": [
+     637.68,
+     611.48,
+     658.29
+    ],
+    "codepoint-width.wcwidth": [
+     347.22,
+     317.63,
+     353.81
+    ],
+    "grapheme-break.noop": [
+     320.55,
+     309.1,
+     330.92
+    ],
+    "grapheme-break.table": [
+     366.5,
+     344.63,
+     377.4
+    ],
+    "is-symbol.table": [
+     321.22,
+     285.9,
+     324.08
+    ],
+    "is-symbol.uucode": [
+     309.47,
+     298.22,
+     315.65
+    ],
+    "osc-parser": [
+     204.19,
+     190.64,
+     247.74
+    ],
+    "screen-clone.noop": [
+     15.82,
+     8.35,
+     24.49
+    ],
+    "screen-clone.clone": [
+     117.88,
+     109.75,
+     135.5
+    ],
+    "screen-clone.render": [
+     49.89,
+     43.32,
+     53.84
+    ]
+   },
+   "zig": {
+    "terminal-parser": [
+     286.36,
+     278.3,
+     383.7
+    ],
+    "terminal-stream": [
+     570.41,
+     558.8,
+     588.02
+    ],
+    "codepoint-width.noop": [
+     4.83,
+     4.26,
+     5.97
+    ],
+    "codepoint-width.table": [
+     245.87,
+     243.83,
+     251.99
+    ],
+    "codepoint-width.simd": [
+     539.54,
+     528.84,
+     541.95
+    ],
+    "codepoint-width.wcwidth": [
+     273.46,
+     272.02,
+     282.03
+    ],
+    "grapheme-break.noop": [
+     244.62,
+     241.62,
+     252.21
+    ],
+    "grapheme-break.table": [
+     280.99,
+     278.09,
+     287.89
+    ],
+    "is-symbol.table": [
+     258.63,
+     253.66,
+     262.65
+    ],
+    "is-symbol.uucode": [
+     252.44,
+     247.72,
+     257.91
+    ],
+    "osc-parser": [
+     62.67,
+     61.72,
+     63.85
+    ],
+    "screen-clone.noop": [
+     7.88,
+     7.15,
+     8.31
+    ],
+    "screen-clone.clone": [
+     57.93,
+     53.65,
+     58.84
+    ],
+    "screen-clone.render": [
+     19.98,
+     18.08,
+     21.86
+    ]
+   },
+   "bin": "rustty-bench",
+   "zbin": "ghostty-bench",
+   "W": 0,
+   "T": 1,
+   "L": 13,
+   "suiteR": 4410.9,
+   "suiteZ": 3105.6,
+   "suiteD": 42.0,
+   "geo": 1.592,
+   "moved": []
+  },
+  {
+   "key": "preA",
+   "rf": "perf-v2/frozen_A.jsonl",
+   "zf": "perf-v2/zig.jsonl",
+   "commit": "10cc614",
+   "t": "2026-07-15T23:57:43",
+   "subject": "rustty: phase-2 \u2014 Rust-vs-Zig benchmark head-to-head + synthetic CLI parity design",
+   "label": "Same pre-fix code, re-measured in the next session (release profile)",
+   "kind": "session",
+   "note": "no code change: session effect only",
+   "rust": {
+    "terminal-parser": [
+     667.08,
+     665.09,
+     673.53
+    ],
+    "terminal-stream": [
+     447.28,
+     441.39,
+     474.29
+    ],
+    "codepoint-width.noop": [
+     3.0,
+     2.84,
+     3.81
+    ],
+    "codepoint-width.table": [
+     237.95,
+     236.32,
+     239.92
+    ],
+    "codepoint-width.simd": [
+     482.95,
+     478.32,
+     483.87
+    ],
+    "codepoint-width.wcwidth": [
+     260.37,
+     258.89,
+     261.5
+    ],
+    "grapheme-break.noop": [
+     260.12,
+     258.22,
+     262.9
+    ],
+    "grapheme-break.table": [
+     267.24,
+     265.69,
+     268.21
+    ],
+    "is-symbol.table": [
+     225.71,
+     224.23,
+     228.73
+    ],
+    "is-symbol.uucode": [
+     230.8,
+     230.17,
+     233.67
+    ],
+    "osc-parser": [
+     143.2,
+     141.17,
+     143.89
+    ],
+    "screen-clone.noop": [
+     5.27,
+     5.11,
+     5.62
+    ],
+    "screen-clone.clone": [
+     78.95,
+     78.25,
+     79.35
+    ],
+    "screen-clone.render": [
+     31.38,
+     30.91,
+     31.78
+    ]
+   },
+   "zig": {
+    "terminal-parser": [
+     262.94,
+     261.12,
+     265.01
+    ],
+    "terminal-stream": [
+     562.56,
+     529.65,
+     576.45
+    ],
+    "codepoint-width.noop": [
+     3.91,
+     3.69,
+     4.56
+    ],
+    "codepoint-width.table": [
+     233.16,
+     231.1,
+     235.41
+    ],
+    "codepoint-width.simd": [
+     502.79,
+     500.81,
+     507.29
+    ],
+    "codepoint-width.wcwidth": [
+     258.57,
+     257.57,
+     262.29
+    ],
+    "grapheme-break.noop": [
+     231.25,
+     230.89,
+     231.8
+    ],
+    "grapheme-break.table": [
+     255.43,
+     254.5,
+     257.44
+    ],
+    "is-symbol.table": [
+     239.01,
+     237.44,
+     240.17
+    ],
+    "is-symbol.uucode": [
+     230.31,
+     228.62,
+     233.03
+    ],
+    "osc-parser": [
+     57.31,
+     56.81,
+     57.56
+    ],
+    "screen-clone.noop": [
+     5.62,
+     5.51,
+     5.89
+    ],
+    "screen-clone.clone": [
+     49.72,
+     49.38,
+     51.71
+    ],
+    "screen-clone.render": [
+     15.64,
+     15.46,
+     15.71
+    ]
+   },
+   "bin": "rustty-bench-A-release",
+   "zbin": "ghostty-bench",
+   "W": 5,
+   "T": 2,
+   "L": 7,
+   "suiteR": 3341.3,
+   "suiteZ": 2908.2,
+   "suiteD": 14.9,
+   "geo": 1.199,
+   "moved": [
+    [
+     "terminal-parser",
+     -20.0
+    ],
+    [
+     "terminal-stream",
+     -22.6
+    ],
+    [
+     "osc-parser",
+     -29.9
+    ],
+    [
+     "screen-clone.clone",
+     -33.0
+    ],
+    [
+     "screen-clone.render",
+     -37.1
+    ],
+    [
+     "grapheme-break.table",
+     -27.1
+    ],
+    [
+     "grapheme-break.noop",
+     -18.9
+    ],
+    [
+     "is-symbol.table",
+     -29.7
+    ],
+    [
+     "is-symbol.uucode",
+     -25.4
+    ],
+    [
+     "codepoint-width.table",
+     -21.2
+    ],
+    [
+     "codepoint-width.wcwidth",
+     -25.0
+    ],
+    [
+     "codepoint-width.simd",
+     -24.3
+    ]
+   ]
+  },
+  {
+   "key": "preB",
+   "rf": "perf-v2/frozen_B.jsonl",
+   "zf": "perf-v2/zig.jsonl",
+   "commit": "10cc614",
+   "t": "2026-07-15T23:57:43",
+   "subject": "rustty: phase-2 \u2014 Rust-vs-Zig benchmark head-to-head + synthetic CLI parity design",
+   "label": "Same pre-fix code, release-fast profile (overflow checks off only)",
+   "kind": "profile",
+   "note": "profile change only",
+   "rust": {
+    "terminal-parser": [
+     660.13,
+     659.38,
+     663.34
+    ],
+    "terminal-stream": [
+     443.19,
+     425.36,
+     454.77
+    ],
+    "codepoint-width.noop": [
+     3.04,
+     2.83,
+     3.78
+    ],
+    "codepoint-width.table": [
+     229.16,
+     228.81,
+     232.29
+    ],
+    "codepoint-width.simd": [
+     490.26,
+     489.35,
+     490.9
+    ],
+    "codepoint-width.wcwidth": [
+     259.63,
+     259.35,
+     259.89
+    ],
+    "grapheme-break.noop": [
+     232.89,
+     229.25,
+     238.8
+    ],
+    "grapheme-break.table": [
+     268.86,
+     268.3,
+     274.62
+    ],
+    "is-symbol.table": [
+     226.03,
+     222.84,
+     229.5
+    ],
+    "is-symbol.uucode": [
+     228.13,
+     225.75,
+     231.83
+    ],
+    "osc-parser": [
+     146.36,
+     142.61,
+     148.79
+    ],
+    "screen-clone.noop": [
+     4.98,
+     4.84,
+     5.31
+    ],
+    "screen-clone.clone": [
+     79.44,
+     79.06,
+     79.74
+    ],
+    "screen-clone.render": [
+     30.39,
+     30.19,
+     30.56
+    ]
+   },
+   "zig": {
+    "terminal-parser": [
+     262.94,
+     261.12,
+     265.01
+    ],
+    "terminal-stream": [
+     562.56,
+     529.65,
+     576.45
+    ],
+    "codepoint-width.noop": [
+     3.91,
+     3.69,
+     4.56
+    ],
+    "codepoint-width.table": [
+     233.16,
+     231.1,
+     235.41
+    ],
+    "codepoint-width.simd": [
+     502.79,
+     500.81,
+     507.29
+    ],
+    "codepoint-width.wcwidth": [
+     258.57,
+     257.57,
+     262.29
+    ],
+    "grapheme-break.noop": [
+     231.25,
+     230.89,
+     231.8
+    ],
+    "grapheme-break.table": [
+     255.43,
+     254.5,
+     257.44
+    ],
+    "is-symbol.table": [
+     239.01,
+     237.44,
+     240.17
+    ],
+    "is-symbol.uucode": [
+     230.31,
+     228.62,
+     233.03
+    ],
+    "osc-parser": [
+     57.31,
+     56.81,
+     57.56
+    ],
+    "screen-clone.noop": [
+     5.62,
+     5.51,
+     5.89
+    ],
+    "screen-clone.clone": [
+     49.72,
+     49.38,
+     51.71
+    ],
+    "screen-clone.render": [
+     15.64,
+     15.46,
+     15.71
+    ]
+   },
+   "bin": "rustty-bench-B-rf",
+   "zbin": "ghostty-bench",
+   "W": 6,
+   "T": 3,
+   "L": 5,
+   "suiteR": 3302.5,
+   "suiteZ": 2908.2,
+   "suiteD": 13.6,
+   "geo": 1.181,
+   "moved": [
+    [
+     "grapheme-break.noop",
+     -10.5
+    ]
+   ]
+  },
+  {
+   "key": "r1",
+   "rf": "perf-v2/SHIP_RF.jsonl",
+   "zf": "perf-v2/zig.jsonl",
+   "commit": "9e1837b",
+   "t": "2026-07-16T03:20:59",
+   "subject": "rustty: perf \u2014 release-fast profile: revert LTO/cgu/panic to overflow-checks-only (measured optimum)",
+   "label": "Round 1 ship: restored inline hints, UTF-8 DFA bounds, parser arm structure, render SoA; LTO reverted",
+   "kind": "ship",
+   "note": "",
+   "rust": {
+    "terminal-parser": [
+     322.69,
+     322.41,
+     325.08
+    ],
+    "terminal-stream": [
+     458.44,
+     445.04,
+     460.95
+    ],
+    "codepoint-width.noop": [
+     3.06,
+     2.75,
+     3.23
+    ],
+    "codepoint-width.table": [
+     218.44,
+     216.63,
+     218.93
+    ],
+    "codepoint-width.simd": [
+     473.98,
+     472.3,
+     477.3
+    ],
+    "codepoint-width.wcwidth": [
+     242.24,
+     241.54,
+     243.97
+    ],
+    "grapheme-break.noop": [
+     219.11,
+     218.15,
+     223.72
+    ],
+    "grapheme-break.table": [
+     215.56,
+     215.34,
+     216.65
+    ],
+    "is-symbol.table": [
+     205.58,
+     204.17,
+     206.8
+    ],
+    "is-symbol.uucode": [
+     214.08,
+     212.28,
+     215.91
+    ],
+    "osc-parser": [
+     57.47,
+     57.14,
+     58.96
+    ],
+    "screen-clone.noop": [
+     5.25,
+     5.12,
+     5.71
+    ],
+    "screen-clone.clone": [
+     79.76,
+     79.13,
+     80.8
+    ],
+    "screen-clone.render": [
+     24.65,
+     23.76,
+     24.98
+    ]
+   },
+   "zig": {
+    "terminal-parser": [
+     262.94,
+     261.12,
+     265.01
+    ],
+    "terminal-stream": [
+     562.56,
+     529.65,
+     576.45
+    ],
+    "codepoint-width.noop": [
+     3.91,
+     3.69,
+     4.56
+    ],
+    "codepoint-width.table": [
+     233.16,
+     231.1,
+     235.41
+    ],
+    "codepoint-width.simd": [
+     502.79,
+     500.81,
+     507.29
+    ],
+    "codepoint-width.wcwidth": [
+     258.57,
+     257.57,
+     262.29
+    ],
+    "grapheme-break.noop": [
+     231.25,
+     230.89,
+     231.8
+    ],
+    "grapheme-break.table": [
+     255.43,
+     254.5,
+     257.44
+    ],
+    "is-symbol.table": [
+     239.01,
+     237.44,
+     240.17
+    ],
+    "is-symbol.uucode": [
+     230.31,
+     228.62,
+     233.03
+    ],
+    "osc-parser": [
+     57.31,
+     56.81,
+     57.56
+    ],
+    "screen-clone.noop": [
+     5.62,
+     5.51,
+     5.89
+    ],
+    "screen-clone.clone": [
+     49.72,
+     49.38,
+     51.71
+    ],
+    "screen-clone.render": [
+     15.64,
+     15.46,
+     15.71
+    ]
+   },
+   "bin": "rustty-bench-SHIP-RF",
+   "zbin": "ghostty-bench",
+   "W": 10,
+   "T": 1,
+   "L": 3,
+   "suiteR": 2740.3,
+   "suiteZ": 2908.2,
+   "suiteD": -5.8,
+   "geo": 0.999,
+   "moved": [
+    [
+     "terminal-parser",
+     -51.1
+    ],
+    [
+     "osc-parser",
+     -60.7
+    ],
+    [
+     "screen-clone.render",
+     -18.9
+    ],
+    [
+     "grapheme-break.table",
+     -19.8
+    ],
+    [
+     "grapheme-break.noop",
+     -5.9
+    ],
+    [
+     "is-symbol.table",
+     -9.0
+    ],
+    [
+     "is-symbol.uucode",
+     -6.2
+    ],
+    [
+     "codepoint-width.table",
+     -4.7
+    ],
+    [
+     "codepoint-width.wcwidth",
+     -6.7
+    ]
+   ]
+  },
+  {
+   "key": "r2a",
+   "rf": "perf-v3/s_render.jsonl",
+   "zf": "perf-v3/zig.jsonl",
+   "commit": "b6f5e4f",
+   "t": "2026-07-16T04:37:13",
+   "subject": "perf(vt): render update \u2014 stop re-zeroing the style/grapheme SoA columns per rebuild (fix-render-undefined-cols)",
+   "label": "Stop re-zeroing the style/grapheme SoA columns per rebuild",
+   "kind": "stage",
+   "note": "",
+   "rust": {
+    "terminal-parser": [
+     324.05,
+     323.52,
+     326.45
+    ],
+    "terminal-stream": [
+     455.96,
+     448.36,
+     463.2
+    ],
+    "codepoint-width.noop": [
+     3.08,
+     2.84,
+     3.2
+    ],
+    "codepoint-width.table": [
+     219.82,
+     219.13,
+     220.13
+    ],
+    "codepoint-width.simd": [
+     471.1,
+     468.9,
+     474.02
+    ],
+    "codepoint-width.wcwidth": [
+     243.11,
+     242.55,
+     245.36
+    ],
+    "grapheme-break.noop": [
+     218.47,
+     216.75,
+     219.95
+    ],
+    "grapheme-break.table": [
+     217.14,
+     214.68,
+     218.57
+    ],
+    "is-symbol.table": [
+     208.86,
+     207.22,
+     209.04
+    ],
+    "is-symbol.uucode": [
+     214.57,
+     213.59,
+     216.55
+    ],
+    "osc-parser": [
+     57.9,
+     56.69,
+     58.32
+    ],
+    "screen-clone.noop": [
+     5.24,
+     4.92,
+     5.53
+    ],
+    "screen-clone.clone": [
+     80.8,
+     80.22,
+     81.32
+    ],
+    "screen-clone.render": [
+     17.0,
+     16.72,
+     17.62
+    ]
+   },
+   "zig": {
+    "terminal-parser": [
+     260.75,
+     258.08,
+     263.62
+    ],
+    "terminal-stream": [
+     545.44,
+     528.48,
+     573.34
+    ],
+    "codepoint-width.noop": [
+     3.7,
+     3.43,
+     4.23
+    ],
+    "codepoint-width.table": [
+     232.43,
+     231.57,
+     232.63
+    ],
+    "codepoint-width.simd": [
+     500.95,
+     498.11,
+     509.57
+    ],
+    "codepoint-width.wcwidth": [
+     257.69,
+     256.91,
+     259.42
+    ],
+    "grapheme-break.noop": [
+     231.71,
+     230.69,
+     233.0
+    ],
+    "grapheme-break.table": [
+     255.9,
+     254.32,
+     256.67
+    ],
+    "is-symbol.table": [
+     239.36,
+     237.87,
+     241.73
+    ],
+    "is-symbol.uucode": [
+     230.17,
+     228.63,
+     232.14
+    ],
+    "osc-parser": [
+     56.88,
+     56.39,
+     57.54
+    ],
+    "screen-clone.noop": [
+     5.63,
+     5.56,
+     6.41
+    ],
+    "screen-clone.clone": [
+     51.27,
+     49.81,
+     51.78
+    ],
+    "screen-clone.render": [
+     15.66,
+     15.33,
+     16.46
+    ]
+   },
+   "bin": "rustty-bench-r2-render",
+   "zbin": "ghostty-bench",
+   "W": 10,
+   "T": 0,
+   "L": 4,
+   "suiteR": 2737.1,
+   "suiteZ": 2887.5,
+   "suiteD": -5.2,
+   "geo": 0.981,
+   "moved": [
+    [
+     "screen-clone.render",
+     -31.0
+    ]
+   ]
+  },
+  {
+   "key": "r2b",
+   "rf": "perf-v3/s_arrayvec.jsonl",
+   "zf": "perf-v3/zig.jsonl",
+   "commit": "e1f4829",
+   "t": "2026-07-16T05:00:15",
+   "subject": "rustty: perf \u2014 r2-action-arrayvec: drop-glue-free per-byte Action return (boxed dispatch payloads + InlineVec + state hoist)",
+   "label": "Drop-glue-free per-byte Action return (boxed dispatch payloads + InlineVec + state hoist)",
+   "kind": "stage",
+   "note": "",
+   "rust": {
+    "terminal-parser": [
+     216.64,
+     202.73,
+     218.55
+    ],
+    "terminal-stream": [
+     462.08,
+     447.61,
+     465.95
+    ],
+    "codepoint-width.noop": [
+     3.0,
+     2.9,
+     3.09
+    ],
+    "codepoint-width.table": [
+     224.47,
+     223.27,
+     226.15
+    ],
+    "codepoint-width.simd": [
+     477.02,
+     476.02,
+     482.98
+    ],
+    "codepoint-width.wcwidth": [
+     243.53,
+     242.91,
+     243.95
+    ],
+    "grapheme-break.noop": [
+     220.12,
+     218.42,
+     221.09
+    ],
+    "grapheme-break.table": [
+     219.16,
+     217.3,
+     220.56
+    ],
+    "is-symbol.table": [
+     207.22,
+     204.58,
+     209.16
+    ],
+    "is-symbol.uucode": [
+     213.1,
+     212.25,
+     215.23
+    ],
+    "osc-parser": [
+     58.2,
+     48.84,
+     58.97
+    ],
+    "screen-clone.noop": [
+     5.4,
+     5.15,
+     5.61
+    ],
+    "screen-clone.clone": [
+     81.02,
+     80.57,
+     81.72
+    ],
+    "screen-clone.render": [
+     16.93,
+     16.81,
+     17.4
+    ]
+   },
+   "zig": {
+    "terminal-parser": [
+     260.75,
+     258.08,
+     263.62
+    ],
+    "terminal-stream": [
+     545.44,
+     528.48,
+     573.34
+    ],
+    "codepoint-width.noop": [
+     3.7,
+     3.43,
+     4.23
+    ],
+    "codepoint-width.table": [
+     232.43,
+     231.57,
+     232.63
+    ],
+    "codepoint-width.simd": [
+     500.95,
+     498.11,
+     509.57
+    ],
+    "codepoint-width.wcwidth": [
+     257.69,
+     256.91,
+     259.42
+    ],
+    "grapheme-break.noop": [
+     231.71,
+     230.69,
+     233.0
+    ],
+    "grapheme-break.table": [
+     255.9,
+     254.32,
+     256.67
+    ],
+    "is-symbol.table": [
+     239.36,
+     237.87,
+     241.73
+    ],
+    "is-symbol.uucode": [
+     230.17,
+     228.63,
+     232.14
+    ],
+    "osc-parser": [
+     56.88,
+     56.39,
+     57.54
+    ],
+    "screen-clone.noop": [
+     5.63,
+     5.56,
+     6.41
+    ],
+    "screen-clone.clone": [
+     51.27,
+     49.81,
+     51.78
+    ],
+    "screen-clone.render": [
+     15.66,
+     15.33,
+     16.46
+    ]
+   },
+   "bin": "rustty-bench-r2-action-arrayvec",
+   "zbin": "ghostty-bench",
+   "W": 11,
+   "T": 0,
+   "L": 3,
+   "suiteR": 2647.9,
+   "suiteZ": 2887.5,
+   "suiteD": -8.3,
+   "geo": 0.957,
+   "moved": [
+    [
+     "terminal-parser",
+     -33.1
+    ]
+   ]
+  },
+  {
+   "key": "r2c",
+   "rf": "perf-v3/s_clone.jsonl",
+   "zf": "perf-v3/zig.jsonl",
+   "commit": "ab20827",
+   "t": "2026-07-16T05:09:47",
+   "subject": "rustty: perf \u2014 r2-clone: inline packed Style::eql + coalesced cell copy in clone_partial_row_from",
+   "label": "Inline packed Style::eql + coalesced cell copy in clone_partial_row_from",
+   "kind": "stage",
+   "note": "",
+   "rust": {
+    "terminal-parser": [
+     216.35,
+     202.27,
+     217.63
+    ],
+    "terminal-stream": [
+     466.44,
+     443.94,
+     477.42
+    ],
+    "codepoint-width.noop": [
+     3.06,
+     2.77,
+     3.34
+    ],
+    "codepoint-width.table": [
+     217.79,
+     216.1,
+     219.52
+    ],
+    "codepoint-width.simd": [
+     476.07,
+     475.55,
+     480.03
+    ],
+    "codepoint-width.wcwidth": [
+     246.78,
+     245.65,
+     247.43
+    ],
+    "grapheme-break.noop": [
+     218.62,
+     217.93,
+     220.44
+    ],
+    "grapheme-break.table": [
+     216.61,
+     215.69,
+     218.65
+    ],
+    "is-symbol.table": [
+     208.31,
+     206.24,
+     208.71
+    ],
+    "is-symbol.uucode": [
+     213.24,
+     211.71,
+     216.14
+    ],
+    "osc-parser": [
+     48.99,
+     48.33,
+     49.8
+    ],
+    "screen-clone.noop": [
+     5.31,
+     4.92,
+     5.61
+    ],
+    "screen-clone.clone": [
+     56.89,
+     56.59,
+     58.28
+    ],
+    "screen-clone.render": [
+     16.92,
+     16.42,
+     17.47
+    ]
+   },
+   "zig": {
+    "terminal-parser": [
+     260.75,
+     258.08,
+     263.62
+    ],
+    "terminal-stream": [
+     545.44,
+     528.48,
+     573.34
+    ],
+    "codepoint-width.noop": [
+     3.7,
+     3.43,
+     4.23
+    ],
+    "codepoint-width.table": [
+     232.43,
+     231.57,
+     232.63
+    ],
+    "codepoint-width.simd": [
+     500.95,
+     498.11,
+     509.57
+    ],
+    "codepoint-width.wcwidth": [
+     257.69,
+     256.91,
+     259.42
+    ],
+    "grapheme-break.noop": [
+     231.71,
+     230.69,
+     233.0
+    ],
+    "grapheme-break.table": [
+     255.9,
+     254.32,
+     256.67
+    ],
+    "is-symbol.table": [
+     239.36,
+     237.87,
+     241.73
+    ],
+    "is-symbol.uucode": [
+     230.17,
+     228.63,
+     232.14
+    ],
+    "osc-parser": [
+     56.88,
+     56.39,
+     57.54
+    ],
+    "screen-clone.noop": [
+     5.63,
+     5.56,
+     6.41
+    ],
+    "screen-clone.clone": [
+     51.27,
+     49.81,
+     51.78
+    ],
+    "screen-clone.render": [
+     15.66,
+     15.33,
+     16.46
+    ]
+   },
+   "bin": "rustty-bench-r2-clone",
+   "zbin": "ghostty-bench",
+   "W": 12,
+   "T": 0,
+   "L": 2,
+   "suiteR": 2611.4,
+   "suiteZ": 2887.5,
+   "suiteD": -9.6,
+   "geo": 0.921,
+   "moved": [
+    [
+     "screen-clone.clone",
+     -29.8
+    ]
+   ]
+  },
+  {
+   "key": "r2d",
+   "rf": "perf-v3/s_oscwin.jsonl",
+   "zf": "perf-v3/zig.jsonl",
+   "commit": "9e386ab",
+   "t": "2026-07-16T05:20:32",
+   "subject": "rustty: perf \u2014 r2-osc-win: fall-through success store in the OSC fixed-capture writeByte",
+   "label": "Fall-through success store in the OSC fixed-capture writeByte",
+   "kind": "stage",
+   "note": "",
+   "rust": {
+    "terminal-parser": [
+     207.2,
+     200.17,
+     217.85
+    ],
+    "terminal-stream": [
+     450.53,
+     448.48,
+     464.8
+    ],
+    "codepoint-width.noop": [
+     2.94,
+     2.88,
+     3.19
+    ],
+    "codepoint-width.table": [
+     218.13,
+     215.28,
+     219.59
+    ],
+    "codepoint-width.simd": [
+     477.3,
+     475.01,
+     480.04
+    ],
+    "codepoint-width.wcwidth": [
+     247.26,
+     246.11,
+     250.22
+    ],
+    "grapheme-break.noop": [
+     219.78,
+     217.75,
+     221.77
+    ],
+    "grapheme-break.table": [
+     215.87,
+     215.39,
+     218.83
+    ],
+    "is-symbol.table": [
+     207.53,
+     204.75,
+     209.19
+    ],
+    "is-symbol.uucode": [
+     213.55,
+     211.81,
+     214.91
+    ],
+    "osc-parser": [
+     49.19,
+     48.9,
+     50.71
+    ],
+    "screen-clone.noop": [
+     5.21,
+     5.11,
+     5.42
+    ],
+    "screen-clone.clone": [
+     56.98,
+     56.45,
+     57.49
+    ],
+    "screen-clone.render": [
+     16.98,
+     16.77,
+     17.25
+    ]
+   },
+   "zig": {
+    "terminal-parser": [
+     260.75,
+     258.08,
+     263.62
+    ],
+    "terminal-stream": [
+     545.44,
+     528.48,
+     573.34
+    ],
+    "codepoint-width.noop": [
+     3.7,
+     3.43,
+     4.23
+    ],
+    "codepoint-width.table": [
+     232.43,
+     231.57,
+     232.63
+    ],
+    "codepoint-width.simd": [
+     500.95,
+     498.11,
+     509.57
+    ],
+    "codepoint-width.wcwidth": [
+     257.69,
+     256.91,
+     259.42
+    ],
+    "grapheme-break.noop": [
+     231.71,
+     230.69,
+     233.0
+    ],
+    "grapheme-break.table": [
+     255.9,
+     254.32,
+     256.67
+    ],
+    "is-symbol.table": [
+     239.36,
+     237.87,
+     241.73
+    ],
+    "is-symbol.uucode": [
+     230.17,
+     228.63,
+     232.14
+    ],
+    "osc-parser": [
+     56.88,
+     56.39,
+     57.54
+    ],
+    "screen-clone.noop": [
+     5.63,
+     5.56,
+     6.41
+    ],
+    "screen-clone.clone": [
+     51.27,
+     49.81,
+     51.78
+    ],
+    "screen-clone.render": [
+     15.66,
+     15.33,
+     16.46
+    ]
+   },
+   "bin": "rustty-bench-r2-osc-win",
+   "zbin": "ghostty-bench",
+   "W": 12,
+   "T": 0,
+   "L": 2,
+   "suiteR": 2588.5,
+   "suiteZ": 2887.5,
+   "suiteD": -10.4,
+   "geo": 0.913,
+   "moved": []
+  },
+  {
+   "key": "r2",
+   "rf": "perf-v3/r2ship.jsonl",
+   "zf": "perf-v3/zig.jsonl",
+   "commit": "9e386ab",
+   "t": "2026-07-16T05:20:32",
+   "subject": "rustty: perf \u2014 r2-osc-win: fall-through success store in the OSC fixed-capture writeByte",
+   "label": "Round 2 ship: official sweep of the same code",
+   "kind": "ship",
+   "note": "same code as previous step, re-run",
+   "rust": {
+    "terminal-parser": [
+     216.89,
+     201.59,
+     217.6
+    ],
+    "terminal-stream": [
+     452.96,
+     444.82,
+     466.32
+    ],
+    "codepoint-width.noop": [
+     2.99,
+     2.78,
+     3.83
+    ],
+    "codepoint-width.table": [
+     218.38,
+     216.69,
+     220.63
+    ],
+    "codepoint-width.simd": [
+     474.6,
+     473.15,
+     476.55
+    ],
+    "codepoint-width.wcwidth": [
+     247.56,
+     246.42,
+     248.87
+    ],
+    "grapheme-break.noop": [
+     218.45,
+     218.25,
+     219.34
+    ],
+    "grapheme-break.table": [
+     216.95,
+     215.8,
+     217.96
+    ],
+    "is-symbol.table": [
+     207.87,
+     205.46,
+     208.52
+    ],
+    "is-symbol.uucode": [
+     214.6,
+     213.6,
+     216.03
+    ],
+    "osc-parser": [
+     49.32,
+     48.13,
+     49.97
+    ],
+    "screen-clone.noop": [
+     5.43,
+     5.09,
+     5.92
+    ],
+    "screen-clone.clone": [
+     56.67,
+     55.84,
+     57.57
+    ],
+    "screen-clone.render": [
+     17.01,
+     16.5,
+     17.38
+    ]
+   },
+   "zig": {
+    "terminal-parser": [
+     260.75,
+     258.08,
+     263.62
+    ],
+    "terminal-stream": [
+     545.44,
+     528.48,
+     573.34
+    ],
+    "codepoint-width.noop": [
+     3.7,
+     3.43,
+     4.23
+    ],
+    "codepoint-width.table": [
+     232.43,
+     231.57,
+     232.63
+    ],
+    "codepoint-width.simd": [
+     500.95,
+     498.11,
+     509.57
+    ],
+    "codepoint-width.wcwidth": [
+     257.69,
+     256.91,
+     259.42
+    ],
+    "grapheme-break.noop": [
+     231.71,
+     230.69,
+     233.0
+    ],
+    "grapheme-break.table": [
+     255.9,
+     254.32,
+     256.67
+    ],
+    "is-symbol.table": [
+     239.36,
+     237.87,
+     241.73
+    ],
+    "is-symbol.uucode": [
+     230.17,
+     228.63,
+     232.14
+    ],
+    "osc-parser": [
+     56.88,
+     56.39,
+     57.54
+    ],
+    "screen-clone.noop": [
+     5.63,
+     5.56,
+     6.41
+    ],
+    "screen-clone.clone": [
+     51.27,
+     49.81,
+     51.78
+    ],
+    "screen-clone.render": [
+     15.66,
+     15.33,
+     16.46
+    ]
+   },
+   "bin": "rustty-bench-r2-SHIP-RF",
+   "zbin": "ghostty-bench",
+   "W": 12,
+   "T": 0,
+   "L": 2,
+   "suiteR": 2599.7,
+   "suiteZ": 2887.5,
+   "suiteD": -10.0,
+   "geo": 0.92,
+   "moved": []
+  },
+  {
+   "key": "r3a",
+   "rf": "perf-v3/r3_s_r3clone.jsonl",
+   "zf": "perf-v3/r3_zig.jsonl",
+   "commit": "1abae33",
+   "t": "2026-07-16T07:03:35",
+   "subject": "rustty: perf \u2014 r3-clone: outline cold grapheme/hyperlink arms of clone_partial_row_from",
+   "label": "Outline cold grapheme/hyperlink arms of clone_partial_row_from",
+   "kind": "stage",
+   "note": "new session",
+   "rust": {
+    "terminal-parser": [
+     212.84,
+     201.58,
+     218.9
+    ],
+    "terminal-stream": [
+     455.98,
+     448.49,
+     463.92
+    ],
+    "codepoint-width.noop": [
+     3.03,
+     2.93,
+     3.28
+    ],
+    "codepoint-width.table": [
+     217.68,
+     216.58,
+     218.8
+    ],
+    "codepoint-width.simd": [
+     471.76,
+     470.35,
+     472.8
+    ],
+    "codepoint-width.wcwidth": [
+     247.18,
+     246.08,
+     249.81
+    ],
+    "grapheme-break.noop": [
+     219.08,
+     217.53,
+     221.04
+    ],
+    "grapheme-break.table": [
+     216.92,
+     214.51,
+     218.83
+    ],
+    "is-symbol.table": [
+     206.5,
+     205.68,
+     209.63
+    ],
+    "is-symbol.uucode": [
+     213.17,
+     212.3,
+     214.02
+    ],
+    "osc-parser": [
+     49.29,
+     48.32,
+     49.66
+    ],
+    "screen-clone.noop": [
+     5.46,
+     5.03,
+     5.64
+    ],
+    "screen-clone.clone": [
+     53.67,
+     53.4,
+     55.06
+    ],
+    "screen-clone.render": [
+     17.17,
+     16.68,
+     17.74
+    ]
+   },
+   "zig": {
+    "terminal-parser": [
+     266.03,
+     263.8,
+     267.62
+    ],
+    "terminal-stream": [
+     566.18,
+     524.96,
+     577.87
+    ],
+    "codepoint-width.noop": [
+     3.53,
+     3.18,
+     3.68
+    ],
+    "codepoint-width.table": [
+     231.01,
+     230.06,
+     232.14
+    ],
+    "codepoint-width.simd": [
+     503.54,
+     501.0,
+     507.25
+    ],
+    "codepoint-width.wcwidth": [
+     258.95,
+     258.47,
+     261.12
+    ],
+    "grapheme-break.noop": [
+     231.66,
+     230.34,
+     233.56
+    ],
+    "grapheme-break.table": [
+     256.08,
+     255.19,
+     257.29
+    ],
+    "is-symbol.table": [
+     238.43,
+     235.88,
+     240.63
+    ],
+    "is-symbol.uucode": [
+     229.88,
+     229.43,
+     230.42
+    ],
+    "osc-parser": [
+     57.45,
+     57.03,
+     57.86
+    ],
+    "screen-clone.noop": [
+     5.7,
+     5.49,
+     5.97
+    ],
+    "screen-clone.clone": [
+     51.58,
+     51.11,
+     54.5
+    ],
+    "screen-clone.render": [
+     15.74,
+     15.55,
+     15.89
+    ]
+   },
+   "bin": "rustty-bench-r3-clone",
+   "zbin": "ghostty-bench",
+   "W": 12,
+   "T": 0,
+   "L": 2,
+   "suiteR": 2589.7,
+   "suiteZ": 2915.8,
+   "suiteD": -11.2,
+   "geo": 0.913,
+   "moved": [
+    [
+     "screen-clone.clone",
+     -5.3
+    ]
+   ]
+  },
+  {
+   "key": "r3b",
+   "rf": "perf-v3/r3_s_r3render.jsonl",
+   "zf": "perf-v3/r3_zig.jsonl",
+   "commit": "e6f27dc",
+   "t": "2026-07-16T07:10:18",
+   "subject": "rustty: perf \u2014 r3-render: hoist mutable style/grapheme column borrows in update()",
+   "label": "Hoist mutable style/grapheme column borrows in update()",
+   "kind": "stage",
+   "note": "",
+   "rust": {
+    "terminal-parser": [
+     215.85,
+     201.99,
+     217.27
+    ],
+    "terminal-stream": [
+     448.45,
+     445.1,
+     452.11
+    ],
+    "codepoint-width.noop": [
+     2.88,
+     2.77,
+     3.06
+    ],
+    "codepoint-width.table": [
+     217.86,
+     215.27,
+     220.28
+    ],
+    "codepoint-width.simd": [
+     473.04,
+     471.54,
+     474.39
+    ],
+    "codepoint-width.wcwidth": [
+     247.04,
+     246.3,
+     247.61
+    ],
+    "grapheme-break.noop": [
+     221.06,
+     218.32,
+     221.74
+    ],
+    "grapheme-break.table": [
+     216.91,
+     216.39,
+     219.54
+    ],
+    "is-symbol.table": [
+     208.45,
+     204.92,
+     209.16
+    ],
+    "is-symbol.uucode": [
+     214.12,
+     212.26,
+     214.68
+    ],
+    "osc-parser": [
+     48.96,
+     48.38,
+     49.35
+    ],
+    "screen-clone.noop": [
+     5.32,
+     5.07,
+     5.53
+    ],
+    "screen-clone.clone": [
+     53.86,
+     53.41,
+     55.84
+    ],
+    "screen-clone.render": [
+     15.53,
+     15.41,
+     15.65
+    ]
+   },
+   "zig": {
+    "terminal-parser": [
+     266.03,
+     263.8,
+     267.62
+    ],
+    "terminal-stream": [
+     566.18,
+     524.96,
+     577.87
+    ],
+    "codepoint-width.noop": [
+     3.53,
+     3.18,
+     3.68
+    ],
+    "codepoint-width.table": [
+     231.01,
+     230.06,
+     232.14
+    ],
+    "codepoint-width.simd": [
+     503.54,
+     501.0,
+     507.25
+    ],
+    "codepoint-width.wcwidth": [
+     258.95,
+     258.47,
+     261.12
+    ],
+    "grapheme-break.noop": [
+     231.66,
+     230.34,
+     233.56
+    ],
+    "grapheme-break.table": [
+     256.08,
+     255.19,
+     257.29
+    ],
+    "is-symbol.table": [
+     238.43,
+     235.88,
+     240.63
+    ],
+    "is-symbol.uucode": [
+     229.88,
+     229.43,
+     230.42
+    ],
+    "osc-parser": [
+     57.45,
+     57.03,
+     57.86
+    ],
+    "screen-clone.noop": [
+     5.7,
+     5.49,
+     5.97
+    ],
+    "screen-clone.clone": [
+     51.58,
+     51.11,
+     54.5
+    ],
+    "screen-clone.render": [
+     15.74,
+     15.55,
+     15.89
+    ]
+   },
+   "bin": "rustty-bench-r3-render",
+   "zbin": "ghostty-bench",
+   "W": 12,
+   "T": 1,
+   "L": 1,
+   "suiteR": 2589.3,
+   "suiteZ": 2915.8,
+   "suiteD": -11.2,
+   "geo": 0.903,
+   "moved": [
+    [
+     "screen-clone.render",
+     -9.6
+    ]
+   ]
+  },
+  {
+   "key": "r3",
+   "rf": "perf-v3/r3_r3ship.jsonl",
+   "zf": "perf-v3/r3_zig.jsonl",
+   "commit": "10f2091",
+   "t": "2026-07-16T07:23:54",
+   "subject": "rustty: vt \u2014 parity fix: same-page clone must not skip style/kitty for hyperlinked cells",
+   "label": "Round 3 ship, incl. parity fix: same-page clone must not skip style for hyperlinked cells",
+   "kind": "ship",
+   "note": "",
+   "rust": {
+    "terminal-parser": [
+     210.61,
+     201.46,
+     218.75
+    ],
+    "terminal-stream": [
+     460.82,
+     444.73,
+     468.66
+    ],
+    "codepoint-width.noop": [
+     3.03,
+     2.94,
+     3.1
+    ],
+    "codepoint-width.table": [
+     217.92,
+     215.36,
+     220.82
+    ],
+    "codepoint-width.simd": [
+     472.84,
+     470.34,
+     476.23
+    ],
+    "codepoint-width.wcwidth": [
+     247.32,
+     245.99,
+     247.86
+    ],
+    "grapheme-break.noop": [
+     220.24,
+     218.43,
+     223.65
+    ],
+    "grapheme-break.table": [
+     217.45,
+     215.53,
+     218.86
+    ],
+    "is-symbol.table": [
+     208.77,
+     207.67,
+     209.2
+    ],
+    "is-symbol.uucode": [
+     213.19,
+     211.91,
+     215.13
+    ],
+    "osc-parser": [
+     48.46,
+     48.09,
+     48.98
+    ],
+    "screen-clone.noop": [
+     5.23,
+     5.04,
+     6.01
+    ],
+    "screen-clone.clone": [
+     50.5,
+     49.4,
+     50.73
+    ],
+    "screen-clone.render": [
+     16.06,
+     15.61,
+     16.55
+    ]
+   },
+   "zig": {
+    "terminal-parser": [
+     266.03,
+     263.8,
+     267.62
+    ],
+    "terminal-stream": [
+     566.18,
+     524.96,
+     577.87
+    ],
+    "codepoint-width.noop": [
+     3.53,
+     3.18,
+     3.68
+    ],
+    "codepoint-width.table": [
+     231.01,
+     230.06,
+     232.14
+    ],
+    "codepoint-width.simd": [
+     503.54,
+     501.0,
+     507.25
+    ],
+    "codepoint-width.wcwidth": [
+     258.95,
+     258.47,
+     261.12
+    ],
+    "grapheme-break.noop": [
+     231.66,
+     230.34,
+     233.56
+    ],
+    "grapheme-break.table": [
+     256.08,
+     255.19,
+     257.29
+    ],
+    "is-symbol.table": [
+     238.43,
+     235.88,
+     240.63
+    ],
+    "is-symbol.uucode": [
+     229.88,
+     229.43,
+     230.42
+    ],
+    "osc-parser": [
+     57.45,
+     57.03,
+     57.86
+    ],
+    "screen-clone.noop": [
+     5.7,
+     5.49,
+     5.97
+    ],
+    "screen-clone.clone": [
+     51.58,
+     51.11,
+     54.5
+    ],
+    "screen-clone.render": [
+     15.74,
+     15.55,
+     15.89
+    ]
+   },
+   "bin": "rustty-bench-r3-SHIP-RF",
+   "zbin": "ghostty-bench",
+   "W": 13,
+   "T": 0,
+   "L": 1,
+   "suiteR": 2592.4,
+   "suiteZ": 2915.8,
+   "suiteD": -11.1,
+   "geo": 0.902,
+   "moved": [
+    [
+     "screen-clone.clone",
+     -6.2
+    ]
+   ]
+  },
+  {
+   "key": "r3s",
+   "rf": "perf-v5/r3ship.jsonl",
+   "zf": "perf-v5/zig.jsonl",
+   "commit": "10f2091",
+   "t": "2026-07-16T07:23:54",
+   "subject": "rustty: vt \u2014 parity fix: same-page clone must not skip style/kitty for hyperlinked cells",
+   "label": "Round 3 binary re-measured in the final session (control)",
+   "kind": "session",
+   "note": "no code change: session control",
+   "rust": {
+    "terminal-parser": [
+     207.19,
+     200.71,
+     216.78
+    ],
+    "terminal-stream": [
+     449.92,
+     444.17,
+     457.45
+    ],
+    "codepoint-width.noop": [
+     2.96,
+     2.91,
+     2.98
+    ],
+    "codepoint-width.table": [
+     217.41,
+     214.73,
+     219.02
+    ],
+    "codepoint-width.simd": [
+     470.7,
+     470.25,
+     472.5
+    ],
+    "codepoint-width.wcwidth": [
+     246.66,
+     245.75,
+     248.83
+    ],
+    "grapheme-break.noop": [
+     218.27,
+     217.74,
+     222.23
+    ],
+    "grapheme-break.table": [
+     217.34,
+     214.82,
+     217.83
+    ],
+    "is-symbol.table": [
+     207.18,
+     204.24,
+     209.72
+    ],
+    "is-symbol.uucode": [
+     212.8,
+     210.55,
+     214.81
+    ],
+    "osc-parser": [
+     49.42,
+     47.99,
+     49.82
+    ],
+    "screen-clone.noop": [
+     5.23,
+     5.13,
+     5.78
+    ],
+    "screen-clone.clone": [
+     49.95,
+     49.17,
+     50.7
+    ],
+    "screen-clone.render": [
+     15.86,
+     15.7,
+     16.04
+    ]
+   },
+   "zig": {
+    "terminal-parser": [
+     263.8,
+     262.1,
+     265.36
+    ],
+    "terminal-stream": [
+     551.46,
+     533.36,
+     570.72
+    ],
+    "codepoint-width.noop": [
+     3.65,
+     3.38,
+     4.06
+    ],
+    "codepoint-width.table": [
+     234.31,
+     232.62,
+     236.74
+    ],
+    "codepoint-width.simd": [
+     501.14,
+     499.66,
+     502.19
+    ],
+    "codepoint-width.wcwidth": [
+     258.38,
+     257.24,
+     261.78
+    ],
+    "grapheme-break.noop": [
+     231.04,
+     229.28,
+     231.55
+    ],
+    "grapheme-break.table": [
+     256.41,
+     254.36,
+     257.44
+    ],
+    "is-symbol.table": [
+     238.63,
+     236.94,
+     240.56
+    ],
+    "is-symbol.uucode": [
+     229.87,
+     228.1,
+     231.14
+    ],
+    "osc-parser": [
+     57.15,
+     56.62,
+     58.13
+    ],
+    "screen-clone.noop": [
+     5.49,
+     5.32,
+     5.87
+    ],
+    "screen-clone.clone": [
+     50.59,
+     49.86,
+     51.15
+    ],
+    "screen-clone.render": [
+     15.4,
+     15.15,
+     15.87
+    ]
+   },
+   "bin": "rustty-bench-r3-SHIP-RF",
+   "zbin": "ghostty-bench",
+   "W": 12,
+   "T": 1,
+   "L": 1,
+   "suiteR": 2570.9,
+   "suiteZ": 2897.3,
+   "suiteD": -11.3,
+   "geo": 0.901,
+   "moved": []
+  },
+  {
+   "key": "r5",
+   "rf": "perf-v5/r5ship.jsonl",
+   "zf": "perf-v5/zig.jsonl",
+   "commit": "a3a2b23",
+   "t": "2026-07-16T10:04:41",
+   "subject": "rustty: perf \u2014 merge D \u2014 clone chain lane (round 5)",
+   "label": "Rounds 4+5 ship: parser fast path, style-run batching, cold print arms, bench SIMD fairness, render hoist",
+   "kind": "ship",
+   "note": "",
+   "rust": {
+    "terminal-parser": [
+     92.47,
+     91.85,
+     93.64
+    ],
+    "terminal-stream": [
+     343.32,
+     337.58,
+     346.46
+    ],
+    "codepoint-width.noop": [
+     2.99,
+     2.82,
+     3.22
+    ],
+    "codepoint-width.table": [
+     207.85,
+     206.93,
+     209.18
+    ],
+    "codepoint-width.simd": [
+     466.36,
+     465.4,
+     468.73
+    ],
+    "codepoint-width.wcwidth": [
+     237.64,
+     236.67,
+     238.31
+    ],
+    "grapheme-break.noop": [
+     211.77,
+     211.06,
+     214.26
+    ],
+    "grapheme-break.table": [
+     211.45,
+     210.06,
+     214.23
+    ],
+    "is-symbol.table": [
+     200.52,
+     196.91,
+     205.77
+    ],
+    "is-symbol.uucode": [
+     206.1,
+     205.29,
+     207.68
+    ],
+    "osc-parser": [
+     49.39,
+     49.05,
+     50.36
+    ],
+    "screen-clone.noop": [
+     4.56,
+     4.43,
+     4.79
+    ],
+    "screen-clone.clone": [
+     20.88,
+     20.57,
+     21.44
+    ],
+    "screen-clone.render": [
+     13.84,
+     13.44,
+     14.47
+    ]
+   },
+   "zig": {
+    "terminal-parser": [
+     263.8,
+     262.1,
+     265.36
+    ],
+    "terminal-stream": [
+     551.46,
+     533.36,
+     570.72
+    ],
+    "codepoint-width.noop": [
+     3.65,
+     3.38,
+     4.06
+    ],
+    "codepoint-width.table": [
+     234.31,
+     232.62,
+     236.74
+    ],
+    "codepoint-width.simd": [
+     501.14,
+     499.66,
+     502.19
+    ],
+    "codepoint-width.wcwidth": [
+     258.38,
+     257.24,
+     261.78
+    ],
+    "grapheme-break.noop": [
+     231.04,
+     229.28,
+     231.55
+    ],
+    "grapheme-break.table": [
+     256.41,
+     254.36,
+     257.44
+    ],
+    "is-symbol.table": [
+     238.63,
+     236.94,
+     240.56
+    ],
+    "is-symbol.uucode": [
+     229.87,
+     228.1,
+     231.14
+    ],
+    "osc-parser": [
+     57.15,
+     56.62,
+     58.13
+    ],
+    "screen-clone.noop": [
+     5.49,
+     5.32,
+     5.87
+    ],
+    "screen-clone.clone": [
+     50.59,
+     49.86,
+     51.15
+    ],
+    "screen-clone.render": [
+     15.4,
+     15.15,
+     15.87
+    ]
+   },
+   "bin": "rustty-bench-r5-SHIP-RF",
+   "zbin": "ghostty-bench",
+   "W": 14,
+   "T": 0,
+   "L": 0,
+   "suiteR": 2269.1,
+   "suiteZ": 2897.3,
+   "suiteD": -21.7,
+   "geo": 0.758,
+   "moved": [
+    [
+     "terminal-parser",
+     -55.4
+    ],
+    [
+     "terminal-stream",
+     -23.7
+    ],
+    [
+     "screen-clone.clone",
+     -58.2
+    ],
+    [
+     "screen-clone.render",
+     -12.7
+    ],
+    [
+     "codepoint-width.table",
+     -4.4
+    ]
+   ]
+  }
+ ],
+ "commits": [
+  {
+   "h": "10cc614",
+   "t": "2026-07-15T23:57:43",
+   "s": "rustty: phase-2 \u2014 Rust-vs-Zig benchmark head-to-head + synthetic CLI parity design",
+   "stat": "6 files changed, 1020 insertions(+)",
+   "files": []
+  },
+  {
+   "h": "9e028ec",
+   "t": "2026-07-16T01:18:25",
+   "s": "rustty: perf \u2014 fix-profile-lto: TIER-0 build-profile parity for release-fast",
+   "stat": "1 file changed, 6 insertions(+)",
+   "files": [
+    "Cargo.toml"
+   ]
+  },
+  {
+   "h": "f2b7dcd",
+   "t": "2026-07-16T01:24:13",
+   "s": "rustty: perf \u2014 fix-inline-idioms: restore every dropped Zig inline hint",
+   "stat": "7 files changed, 49 insertions(+), 1 deletion(-)",
+   "files": [
+    "rustty-unicode/src/grapheme.rs",
+    "rustty-unicode/src/props_table.rs",
+    "rustty-unicode/src/props_uucode.rs",
+    "rustty-unicode/src/symbols_table.rs",
+    "rustty-vt/src/osc/mod.rs",
+    "rustty-vt/src/parser.rs"
+   ]
+  },
+  {
+   "h": "79dce2e",
+   "t": "2026-07-16T01:28:50",
+   "s": "rustty: perf \u2014 fix-utf8-dfa: elide per-byte TRANSITIONS bounds/overflow checks",
+   "stat": "1 file changed, 49 insertions(+), 8 deletions(-)",
+   "files": [
+    "rustty-vt/src/utf8_decoder.rs"
+   ]
+  },
+  {
+   "h": "eb32359",
+   "t": "2026-07-16T01:31:38",
+   "s": "rustty: perf \u2014 fix-bench-assert-tier: port std.debug.assert at its correct tier",
+   "stat": "3 files changed, 12 insertions(+), 6 deletions(-)",
+   "files": [
+    "rustty-bench/src/codepoint_width.rs",
+    "rustty-bench/src/grapheme_break.rs",
+    "rustty-bench/src/is_symbol.rs"
+   ]
+  },
+  {
+   "h": "08299e0",
+   "t": "2026-07-16T01:41:38",
+   "s": "rustty: perf \u2014 fix-pin-keys-collect: drop the per-chunk tracked-pin key Vec",
+   "stat": "1 file changed, 8 insertions(+), 1 deletion(-)",
+   "files": [
+    "rustty-vt/src/pagelist/access.rs"
+   ]
+  },
+  {
+   "h": "cdb9a26",
+   "t": "2026-07-16T01:46:32",
+   "s": "rustty: perf \u2014 fix-remap-hasher: pointer-identity hasher for TrackedPinsRemap",
+   "stat": "3 files changed, 47 insertions(+), 4 deletions(-)",
+   "files": [
+    "rustty-vt/src/pagelist/access.rs",
+    "rustty-vt/src/pagelist/tests.rs",
+    "rustty-vt/src/screen.rs"
+   ]
+  },
+  {
+   "h": "9789788",
+   "t": "2026-07-16T01:51:52",
+   "s": "rustty: perf \u2014 fix-render-soa: restore MultiArrayList SoA + raw-column memcpy in RenderState",
+   "stat": "10 files changed, 479 insertions(+), 249 deletions(-)",
+   "files": [
+    "rustty-font-shaper/src/shape.rs",
+    "rustty-font-shaper/src/shaper/coretext_tests.rs",
+    "rustty-font-shaper/src/shaper/harfbuzz_tests.rs",
+    "rustty-font-shaper/src/shaper/run.rs",
+    "rustty-renderer/src/cell.rs",
+    "rustty-renderer/src/generic.rs"
+   ]
+  },
+  {
+   "h": "11ca425",
+   "t": "2026-07-16T01:55:29",
+   "s": "rustty: perf \u2014 fix-osc-fixed-capture: restore the zero-alloc fixed-writer-over-self.buffer OSC capture",
+   "stat": "16 files changed, 130 insertions(+), 56 deletions(-)",
+   "files": [
+    "rustty-vt/src/osc/mod.rs",
+    "rustty-vt/src/osc/parsers/change_window_icon.rs",
+    "rustty-vt/src/osc/parsers/change_window_title.rs",
+    "rustty-vt/src/osc/parsers/clipboard_operation.rs",
+    "rustty-vt/src/osc/parsers/color.rs",
+    "rustty-vt/src/osc/parsers/context_signal.rs"
+   ]
+  },
+  {
+   "h": "67962f1",
+   "t": "2026-07-16T02:02:23",
+   "s": "rustty: perf \u2014 fix-color-list-prealloc: restore SegmentedList(Request,2) inline prealloc",
+   "stat": "1 file changed, 96 insertions(+), 4 deletions(-)",
+   "files": [
+    "rustty-vt/src/osc/parsers/color.rs"
+   ]
+  },
+  {
+   "h": "82defe5",
+   "t": "2026-07-16T02:08:47",
+   "s": "rustty: perf \u2014 fix-lut-bounds: remove the 3 chained bounds checks in the 3-stage unicode lookup",
+   "stat": "3 files changed, 147 insertions(+), 10 deletions(-)",
+   "files": [
+    "rustty-unicode/src/lut.rs",
+    "rustty-unicode/src/props_table.rs",
+    "rustty-unicode/src/symbols_table.rs"
+   ]
+  },
+  {
+   "h": "2bb5c42",
+   "t": "2026-07-16T02:14:42",
+   "s": "rustty: perf \u2014 fix-parser-destage: restore the reference arm structure in Parser::next",
+   "stat": "1 file changed, 88 insertions(+), 125 deletions(-)",
+   "files": [
+    "rustty-vt/src/parser.rs"
+   ]
+  },
+  {
+   "h": "d211a84",
+   "t": "2026-07-16T02:15:55",
+   "s": "rustty: perf \u2014 merge fix-render-soa branch",
+   "stat": "10 files changed, 479 insertions(+), 249 deletions(-)",
+   "files": [
+    "rustty-font-shaper/src/shape.rs",
+    "rustty-font-shaper/src/shaper/coretext_tests.rs",
+    "rustty-font-shaper/src/shaper/harfbuzz_tests.rs",
+    "rustty-font-shaper/src/shaper/run.rs",
+    "rustty-renderer/src/cell.rs",
+    "rustty-renderer/src/generic.rs"
+   ]
+  },
+  {
+   "h": "408ddaa",
+   "t": "2026-07-16T03:20:59",
+   "s": "Revert \"rustty: perf \u2014 fix-color-list-prealloc: restore SegmentedList(Request,2) inline prealloc\"",
+   "stat": "1 file changed, 4 insertions(+), 96 deletions(-)",
+   "files": [
+    "rustty-vt/src/osc/parsers/color.rs"
+   ]
+  },
+  {
+   "h": "9e1837b",
+   "t": "2026-07-16T03:20:59",
+   "s": "rustty: perf \u2014 release-fast profile: revert LTO/cgu/panic to overflow-checks-only (measured optimum)",
+   "stat": "1 file changed, 6 insertions(+), 6 deletions(-)",
+   "files": [
+    "Cargo.toml"
+   ]
+  },
+  {
+   "h": "1e96603",
+   "t": "2026-07-16T03:23:30",
+   "s": "rustty: phase-2 \u2014 perf-opt attribution log, fix plan, raw bench data",
+   "stat": "26 files changed, 1219 insertions(+)",
+   "files": []
+  },
+  {
+   "h": "b6f5e4f",
+   "t": "2026-07-16T04:37:13",
+   "s": "perf(vt): render update \u2014 stop re-zeroing the style/grapheme SoA columns per rebuild (fix-render-undefined-cols)",
+   "stat": "1 file changed, 56 insertions(+), 24 deletions(-)",
+   "files": [
+    "rustty-vt/src/render.rs"
+   ]
+  },
+  {
+   "h": "e1f4829",
+   "t": "2026-07-16T05:00:15",
+   "s": "rustty: perf \u2014 r2-action-arrayvec: drop-glue-free per-byte Action return (boxed dispatch payloads + InlineVec + state hoist)",
+   "stat": "4 files changed, 277 insertions(+), 41 deletions(-)",
+   "files": [
+    "rustty-inspector/src/widgets/termio.rs",
+    "rustty-vt/src/parser.rs",
+    "rustty-vt/src/stream.rs"
+   ]
+  },
+  {
+   "h": "ab20827",
+   "t": "2026-07-16T05:09:47",
+   "s": "rustty: perf \u2014 r2-clone: inline packed Style::eql + coalesced cell copy in clone_partial_row_from",
+   "stat": "4 files changed, 274 insertions(+), 28 deletions(-)",
+   "files": [
+    "rustty-vt/src/page.rs",
+    "rustty-vt/src/page_impl.rs",
+    "rustty-vt/src/page_tests.rs",
+    "rustty-vt/src/style.rs"
+   ]
+  },
+  {
+   "h": "9e386ab",
+   "t": "2026-07-16T05:20:32",
+   "s": "rustty: perf \u2014 r2-osc-win: fall-through success store in the OSC fixed-capture writeByte",
+   "stat": "1 file changed, 12 insertions(+), 5 deletions(-)",
+   "files": [
+    "rustty-vt/src/osc/mod.rs"
+   ]
+  },
+  {
+   "h": "8fb3dd2",
+   "t": "2026-07-16T05:22:59",
+   "s": "rustty: perf \u2014 merge alloc-bench suite branch",
+   "stat": "11 files changed, 938 insertions(+), 24 deletions(-)",
+   "files": [
+    "Cargo.lock",
+    "rustty-os/Cargo.toml",
+    "rustty-os/src/page_allocator.rs",
+    "rustty-vt/Cargo.toml",
+    "rustty-vt/examples/alloc_bench.rs",
+    "rustty-vt/src/pagelist/mod.rs"
+   ]
+  },
+  {
+   "h": "ada0475",
+   "t": "2026-07-16T05:21:52",
+   "s": "rustty: alloc-bench suite \u2014 alloc-bench feature seam, equal-scope standalone bench, arena resize seam (fix 12), std_size golden gate",
+   "stat": "11 files changed, 938 insertions(+), 24 deletions(-)",
+   "files": [
+    "Cargo.lock",
+    "rustty-os/Cargo.toml",
+    "rustty-os/src/page_allocator.rs",
+    "rustty-vt/Cargo.toml",
+    "rustty-vt/examples/alloc_bench.rs",
+    "rustty-vt/src/pagelist/mod.rs"
+   ]
+  },
+  {
+   "h": "1abae33",
+   "t": "2026-07-16T07:03:35",
+   "s": "rustty: perf \u2014 r3-clone: outline cold grapheme/hyperlink arms of clone_partial_row_from",
+   "stat": "2 files changed, 193 insertions(+), 78 deletions(-)",
+   "files": [
+    "rustty-vt/src/page_impl.rs"
+   ]
+  },
+  {
+   "h": "e6f27dc",
+   "t": "2026-07-16T07:10:18",
+   "s": "rustty: perf \u2014 r3-render: hoist mutable style/grapheme column borrows in update()",
+   "stat": "2 files changed, 108 insertions(+), 35 deletions(-)",
+   "files": [
+    "rustty-vt/src/render.rs"
+   ]
+  },
+  {
+   "h": "10f2091",
+   "t": "2026-07-16T07:23:54",
+   "s": "rustty: vt \u2014 parity fix: same-page clone must not skip style/kitty for hyperlinked cells",
+   "stat": "2 files changed, 116 insertions(+), 6 deletions(-)",
+   "files": [
+    "rustty-vt/src/page_impl.rs",
+    "rustty-vt/src/page_tests.rs"
+   ]
+  },
+  {
+   "h": "e320dcb",
+   "t": "2026-07-16T07:38:42",
+   "s": "rustty: phase-2 \u2014 rounds 2-3 official results: 13 wins / 1 parity / 0 losses vs Zig",
+   "stat": "16 files changed, 467 insertions(+)",
+   "files": []
+  },
+  {
+   "h": "a26a4b1",
+   "t": "2026-07-16T09:07:45",
+   "s": "rustty: perf \u2014 r4-render-win: hoist style-set base + zip the managed cell walk",
+   "stat": "3 files changed, 266 insertions(+), 9 deletions(-)",
+   "files": [
+    "rustty-vt/src/ref_counted_set.rs",
+    "rustty-vt/src/render.rs"
+   ]
+  },
+  {
+   "h": "3e91f90",
+   "t": "2026-07-16T09:19:50",
+   "s": "rustty: phase-2 \u2014 r4 final gate record: workspace green, SHIP-RF stashed, -7.0% confirmation sweep",
+   "stat": "1 file changed, 33 insertions(+)",
+   "files": []
+  },
+  {
+   "h": "be02801",
+   "t": "2026-07-16T09:19:13",
+   "s": "rustty: perf \u2014 r5-parser-fastpath: state-equal fast path in Parser::next",
+   "stat": "1 file changed, 24 insertions(+)",
+   "files": [
+    "rustty-vt/src/parser.rs"
+   ]
+  },
+  {
+   "h": "6ca1015",
+   "t": "2026-07-16T09:36:26",
+   "s": "rustty: perf \u2014 r5-print-outline: outline cold print arms (grapheme/zero-width/wide)",
+   "stat": "1 file changed, 442 insertions(+), 395 deletions(-)",
+   "files": [
+    "rustty-vt/src/terminal.rs"
+   ]
+  },
+  {
+   "h": "52116f3",
+   "t": "2026-07-16T09:36:26",
+   "s": "rustty: perf \u2014 r5-stream-simd: restore the reference bench binary's SIMD build config",
+   "stat": "1 file changed, 7 insertions(+), 1 deletion(-)",
+   "files": [
+    "rustty-bench/Cargo.toml"
+   ]
+  },
+  {
+   "h": "ca714e0",
+   "t": "2026-07-16T09:41:05",
+   "s": "rustty: perf \u2014 r5-utf8-dfa-pad: panic-free 512-entry DFA pad + per-arm state stores in UTF8Decoder::next",
+   "stat": "1 file changed, 146 insertions(+), 20 deletions(-)",
+   "files": [
+    "rustty-vt/src/utf8_decoder.rs"
+   ]
+  },
+  {
+   "h": "745b3c9",
+   "t": "2026-07-16T10:00:32",
+   "s": "rustty: perf \u2014 r5-clone-style-run: batch same-style runs + by-pointer set adds in the clone chain",
+   "stat": "5 files changed, 739 insertions(+), 18 deletions(-)",
+   "files": [
+    "rustty-vt/src/page.rs",
+    "rustty-vt/src/page_impl.rs",
+    "rustty-vt/src/page_tests.rs",
+    "rustty-vt/src/ref_counted_set.rs"
+   ]
+  },
+  {
+   "h": "43cf4b5",
+   "t": "2026-07-16T10:02:29",
+   "s": "rustty: perf \u2014 merge A \u2014 parser + stream lane (round 5)",
+   "stat": "3 files changed, 473 insertions(+), 396 deletions(-)",
+   "files": [
+    "rustty-bench/Cargo.toml",
+    "rustty-vt/src/parser.rs",
+    "rustty-vt/src/terminal.rs"
+   ]
+  },
+  {
+   "h": "3e300c8",
+   "t": "2026-07-16T10:03:18",
+   "s": "rustty: perf \u2014 merge B \u2014 decode family lane (round 5)",
+   "stat": "5 files changed, 150 insertions(+), 20 deletions(-)",
+   "files": [
+    "rustty-vt/src/utf8_decoder.rs"
+   ]
+  },
+  {
+   "h": "a3a2b23",
+   "t": "2026-07-16T10:04:41",
+   "s": "rustty: perf \u2014 merge D \u2014 clone chain lane (round 5)",
+   "stat": "5 files changed, 739 insertions(+), 18 deletions(-)",
+   "files": [
+    "rustty-vt/src/page.rs",
+    "rustty-vt/src/page_impl.rs",
+    "rustty-vt/src/page_tests.rs",
+    "rustty-vt/src/ref_counted_set.rs"
+   ]
+  },
+  {
+   "h": "349e5d1",
+   "t": "2026-07-16T10:41:04",
+   "s": "rustty: phase-2 \u2014 rounds 4-5 official: 14/14 WINS vs Zig, suite -21.7%",
+   "stat": "6 files changed, 255 insertions(+)",
+   "files": []
+  }
+ ],
+ "chain": [
+  {
+   "order": "0",
+   "fix": "frozen_C (pre-fix)",
+   "commit": "10cc614",
+   "verdict": "baseline",
+   "bench": "terminal-parser",
+   "rust_ms": "684.31"
+  },
+  {
+   "order": "0",
+   "fix": "frozen_C (pre-fix)",
+   "commit": "10cc614",
+   "verdict": "baseline",
+   "bench": "terminal-stream",
+   "rust_ms": "449.71"
+  },
+  {
+   "order": "0",
+   "fix": "frozen_C (pre-fix)",
+   "commit": "10cc614",
+   "verdict": "baseline",
+   "bench": "codepoint-width.noop",
+   "rust_ms": "2.93"
+  },
+  {
+   "order": "0",
+   "fix": "frozen_C (pre-fix)",
+   "commit": "10cc614",
+   "verdict": "baseline",
+   "bench": "codepoint-width.table",
+   "rust_ms": "228.62"
+  },
+  {
+   "order": "0",
+   "fix": "frozen_C (pre-fix)",
+   "commit": "10cc614",
+   "verdict": "baseline",
+   "bench": "codepoint-width.simd",
+   "rust_ms": "474.08"
+  },
+  {
+   "order": "0",
+   "fix": "frozen_C (pre-fix)",
+   "commit": "10cc614",
+   "verdict": "baseline",
+   "bench": "codepoint-width.wcwidth",
+   "rust_ms": "259.94"
+  },
+  {
+   "order": "0",
+   "fix": "frozen_C (pre-fix)",
+   "commit": "10cc614",
+   "verdict": "baseline",
+   "bench": "grapheme-break.noop",
+   "rust_ms": "227.62"
+  },
+  {
+   "order": "0",
+   "fix": "frozen_C (pre-fix)",
+   "commit": "10cc614",
+   "verdict": "baseline",
+   "bench": "grapheme-break.table",
+   "rust_ms": "269.23"
+  },
+  {
+   "order": "0",
+   "fix": "frozen_C (pre-fix)",
+   "commit": "10cc614",
+   "verdict": "baseline",
+   "bench": "is-symbol.table",
+   "rust_ms": "224.77"
+  },
+  {
+   "order": "0",
+   "fix": "frozen_C (pre-fix)",
+   "commit": "10cc614",
+   "verdict": "baseline",
+   "bench": "is-symbol.uucode",
+   "rust_ms": "228.61"
+  },
+  {
+   "order": "0",
+   "fix": "frozen_C (pre-fix)",
+   "commit": "10cc614",
+   "verdict": "baseline",
+   "bench": "osc-parser",
+   "rust_ms": "128.66"
+  },
+  {
+   "order": "0",
+   "fix": "frozen_C (pre-fix)",
+   "commit": "10cc614",
+   "verdict": "baseline",
+   "bench": "screen-clone.noop",
+   "rust_ms": "4.85"
+  },
+  {
+   "order": "0",
+   "fix": "frozen_C (pre-fix)",
+   "commit": "10cc614",
+   "verdict": "baseline",
+   "bench": "screen-clone.clone",
+   "rust_ms": "70.37"
+  },
+  {
+   "order": "0",
+   "fix": "frozen_C (pre-fix)",
+   "commit": "10cc614",
+   "verdict": "baseline",
+   "bench": "screen-clone.render",
+   "rust_ms": "31.97"
+  },
+  {
+   "order": "1",
+   "fix": "fix-profile-lto",
+   "commit": "9e028ec",
+   "verdict": "superseded by 9e1837b",
+   "bench": "terminal-parser",
+   "rust_ms": "685.6"
+  },
+  {
+   "order": "1",
+   "fix": "fix-profile-lto",
+   "commit": "9e028ec",
+   "verdict": "superseded by 9e1837b",
+   "bench": "terminal-stream",
+   "rust_ms": "458.49"
+  },
+  {
+   "order": "1",
+   "fix": "fix-profile-lto",
+   "commit": "9e028ec",
+   "verdict": "superseded by 9e1837b",
+   "bench": "codepoint-width.noop",
+   "rust_ms": "2.82"
+  },
+  {
+   "order": "1",
+   "fix": "fix-profile-lto",
+   "commit": "9e028ec",
+   "verdict": "superseded by 9e1837b",
+   "bench": "codepoint-width.table",
+   "rust_ms": "229.66"
+  },
+  {
+   "order": "1",
+   "fix": "fix-profile-lto",
+   "commit": "9e028ec",
+   "verdict": "superseded by 9e1837b",
+   "bench": "codepoint-width.simd",
+   "rust_ms": "477.55"
+  },
+  {
+   "order": "1",
+   "fix": "fix-profile-lto",
+   "commit": "9e028ec",
+   "verdict": "superseded by 9e1837b",
+   "bench": "codepoint-width.wcwidth",
+   "rust_ms": "259.67"
+  },
+  {
+   "order": "1",
+   "fix": "fix-profile-lto",
+   "commit": "9e028ec",
+   "verdict": "superseded by 9e1837b",
+   "bench": "grapheme-break.noop",
+   "rust_ms": "227.87"
+  },
+  {
+   "order": "1",
+   "fix": "fix-profile-lto",
+   "commit": "9e028ec",
+   "verdict": "superseded by 9e1837b",
+   "bench": "grapheme-break.table",
+   "rust_ms": "269.1"
+  },
+  {
+   "order": "1",
+   "fix": "fix-profile-lto",
+   "commit": "9e028ec",
+   "verdict": "superseded by 9e1837b",
+   "bench": "is-symbol.table",
+   "rust_ms": "225.09"
+  },
+  {
+   "order": "1",
+   "fix": "fix-profile-lto",
+   "commit": "9e028ec",
+   "verdict": "superseded by 9e1837b",
+   "bench": "is-symbol.uucode",
+   "rust_ms": "228.53"
+  },
+  {
+   "order": "1",
+   "fix": "fix-profile-lto",
+   "commit": "9e028ec",
+   "verdict": "superseded by 9e1837b",
+   "bench": "osc-parser",
+   "rust_ms": "129.79"
+  },
+  {
+   "order": "1",
+   "fix": "fix-profile-lto",
+   "commit": "9e028ec",
+   "verdict": "superseded by 9e1837b",
+   "bench": "screen-clone.noop",
+   "rust_ms": "4.9"
+  },
+  {
+   "order": "1",
+   "fix": "fix-profile-lto",
+   "commit": "9e028ec",
+   "verdict": "superseded by 9e1837b",
+   "bench": "screen-clone.clone",
+   "rust_ms": "70.17"
+  },
+  {
+   "order": "1",
+   "fix": "fix-profile-lto",
+   "commit": "9e028ec",
+   "verdict": "superseded by 9e1837b",
+   "bench": "screen-clone.render",
+   "rust_ms": "30.69"
+  },
+  {
+   "order": "2",
+   "fix": "fix-inline-idioms",
+   "commit": "f2b7dcd",
+   "verdict": "ACCEPT",
+   "bench": "terminal-parser",
+   "rust_ms": "620.32"
+  },
+  {
+   "order": "2",
+   "fix": "fix-inline-idioms",
+   "commit": "f2b7dcd",
+   "verdict": "ACCEPT",
+   "bench": "terminal-stream",
+   "rust_ms": "457.34"
+  },
+  {
+   "order": "2",
+   "fix": "fix-inline-idioms",
+   "commit": "f2b7dcd",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.noop",
+   "rust_ms": "2.96"
+  },
+  {
+   "order": "2",
+   "fix": "fix-inline-idioms",
+   "commit": "f2b7dcd",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.table",
+   "rust_ms": "229.12"
+  },
+  {
+   "order": "2",
+   "fix": "fix-inline-idioms",
+   "commit": "f2b7dcd",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.simd",
+   "rust_ms": "476.05"
+  },
+  {
+   "order": "2",
+   "fix": "fix-inline-idioms",
+   "commit": "f2b7dcd",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.wcwidth",
+   "rust_ms": "259.92"
+  },
+  {
+   "order": "2",
+   "fix": "fix-inline-idioms",
+   "commit": "f2b7dcd",
+   "verdict": "ACCEPT",
+   "bench": "grapheme-break.noop",
+   "rust_ms": "227.87"
+  },
+  {
+   "order": "2",
+   "fix": "fix-inline-idioms",
+   "commit": "f2b7dcd",
+   "verdict": "ACCEPT",
+   "bench": "grapheme-break.table",
+   "rust_ms": "249.87"
+  },
+  {
+   "order": "2",
+   "fix": "fix-inline-idioms",
+   "commit": "f2b7dcd",
+   "verdict": "ACCEPT",
+   "bench": "is-symbol.table",
+   "rust_ms": "222.64"
+  },
+  {
+   "order": "2",
+   "fix": "fix-inline-idioms",
+   "commit": "f2b7dcd",
+   "verdict": "ACCEPT",
+   "bench": "is-symbol.uucode",
+   "rust_ms": "226.6"
+  },
+  {
+   "order": "2",
+   "fix": "fix-inline-idioms",
+   "commit": "f2b7dcd",
+   "verdict": "ACCEPT",
+   "bench": "osc-parser",
+   "rust_ms": "77.39"
+  },
+  {
+   "order": "2",
+   "fix": "fix-inline-idioms",
+   "commit": "f2b7dcd",
+   "verdict": "ACCEPT",
+   "bench": "screen-clone.noop",
+   "rust_ms": "5.01"
+  },
+  {
+   "order": "2",
+   "fix": "fix-inline-idioms",
+   "commit": "f2b7dcd",
+   "verdict": "ACCEPT",
+   "bench": "screen-clone.clone",
+   "rust_ms": "70.62"
+  },
+  {
+   "order": "2",
+   "fix": "fix-inline-idioms",
+   "commit": "f2b7dcd",
+   "verdict": "ACCEPT",
+   "bench": "screen-clone.render",
+   "rust_ms": "31.5"
+  },
+  {
+   "order": "3",
+   "fix": "fix-utf8-dfa",
+   "commit": "79dce2e",
+   "verdict": "ACCEPT",
+   "bench": "terminal-parser",
+   "rust_ms": "632.01"
+  },
+  {
+   "order": "3",
+   "fix": "fix-utf8-dfa",
+   "commit": "79dce2e",
+   "verdict": "ACCEPT",
+   "bench": "terminal-stream",
+   "rust_ms": "458.33"
+  },
+  {
+   "order": "3",
+   "fix": "fix-utf8-dfa",
+   "commit": "79dce2e",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.noop",
+   "rust_ms": "3.12"
+  },
+  {
+   "order": "3",
+   "fix": "fix-utf8-dfa",
+   "commit": "79dce2e",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.table",
+   "rust_ms": "216.14"
+  },
+  {
+   "order": "3",
+   "fix": "fix-utf8-dfa",
+   "commit": "79dce2e",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.simd",
+   "rust_ms": "463.25"
+  },
+  {
+   "order": "3",
+   "fix": "fix-utf8-dfa",
+   "commit": "79dce2e",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.wcwidth",
+   "rust_ms": "246.66"
+  },
+  {
+   "order": "3",
+   "fix": "fix-utf8-dfa",
+   "commit": "79dce2e",
+   "verdict": "ACCEPT",
+   "bench": "grapheme-break.noop",
+   "rust_ms": "217.11"
+  },
+  {
+   "order": "3",
+   "fix": "fix-utf8-dfa",
+   "commit": "79dce2e",
+   "verdict": "ACCEPT",
+   "bench": "grapheme-break.table",
+   "rust_ms": "236.48"
+  },
+  {
+   "order": "3",
+   "fix": "fix-utf8-dfa",
+   "commit": "79dce2e",
+   "verdict": "ACCEPT",
+   "bench": "is-symbol.table",
+   "rust_ms": "209.28"
+  },
+  {
+   "order": "3",
+   "fix": "fix-utf8-dfa",
+   "commit": "79dce2e",
+   "verdict": "ACCEPT",
+   "bench": "is-symbol.uucode",
+   "rust_ms": "214.9"
+  },
+  {
+   "order": "3",
+   "fix": "fix-utf8-dfa",
+   "commit": "79dce2e",
+   "verdict": "ACCEPT",
+   "bench": "osc-parser",
+   "rust_ms": "77.96"
+  },
+  {
+   "order": "3",
+   "fix": "fix-utf8-dfa",
+   "commit": "79dce2e",
+   "verdict": "ACCEPT",
+   "bench": "screen-clone.noop",
+   "rust_ms": "4.99"
+  },
+  {
+   "order": "3",
+   "fix": "fix-utf8-dfa",
+   "commit": "79dce2e",
+   "verdict": "ACCEPT",
+   "bench": "screen-clone.clone",
+   "rust_ms": "70.25"
+  },
+  {
+   "order": "3",
+   "fix": "fix-utf8-dfa",
+   "commit": "79dce2e",
+   "verdict": "ACCEPT",
+   "bench": "screen-clone.render",
+   "rust_ms": "30.32"
+  },
+  {
+   "order": "4",
+   "fix": "fix-bench-assert-tier",
+   "commit": "eb32359",
+   "verdict": "ACCEPT",
+   "bench": "terminal-parser",
+   "rust_ms": "623.51"
+  },
+  {
+   "order": "4",
+   "fix": "fix-bench-assert-tier",
+   "commit": "eb32359",
+   "verdict": "ACCEPT",
+   "bench": "terminal-stream",
+   "rust_ms": "459.11"
+  },
+  {
+   "order": "4",
+   "fix": "fix-bench-assert-tier",
+   "commit": "eb32359",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.noop",
+   "rust_ms": "2.91"
+  },
+  {
+   "order": "4",
+   "fix": "fix-bench-assert-tier",
+   "commit": "eb32359",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.table",
+   "rust_ms": "217.89"
+  },
+  {
+   "order": "4",
+   "fix": "fix-bench-assert-tier",
+   "commit": "eb32359",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.simd",
+   "rust_ms": "460.07"
+  },
+  {
+   "order": "4",
+   "fix": "fix-bench-assert-tier",
+   "commit": "eb32359",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.wcwidth",
+   "rust_ms": "246.82"
+  },
+  {
+   "order": "4",
+   "fix": "fix-bench-assert-tier",
+   "commit": "eb32359",
+   "verdict": "ACCEPT",
+   "bench": "grapheme-break.noop",
+   "rust_ms": "219.86"
+  },
+  {
+   "order": "4",
+   "fix": "fix-bench-assert-tier",
+   "commit": "eb32359",
+   "verdict": "ACCEPT",
+   "bench": "grapheme-break.table",
+   "rust_ms": "234.81"
+  },
+  {
+   "order": "4",
+   "fix": "fix-bench-assert-tier",
+   "commit": "eb32359",
+   "verdict": "ACCEPT",
+   "bench": "is-symbol.table",
+   "rust_ms": "210.87"
+  },
+  {
+   "order": "4",
+   "fix": "fix-bench-assert-tier",
+   "commit": "eb32359",
+   "verdict": "ACCEPT",
+   "bench": "is-symbol.uucode",
+   "rust_ms": "213.72"
+  },
+  {
+   "order": "4",
+   "fix": "fix-bench-assert-tier",
+   "commit": "eb32359",
+   "verdict": "ACCEPT",
+   "bench": "osc-parser",
+   "rust_ms": "79.89"
+  },
+  {
+   "order": "4",
+   "fix": "fix-bench-assert-tier",
+   "commit": "eb32359",
+   "verdict": "ACCEPT",
+   "bench": "screen-clone.noop",
+   "rust_ms": "4.9"
+  },
+  {
+   "order": "4",
+   "fix": "fix-bench-assert-tier",
+   "commit": "eb32359",
+   "verdict": "ACCEPT",
+   "bench": "screen-clone.clone",
+   "rust_ms": "70.58"
+  },
+  {
+   "order": "4",
+   "fix": "fix-bench-assert-tier",
+   "commit": "eb32359",
+   "verdict": "ACCEPT",
+   "bench": "screen-clone.render",
+   "rust_ms": "30.75"
+  },
+  {
+   "order": "5",
+   "fix": "fix-pin-keys-collect",
+   "commit": "08299e0",
+   "verdict": "ACCEPT",
+   "bench": "terminal-parser",
+   "rust_ms": "640.71"
+  },
+  {
+   "order": "5",
+   "fix": "fix-pin-keys-collect",
+   "commit": "08299e0",
+   "verdict": "ACCEPT",
+   "bench": "terminal-stream",
+   "rust_ms": "462.06"
+  },
+  {
+   "order": "5",
+   "fix": "fix-pin-keys-collect",
+   "commit": "08299e0",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.noop",
+   "rust_ms": "2.91"
+  },
+  {
+   "order": "5",
+   "fix": "fix-pin-keys-collect",
+   "commit": "08299e0",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.table",
+   "rust_ms": "221.53"
+  },
+  {
+   "order": "5",
+   "fix": "fix-pin-keys-collect",
+   "commit": "08299e0",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.simd",
+   "rust_ms": "460.45"
+  },
+  {
+   "order": "5",
+   "fix": "fix-pin-keys-collect",
+   "commit": "08299e0",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.wcwidth",
+   "rust_ms": "246.83"
+  },
+  {
+   "order": "5",
+   "fix": "fix-pin-keys-collect",
+   "commit": "08299e0",
+   "verdict": "ACCEPT",
+   "bench": "grapheme-break.noop",
+   "rust_ms": "218.76"
+  },
+  {
+   "order": "5",
+   "fix": "fix-pin-keys-collect",
+   "commit": "08299e0",
+   "verdict": "ACCEPT",
+   "bench": "grapheme-break.table",
+   "rust_ms": "233.37"
+  },
+  {
+   "order": "5",
+   "fix": "fix-pin-keys-collect",
+   "commit": "08299e0",
+   "verdict": "ACCEPT",
+   "bench": "is-symbol.table",
+   "rust_ms": "210.0"
+  },
+  {
+   "order": "5",
+   "fix": "fix-pin-keys-collect",
+   "commit": "08299e0",
+   "verdict": "ACCEPT",
+   "bench": "is-symbol.uucode",
+   "rust_ms": "214.59"
+  },
+  {
+   "order": "5",
+   "fix": "fix-pin-keys-collect",
+   "commit": "08299e0",
+   "verdict": "ACCEPT",
+   "bench": "osc-parser",
+   "rust_ms": "78.54"
+  },
+  {
+   "order": "5",
+   "fix": "fix-pin-keys-collect",
+   "commit": "08299e0",
+   "verdict": "ACCEPT",
+   "bench": "screen-clone.noop",
+   "rust_ms": "4.91"
+  },
+  {
+   "order": "5",
+   "fix": "fix-pin-keys-collect",
+   "commit": "08299e0",
+   "verdict": "ACCEPT",
+   "bench": "screen-clone.clone",
+   "rust_ms": "71.9"
+  },
+  {
+   "order": "5",
+   "fix": "fix-pin-keys-collect",
+   "commit": "08299e0",
+   "verdict": "ACCEPT",
+   "bench": "screen-clone.render",
+   "rust_ms": "30.77"
+  },
+  {
+   "order": "6",
+   "fix": "fix-remap-hasher",
+   "commit": "cdb9a26",
+   "verdict": "ACCEPT",
+   "bench": "terminal-parser",
+   "rust_ms": "640.91"
+  },
+  {
+   "order": "6",
+   "fix": "fix-remap-hasher",
+   "commit": "cdb9a26",
+   "verdict": "ACCEPT",
+   "bench": "terminal-stream",
+   "rust_ms": "455.37"
+  },
+  {
+   "order": "6",
+   "fix": "fix-remap-hasher",
+   "commit": "cdb9a26",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.noop",
+   "rust_ms": "2.93"
+  },
+  {
+   "order": "6",
+   "fix": "fix-remap-hasher",
+   "commit": "cdb9a26",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.table",
+   "rust_ms": "220.7"
+  },
+  {
+   "order": "6",
+   "fix": "fix-remap-hasher",
+   "commit": "cdb9a26",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.simd",
+   "rust_ms": "460.72"
+  },
+  {
+   "order": "6",
+   "fix": "fix-remap-hasher",
+   "commit": "cdb9a26",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.wcwidth",
+   "rust_ms": "248.11"
+  },
+  {
+   "order": "6",
+   "fix": "fix-remap-hasher",
+   "commit": "cdb9a26",
+   "verdict": "ACCEPT",
+   "bench": "grapheme-break.noop",
+   "rust_ms": "219.93"
+  },
+  {
+   "order": "6",
+   "fix": "fix-remap-hasher",
+   "commit": "cdb9a26",
+   "verdict": "ACCEPT",
+   "bench": "grapheme-break.table",
+   "rust_ms": "234.07"
+  },
+  {
+   "order": "6",
+   "fix": "fix-remap-hasher",
+   "commit": "cdb9a26",
+   "verdict": "ACCEPT",
+   "bench": "is-symbol.table",
+   "rust_ms": "209.81"
+  },
+  {
+   "order": "6",
+   "fix": "fix-remap-hasher",
+   "commit": "cdb9a26",
+   "verdict": "ACCEPT",
+   "bench": "is-symbol.uucode",
+   "rust_ms": "213.67"
+  },
+  {
+   "order": "6",
+   "fix": "fix-remap-hasher",
+   "commit": "cdb9a26",
+   "verdict": "ACCEPT",
+   "bench": "osc-parser",
+   "rust_ms": "79.2"
+  },
+  {
+   "order": "6",
+   "fix": "fix-remap-hasher",
+   "commit": "cdb9a26",
+   "verdict": "ACCEPT",
+   "bench": "screen-clone.noop",
+   "rust_ms": "4.98"
+  },
+  {
+   "order": "6",
+   "fix": "fix-remap-hasher",
+   "commit": "cdb9a26",
+   "verdict": "ACCEPT",
+   "bench": "screen-clone.clone",
+   "rust_ms": "71.76"
+  },
+  {
+   "order": "6",
+   "fix": "fix-remap-hasher",
+   "commit": "cdb9a26",
+   "verdict": "ACCEPT",
+   "bench": "screen-clone.render",
+   "rust_ms": "30.69"
+  },
+  {
+   "order": "7",
+   "fix": "fix-osc-fixed-capture",
+   "commit": "11ca425",
+   "verdict": "ACCEPT",
+   "bench": "terminal-parser",
+   "rust_ms": "633.08"
+  },
+  {
+   "order": "7",
+   "fix": "fix-osc-fixed-capture",
+   "commit": "11ca425",
+   "verdict": "ACCEPT",
+   "bench": "terminal-stream",
+   "rust_ms": "456.67"
+  },
+  {
+   "order": "7",
+   "fix": "fix-osc-fixed-capture",
+   "commit": "11ca425",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.noop",
+   "rust_ms": "2.97"
+  },
+  {
+   "order": "7",
+   "fix": "fix-osc-fixed-capture",
+   "commit": "11ca425",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.table",
+   "rust_ms": "215.36"
+  },
+  {
+   "order": "7",
+   "fix": "fix-osc-fixed-capture",
+   "commit": "11ca425",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.simd",
+   "rust_ms": "464.15"
+  },
+  {
+   "order": "7",
+   "fix": "fix-osc-fixed-capture",
+   "commit": "11ca425",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.wcwidth",
+   "rust_ms": "241.14"
+  },
+  {
+   "order": "7",
+   "fix": "fix-osc-fixed-capture",
+   "commit": "11ca425",
+   "verdict": "ACCEPT",
+   "bench": "grapheme-break.noop",
+   "rust_ms": "219.5"
+  },
+  {
+   "order": "7",
+   "fix": "fix-osc-fixed-capture",
+   "commit": "11ca425",
+   "verdict": "ACCEPT",
+   "bench": "grapheme-break.table",
+   "rust_ms": "232.82"
+  },
+  {
+   "order": "7",
+   "fix": "fix-osc-fixed-capture",
+   "commit": "11ca425",
+   "verdict": "ACCEPT",
+   "bench": "is-symbol.table",
+   "rust_ms": "210.84"
+  },
+  {
+   "order": "7",
+   "fix": "fix-osc-fixed-capture",
+   "commit": "11ca425",
+   "verdict": "ACCEPT",
+   "bench": "is-symbol.uucode",
+   "rust_ms": "215.34"
+  },
+  {
+   "order": "7",
+   "fix": "fix-osc-fixed-capture",
+   "commit": "11ca425",
+   "verdict": "ACCEPT",
+   "bench": "osc-parser",
+   "rust_ms": "49.21"
+  },
+  {
+   "order": "7",
+   "fix": "fix-osc-fixed-capture",
+   "commit": "11ca425",
+   "verdict": "ACCEPT",
+   "bench": "screen-clone.noop",
+   "rust_ms": "5.0"
+  },
+  {
+   "order": "7",
+   "fix": "fix-osc-fixed-capture",
+   "commit": "11ca425",
+   "verdict": "ACCEPT",
+   "bench": "screen-clone.clone",
+   "rust_ms": "70.86"
+  },
+  {
+   "order": "7",
+   "fix": "fix-osc-fixed-capture",
+   "commit": "11ca425",
+   "verdict": "ACCEPT",
+   "bench": "screen-clone.render",
+   "rust_ms": "30.59"
+  },
+  {
+   "order": "8",
+   "fix": "fix-color-list-prealloc",
+   "commit": "67962f1",
+   "verdict": "REVERTED 408ddaa",
+   "bench": "terminal-parser",
+   "rust_ms": "632.1"
+  },
+  {
+   "order": "8",
+   "fix": "fix-color-list-prealloc",
+   "commit": "67962f1",
+   "verdict": "REVERTED 408ddaa",
+   "bench": "terminal-stream",
+   "rust_ms": "475.69"
+  },
+  {
+   "order": "8",
+   "fix": "fix-color-list-prealloc",
+   "commit": "67962f1",
+   "verdict": "REVERTED 408ddaa",
+   "bench": "codepoint-width.noop",
+   "rust_ms": "2.99"
+  },
+  {
+   "order": "8",
+   "fix": "fix-color-list-prealloc",
+   "commit": "67962f1",
+   "verdict": "REVERTED 408ddaa",
+   "bench": "codepoint-width.table",
+   "rust_ms": "217.01"
+  },
+  {
+   "order": "8",
+   "fix": "fix-color-list-prealloc",
+   "commit": "67962f1",
+   "verdict": "REVERTED 408ddaa",
+   "bench": "codepoint-width.simd",
+   "rust_ms": "463.11"
+  },
+  {
+   "order": "8",
+   "fix": "fix-color-list-prealloc",
+   "commit": "67962f1",
+   "verdict": "REVERTED 408ddaa",
+   "bench": "codepoint-width.wcwidth",
+   "rust_ms": "248.48"
+  },
+  {
+   "order": "8",
+   "fix": "fix-color-list-prealloc",
+   "commit": "67962f1",
+   "verdict": "REVERTED 408ddaa",
+   "bench": "grapheme-break.noop",
+   "rust_ms": "219.32"
+  },
+  {
+   "order": "8",
+   "fix": "fix-color-list-prealloc",
+   "commit": "67962f1",
+   "verdict": "REVERTED 408ddaa",
+   "bench": "grapheme-break.table",
+   "rust_ms": "233.12"
+  },
+  {
+   "order": "8",
+   "fix": "fix-color-list-prealloc",
+   "commit": "67962f1",
+   "verdict": "REVERTED 408ddaa",
+   "bench": "is-symbol.table",
+   "rust_ms": "209.93"
+  },
+  {
+   "order": "8",
+   "fix": "fix-color-list-prealloc",
+   "commit": "67962f1",
+   "verdict": "REVERTED 408ddaa",
+   "bench": "is-symbol.uucode",
+   "rust_ms": "213.81"
+  },
+  {
+   "order": "8",
+   "fix": "fix-color-list-prealloc",
+   "commit": "67962f1",
+   "verdict": "REVERTED 408ddaa",
+   "bench": "osc-parser",
+   "rust_ms": "48.91"
+  },
+  {
+   "order": "8",
+   "fix": "fix-color-list-prealloc",
+   "commit": "67962f1",
+   "verdict": "REVERTED 408ddaa",
+   "bench": "screen-clone.noop",
+   "rust_ms": "5.12"
+  },
+  {
+   "order": "8",
+   "fix": "fix-color-list-prealloc",
+   "commit": "67962f1",
+   "verdict": "REVERTED 408ddaa",
+   "bench": "screen-clone.clone",
+   "rust_ms": "69.88"
+  },
+  {
+   "order": "8",
+   "fix": "fix-color-list-prealloc",
+   "commit": "67962f1",
+   "verdict": "REVERTED 408ddaa",
+   "bench": "screen-clone.render",
+   "rust_ms": "30.64"
+  },
+  {
+   "order": "9",
+   "fix": "fix-lut-bounds",
+   "commit": "82defe5",
+   "verdict": "ACCEPT",
+   "bench": "terminal-parser",
+   "rust_ms": "650.46"
+  },
+  {
+   "order": "9",
+   "fix": "fix-lut-bounds",
+   "commit": "82defe5",
+   "verdict": "ACCEPT",
+   "bench": "terminal-stream",
+   "rust_ms": "478.84"
+  },
+  {
+   "order": "9",
+   "fix": "fix-lut-bounds",
+   "commit": "82defe5",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.noop",
+   "rust_ms": "3.07"
+  },
+  {
+   "order": "9",
+   "fix": "fix-lut-bounds",
+   "commit": "82defe5",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.table",
+   "rust_ms": "219.93"
+  },
+  {
+   "order": "9",
+   "fix": "fix-lut-bounds",
+   "commit": "82defe5",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.simd",
+   "rust_ms": "461.86"
+  },
+  {
+   "order": "9",
+   "fix": "fix-lut-bounds",
+   "commit": "82defe5",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.wcwidth",
+   "rust_ms": "247.01"
+  },
+  {
+   "order": "9",
+   "fix": "fix-lut-bounds",
+   "commit": "82defe5",
+   "verdict": "ACCEPT",
+   "bench": "grapheme-break.noop",
+   "rust_ms": "219.7"
+  },
+  {
+   "order": "9",
+   "fix": "fix-lut-bounds",
+   "commit": "82defe5",
+   "verdict": "ACCEPT",
+   "bench": "grapheme-break.table",
+   "rust_ms": "216.52"
+  },
+  {
+   "order": "9",
+   "fix": "fix-lut-bounds",
+   "commit": "82defe5",
+   "verdict": "ACCEPT",
+   "bench": "is-symbol.table",
+   "rust_ms": "206.87"
+  },
+  {
+   "order": "9",
+   "fix": "fix-lut-bounds",
+   "commit": "82defe5",
+   "verdict": "ACCEPT",
+   "bench": "is-symbol.uucode",
+   "rust_ms": "216.23"
+  },
+  {
+   "order": "9",
+   "fix": "fix-lut-bounds",
+   "commit": "82defe5",
+   "verdict": "ACCEPT",
+   "bench": "osc-parser",
+   "rust_ms": "48.67"
+  },
+  {
+   "order": "9",
+   "fix": "fix-lut-bounds",
+   "commit": "82defe5",
+   "verdict": "ACCEPT",
+   "bench": "screen-clone.noop",
+   "rust_ms": "5.07"
+  },
+  {
+   "order": "9",
+   "fix": "fix-lut-bounds",
+   "commit": "82defe5",
+   "verdict": "ACCEPT",
+   "bench": "screen-clone.clone",
+   "rust_ms": "71.25"
+  },
+  {
+   "order": "9",
+   "fix": "fix-lut-bounds",
+   "commit": "82defe5",
+   "verdict": "ACCEPT",
+   "bench": "screen-clone.render",
+   "rust_ms": "30.42"
+  },
+  {
+   "order": "10",
+   "fix": "fix-parser-destage",
+   "commit": "2bb5c42",
+   "verdict": "ACCEPT",
+   "bench": "terminal-parser",
+   "rust_ms": "522.16"
+  },
+  {
+   "order": "10",
+   "fix": "fix-parser-destage",
+   "commit": "2bb5c42",
+   "verdict": "ACCEPT",
+   "bench": "terminal-stream",
+   "rust_ms": "496.08"
+  },
+  {
+   "order": "10",
+   "fix": "fix-parser-destage",
+   "commit": "2bb5c42",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.noop",
+   "rust_ms": "2.9"
+  },
+  {
+   "order": "10",
+   "fix": "fix-parser-destage",
+   "commit": "2bb5c42",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.table",
+   "rust_ms": "219.73"
+  },
+  {
+   "order": "10",
+   "fix": "fix-parser-destage",
+   "commit": "2bb5c42",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.simd",
+   "rust_ms": "461.86"
+  },
+  {
+   "order": "10",
+   "fix": "fix-parser-destage",
+   "commit": "2bb5c42",
+   "verdict": "ACCEPT",
+   "bench": "codepoint-width.wcwidth",
+   "rust_ms": "246.95"
+  },
+  {
+   "order": "10",
+   "fix": "fix-parser-destage",
+   "commit": "2bb5c42",
+   "verdict": "ACCEPT",
+   "bench": "grapheme-break.noop",
+   "rust_ms": "219.3"
+  },
+  {
+   "order": "10",
+   "fix": "fix-parser-destage",
+   "commit": "2bb5c42",
+   "verdict": "ACCEPT",
+   "bench": "grapheme-break.table",
+   "rust_ms": "217.04"
+  },
+  {
+   "order": "10",
+   "fix": "fix-parser-destage",
+   "commit": "2bb5c42",
+   "verdict": "ACCEPT",
+   "bench": "is-symbol.table",
+   "rust_ms": "206.93"
+  },
+  {
+   "order": "10",
+   "fix": "fix-parser-destage",
+   "commit": "2bb5c42",
+   "verdict": "ACCEPT",
+   "bench": "is-symbol.uucode",
+   "rust_ms": "214.28"
+  },
+  {
+   "order": "10",
+   "fix": "fix-parser-destage",
+   "commit": "2bb5c42",
+   "verdict": "ACCEPT",
+   "bench": "osc-parser",
+   "rust_ms": "49.26"
+  },
+  {
+   "order": "10",
+   "fix": "fix-parser-destage",
+   "commit": "2bb5c42",
+   "verdict": "ACCEPT",
+   "bench": "screen-clone.noop",
+   "rust_ms": "4.95"
+  },
+  {
+   "order": "10",
+   "fix": "fix-parser-destage",
+   "commit": "2bb5c42",
+   "verdict": "ACCEPT",
+   "bench": "screen-clone.clone",
+   "rust_ms": "71.0"
+  },
+  {
+   "order": "10",
+   "fix": "fix-parser-destage",
+   "commit": "2bb5c42",
+   "verdict": "ACCEPT",
+   "bench": "screen-clone.render",
+   "rust_ms": "30.92"
+  },
+  {
+   "order": "11",
+   "fix": "FINAL_C (merge incl. render-soa)",
+   "commit": "d211a84",
+   "verdict": "merge",
+   "bench": "terminal-parser",
+   "rust_ms": "531.05"
+  },
+  {
+   "order": "11",
+   "fix": "FINAL_C (merge incl. render-soa)",
+   "commit": "d211a84",
+   "verdict": "merge",
+   "bench": "terminal-stream",
+   "rust_ms": "484.48"
+  },
+  {
+   "order": "11",
+   "fix": "FINAL_C (merge incl. render-soa)",
+   "commit": "d211a84",
+   "verdict": "merge",
+   "bench": "codepoint-width.noop",
+   "rust_ms": "2.95"
+  },
+  {
+   "order": "11",
+   "fix": "FINAL_C (merge incl. render-soa)",
+   "commit": "d211a84",
+   "verdict": "merge",
+   "bench": "codepoint-width.table",
+   "rust_ms": "214.65"
+  },
+  {
+   "order": "11",
+   "fix": "FINAL_C (merge incl. render-soa)",
+   "commit": "d211a84",
+   "verdict": "merge",
+   "bench": "codepoint-width.simd",
+   "rust_ms": "462.61"
+  },
+  {
+   "order": "11",
+   "fix": "FINAL_C (merge incl. render-soa)",
+   "commit": "d211a84",
+   "verdict": "merge",
+   "bench": "codepoint-width.wcwidth",
+   "rust_ms": "247.85"
+  },
+  {
+   "order": "11",
+   "fix": "FINAL_C (merge incl. render-soa)",
+   "commit": "d211a84",
+   "verdict": "merge",
+   "bench": "grapheme-break.noop",
+   "rust_ms": "217.68"
+  },
+  {
+   "order": "11",
+   "fix": "FINAL_C (merge incl. render-soa)",
+   "commit": "d211a84",
+   "verdict": "merge",
+   "bench": "grapheme-break.table",
+   "rust_ms": "217.42"
+  },
+  {
+   "order": "11",
+   "fix": "FINAL_C (merge incl. render-soa)",
+   "commit": "d211a84",
+   "verdict": "merge",
+   "bench": "is-symbol.table",
+   "rust_ms": "207.67"
+  },
+  {
+   "order": "11",
+   "fix": "FINAL_C (merge incl. render-soa)",
+   "commit": "d211a84",
+   "verdict": "merge",
+   "bench": "is-symbol.uucode",
+   "rust_ms": "213.92"
+  },
+  {
+   "order": "11",
+   "fix": "FINAL_C (merge incl. render-soa)",
+   "commit": "d211a84",
+   "verdict": "merge",
+   "bench": "osc-parser",
+   "rust_ms": "48.43"
+  },
+  {
+   "order": "11",
+   "fix": "FINAL_C (merge incl. render-soa)",
+   "commit": "d211a84",
+   "verdict": "merge",
+   "bench": "screen-clone.noop",
+   "rust_ms": "5.05"
+  },
+  {
+   "order": "11",
+   "fix": "FINAL_C (merge incl. render-soa)",
+   "commit": "d211a84",
+   "verdict": "merge",
+   "bench": "screen-clone.clone",
+   "rust_ms": "70.36"
+  },
+  {
+   "order": "11",
+   "fix": "FINAL_C (merge incl. render-soa)",
+   "commit": "d211a84",
+   "verdict": "merge",
+   "bench": "screen-clone.render",
+   "rust_ms": "23.85"
+  }
+ ],
+ "lto": [
+  {
+   "profile": "release (overflow-checks on, no LTO)",
+   "bench": "terminal-parser",
+   "rust_ms": "328.8",
+   "source": "perf-v2/FINAL_A.jsonl"
+  },
+  {
+   "profile": "release (overflow-checks on, no LTO)",
+   "bench": "terminal-stream",
+   "rust_ms": "483.8",
+   "source": "perf-v2/FINAL_A.jsonl"
+  },
+  {
+   "profile": "release (overflow-checks on, no LTO)",
+   "bench": "osc-parser",
+   "rust_ms": "57.4",
+   "source": "perf-v2/FINAL_A.jsonl"
+  },
+  {
+   "profile": "release (overflow-checks on, no LTO)",
+   "bench": "screen-clone.clone",
+   "rust_ms": "80.0",
+   "source": "perf-v2/FINAL_A.jsonl"
+  },
+  {
+   "profile": "release-fast: overflow-checks off only (SHIPPED)",
+   "bench": "terminal-parser",
+   "rust_ms": "322.0",
+   "source": "perf-v2/EXP_Bfinal.jsonl"
+  },
+  {
+   "profile": "release-fast: overflow-checks off only (SHIPPED)",
+   "bench": "terminal-stream",
+   "rust_ms": "449.7",
+   "source": "perf-v2/EXP_Bfinal.jsonl"
+  },
+  {
+   "profile": "release-fast: overflow-checks off only (SHIPPED)",
+   "bench": "osc-parser",
+   "rust_ms": "57.8",
+   "source": "perf-v2/EXP_Bfinal.jsonl"
+  },
+  {
+   "profile": "release-fast: overflow-checks off only (SHIPPED)",
+   "bench": "screen-clone.clone",
+   "rust_ms": "84.2",
+   "source": "perf-v2/EXP_Bfinal.jsonl"
+  },
+  {
+   "profile": "+ fat LTO + cgu=1 + panic=abort",
+   "bench": "terminal-parser",
+   "rust_ms": "531.1",
+   "source": "perf-v2/FINAL_C.jsonl"
+  },
+  {
+   "profile": "+ fat LTO + cgu=1 + panic=abort",
+   "bench": "terminal-stream",
+   "rust_ms": "484.5",
+   "source": "perf-v2/FINAL_C.jsonl"
+  },
+  {
+   "profile": "+ fat LTO + cgu=1 + panic=abort",
+   "bench": "osc-parser",
+   "rust_ms": "48.4",
+   "source": "perf-v2/FINAL_C.jsonl"
+  },
+  {
+   "profile": "+ fat LTO + cgu=1 + panic=abort",
+   "bench": "screen-clone.clone",
+   "rust_ms": "70.4",
+   "source": "perf-v2/FINAL_C.jsonl"
+  },
+  {
+   "profile": "+ thin LTO instead of fat",
+   "bench": "terminal-parser",
+   "rust_ms": "500.6",
+   "source": "perf-v2/EXP_thinlto.jsonl"
+  },
+  {
+   "profile": "+ thin LTO instead of fat",
+   "bench": "terminal-stream",
+   "rust_ms": "469.6",
+   "source": "perf-v2/EXP_thinlto.jsonl"
+  },
+  {
+   "profile": "+ thin LTO instead of fat",
+   "bench": "osc-parser",
+   "rust_ms": "48.4",
+   "source": "perf-v2/EXP_thinlto.jsonl"
+  },
+  {
+   "profile": "+ thin LTO instead of fat",
+   "bench": "screen-clone.clone",
+   "rust_ms": "70.4",
+   "source": "perf-v2/EXP_thinlto.jsonl"
+  },
+  {
+   "profile": "+ fat LTO, do_action demoted",
+   "bench": "terminal-parser",
+   "rust_ms": "535.3",
+   "source": "perf-v2/EXP_demote.jsonl"
+  },
+  {
+   "profile": "+ fat LTO, do_action demoted",
+   "bench": "terminal-stream",
+   "rust_ms": "464.3",
+   "source": "perf-v2/EXP_demote.jsonl"
+  },
+  {
+   "profile": "+ fat LTO, do_action demoted",
+   "bench": "osc-parser",
+   "rust_ms": "49.0",
+   "source": "perf-v2/EXP_demote.jsonl"
+  },
+  {
+   "profile": "+ fat LTO, do_action demoted",
+   "bench": "screen-clone.clone",
+   "rust_ms": "70.2",
+   "source": "perf-v2/EXP_demote.jsonl"
+  }
+ ],
+ "waterfall": [
+  {
+   "bench": "terminal-parser",
+   "order": "0",
+   "step": "pre-fix code, release-fast profile",
+   "commits": "10cc614",
+   "rust_ms": "660.1",
+   "zig_ms_same_session": "262.9",
+   "source_under_.port/phase-2": "perf-v2/frozen_B.jsonl"
+  },
+  {
+   "bench": "terminal-parser",
+   "order": "1",
+   "step": "r1: inline idioms + utf8 DFA + parser destage (no LTO)",
+   "commits": "f2b7dcd,79dce2e,2bb5c42,9e1837b",
+   "rust_ms": "322.7",
+   "zig_ms_same_session": "262.9",
+   "source_under_.port/phase-2": "perf-v2/SHIP_RF.jsonl"
+  },
+  {
+   "bench": "terminal-parser",
+   "order": "2",
+   "step": "r2: boxed dispatch payloads + InlineVec + state hoist (Action 16 B, drop-free)",
+   "commits": "e1f4829",
+   "rust_ms": "216.6",
+   "zig_ms_same_session": "260.7",
+   "source_under_.port/phase-2": "perf-v3/s_arrayvec.jsonl"
+  },
+  {
+   "bench": "terminal-parser",
+   "order": "3",
+   "step": "r3 ship (no parser change; noise)",
+   "commits": "10f2091",
+   "rust_ms": "210.6",
+   "zig_ms_same_session": "266.0",
+   "source_under_.port/phase-2": "perf-v3/r3_r3ship.jsonl"
+  },
+  {
+   "bench": "terminal-parser",
+   "order": "4",
+   "step": "r5: state-equal fast path in Parser::next",
+   "commits": "be02801",
+   "rust_ms": "92.5",
+   "zig_ms_same_session": "263.8",
+   "source_under_.port/phase-2": "perf-v5/r5ship.jsonl"
+  },
+  {
+   "bench": "screen-clone.clone",
+   "order": "0",
+   "step": "pre-fix code, release-fast profile",
+   "commits": "10cc614",
+   "rust_ms": "79.4",
+   "zig_ms_same_session": "49.7",
+   "source_under_.port/phase-2": "perf-v2/frozen_B.jsonl"
+  },
+  {
+   "bench": "screen-clone.clone",
+   "order": "1",
+   "step": "r1 ship (pin-keys / remap hasher: noise)",
+   "commits": "08299e0,cdb9a26",
+   "rust_ms": "79.8",
+   "zig_ms_same_session": "49.7",
+   "source_under_.port/phase-2": "perf-v2/SHIP_RF.jsonl"
+  },
+  {
+   "bench": "screen-clone.clone",
+   "order": "2",
+   "step": "r2: packed Style::eql + coalesced cell copy",
+   "commits": "ab20827",
+   "rust_ms": "56.9",
+   "zig_ms_same_session": "51.3",
+   "source_under_.port/phase-2": "perf-v3/s_clone.jsonl"
+  },
+  {
+   "bench": "screen-clone.clone",
+   "order": "3",
+   "step": "r3: outline cold grapheme/hyperlink arms",
+   "commits": "1abae33",
+   "rust_ms": "53.7",
+   "zig_ms_same_session": "51.6",
+   "source_under_.port/phase-2": "perf-v3/r3_s_r3clone.jsonl"
+  },
+  {
+   "bench": "screen-clone.clone",
+   "order": "4",
+   "step": "r3 ship (incl. parity fix 10f2091)",
+   "commits": "10f2091",
+   "rust_ms": "50.5",
+   "zig_ms_same_session": "51.6",
+   "source_under_.port/phase-2": "perf-v3/r3_r3ship.jsonl"
+  },
+  {
+   "bench": "screen-clone.clone",
+   "order": "5",
+   "step": "r5: same-style run batching + by-pointer set adds",
+   "commits": "745b3c9",
+   "rust_ms": "20.9",
+   "zig_ms_same_session": "50.6",
+   "source_under_.port/phase-2": "perf-v5/r5ship.jsonl"
+  },
+  {
+   "bench": "screen-clone.render",
+   "order": "0",
+   "step": "pre-fix code, release-fast profile",
+   "commits": "10cc614",
+   "rust_ms": "30.4",
+   "zig_ms_same_session": "15.6",
+   "source_under_.port/phase-2": "perf-v2/frozen_B.jsonl"
+  },
+  {
+   "bench": "screen-clone.render",
+   "order": "1",
+   "step": "r1: MultiArrayList SoA + raw-column memcpy",
+   "commits": "9789788",
+   "rust_ms": "24.7",
+   "zig_ms_same_session": "15.6",
+   "source_under_.port/phase-2": "perf-v2/SHIP_RF.jsonl"
+  },
+  {
+   "bench": "screen-clone.render",
+   "order": "2",
+   "step": "r2: stop re-zeroing SoA columns per rebuild",
+   "commits": "b6f5e4f",
+   "rust_ms": "17.0",
+   "zig_ms_same_session": "15.7",
+   "source_under_.port/phase-2": "perf-v3/s_render.jsonl"
+  },
+  {
+   "bench": "screen-clone.render",
+   "order": "3",
+   "step": "r3: hoist mutable style/grapheme column borrows",
+   "commits": "e6f27dc",
+   "rust_ms": "15.5",
+   "zig_ms_same_session": "15.7",
+   "source_under_.port/phase-2": "perf-v3/r3_s_r3render.jsonl"
+  },
+  {
+   "bench": "screen-clone.render",
+   "order": "4",
+   "step": "r4: hoist style-set base + zip walk (Zig does not do this)",
+   "commits": "a26a4b1",
+   "rust_ms": "13.8",
+   "zig_ms_same_session": "15.4",
+   "source_under_.port/phase-2": "perf-v5/r5ship.jsonl"
+  },
+  {
+   "bench": "osc-parser",
+   "order": "0",
+   "step": "pre-fix code, release-fast profile",
+   "commits": "10cc614",
+   "rust_ms": "146.4",
+   "zig_ms_same_session": "57.3",
+   "source_under_.port/phase-2": "perf-v2/frozen_B.jsonl"
+  },
+  {
+   "bench": "osc-parser",
+   "order": "1",
+   "step": "r1: inline idioms + zero-alloc fixed-writer capture",
+   "commits": "f2b7dcd,11ca425",
+   "rust_ms": "57.5",
+   "zig_ms_same_session": "57.3",
+   "source_under_.port/phase-2": "perf-v2/SHIP_RF.jsonl"
+  },
+  {
+   "bench": "osc-parser",
+   "order": "2",
+   "step": "r2: shared RefCountedSet path + fall-through success store",
+   "commits": "ab20827,9e386ab",
+   "rust_ms": "49.2",
+   "zig_ms_same_session": "51.3",
+   "source_under_.port/phase-2": "perf-v3/s_oscwin.jsonl"
+  },
+  {
+   "bench": "osc-parser",
+   "order": "3",
+   "step": "r5 ship (lane C NONE-SAFE: M4 store-forward floor)",
+   "commits": "-",
+   "rust_ms": "49.4",
+   "zig_ms_same_session": "57.1",
+   "source_under_.port/phase-2": "perf-v5/r5ship.jsonl"
+  },
+  {
+   "bench": "terminal-stream",
+   "order": "0",
+   "step": "pre-fix code, release-fast profile",
+   "commits": "10cc614",
+   "rust_ms": "443.2",
+   "zig_ms_same_session": "562.6",
+   "source_under_.port/phase-2": "perf-v2/frozen_B.jsonl"
+  },
+  {
+   "bench": "terminal-stream",
+   "order": "1",
+   "step": "r1-r3 ships (canary, flat)",
+   "commits": "-",
+   "rust_ms": "460.8",
+   "zig_ms_same_session": "566.2",
+   "source_under_.port/phase-2": "perf-v3/r3_r3ship.jsonl"
+  },
+  {
+   "bench": "terminal-stream",
+   "order": "2",
+   "step": "r5: outline cold print arms + bench built with simd like ghostty-bench",
+   "commits": "6ca1015,52116f3",
+   "rust_ms": "343.3",
+   "zig_ms_same_session": "551.5",
+   "source_under_.port/phase-2": "perf-v5/r5ship.jsonl"
+  }
+ ],
+ "full33": [
+  {
+   "id": "terminal-parser/utf8",
+   "bR": [
+    92.05,
+    90.92,
+    99.44
+   ],
+   "bZ": [
+    688.49,
+    683.16,
+    706.59
+   ],
+   "fR": [
+    89.49,
+    88.48,
+    91.6
+   ],
+   "fZ": [
+    689.0,
+    682.04,
+    706.83
+   ]
+  },
+  {
+   "id": "terminal-stream/ascii",
+   "bR": [
+    72.44,
+    69.63,
+    77.54
+   ],
+   "bZ": [
+    55.92,
+    54.55,
+    56.31
+   ],
+   "fR": [
+    60.04,
+    58.85,
+    65.17
+   ],
+   "fZ": [
+    54.39,
+    53.93,
+    55.85
+   ]
+  },
+  {
+   "id": "codepoint-width.noop/utf8",
+   "bR": [
+    4.16,
+    3.85,
+    4.83
+   ],
+   "bZ": [
+    10.85,
+    9.92,
+    11.34
+   ],
+   "fR": [
+    4.62,
+    3.71,
+    5.72
+   ],
+   "fZ": [
+    7.86,
+    7.43,
+    8.37
+   ]
+  },
+  {
+   "id": "codepoint-width.table/utf8",
+   "bR": [
+    215.81,
+    214.03,
+    221.44
+   ],
+   "bZ": [
+    246.87,
+    244.7,
+    258.48
+   ],
+   "fR": [
+    206.59,
+    204.8,
+    210.43
+   ],
+   "fZ": [
+    245.19,
+    241.21,
+    247.99
+   ]
+  },
+  {
+   "id": "codepoint-width.simd/utf8",
+   "bR": [
+    473.16,
+    471.14,
+    490.03
+   ],
+   "bZ": [
+    516.79,
+    515.57,
+    524.91
+   ],
+   "fR": [
+    451.62,
+    447.35,
+    454.62
+   ],
+   "fZ": [
+    515.56,
+    510.12,
+    516.96
+   ]
+  },
+  {
+   "id": "codepoint-width.wcwidth/utf8",
+   "bR": [
+    242.76,
+    241.05,
+    251.5
+   ],
+   "bZ": [
+    814.5,
+    813.21,
+    832.02
+   ],
+   "fR": [
+    236.34,
+    235.34,
+    241.09
+   ],
+   "fZ": [
+    808.1,
+    806.84,
+    813.09
+   ]
+  },
+  {
+   "id": "grapheme-break.noop/utf8",
+   "bR": [
+    216.43,
+    214.95,
+    219.79
+   ],
+   "bZ": [
+    241.84,
+    239.52,
+    246.55
+   ],
+   "fR": [
+    211.58,
+    210.58,
+    212.91
+   ],
+   "fZ": [
+    239.18,
+    237.99,
+    244.96
+   ]
+  },
+  {
+   "id": "grapheme-break.table/utf8",
+   "bR": [
+    215.77,
+    215.05,
+    238.39
+   ],
+   "bZ": [
+    265.17,
+    262.78,
+    269.14
+   ],
+   "fR": [
+    207.28,
+    206.05,
+    210.74
+   ],
+   "fZ": [
+    262.49,
+    258.06,
+    264.08
+   ]
+  },
+  {
+   "id": "is-symbol.table/utf8",
+   "bR": [
+    203.62,
+    201.21,
+    204.8
+   ],
+   "bZ": [
+    236.16,
+    234.99,
+    240.22
+   ],
+   "fR": [
+    198.54,
+    197.64,
+    199.77
+   ],
+   "fZ": [
+    235.3,
+    231.79,
+    236.31
+   ]
+  },
+  {
+   "id": "is-symbol.uucode/utf8",
+   "bR": [
+    209.73,
+    209.05,
+    210.36
+   ],
+   "bZ": [
+    241.76,
+    238.16,
+    248.38
+   ],
+   "fR": [
+    218.69,
+    215.76,
+    219.7
+   ],
+   "fZ": [
+    238.09,
+    236.26,
+    239.89
+   ]
+  },
+  {
+   "id": "osc-parser/osc-parser",
+   "bR": [
+    53.29,
+    52.5,
+    54.29
+   ],
+   "bZ": [
+    204.09,
+    202.36,
+    209.57
+   ],
+   "fR": [
+    50.46,
+    50.16,
+    51.16
+   ],
+   "fZ": [
+    204.26,
+    200.96,
+    205.86
+   ]
+  },
+  {
+   "id": "screen-clone.noop/small",
+   "bR": [
+    6.61,
+    6.46,
+    6.85
+   ],
+   "bZ": [
+    10.61,
+    10.37,
+    10.83
+   ],
+   "fR": [
+    6.6,
+    6.26,
+    6.69
+   ],
+   "fZ": [
+    10.36,
+    10.0,
+    12.5
+   ]
+  },
+  {
+   "id": "screen-clone.clone/small",
+   "bR": [
+    22.08,
+    21.87,
+    22.5
+   ],
+   "bZ": [
+    58.01,
+    56.64,
+    71.45
+   ],
+   "fR": [
+    23.26,
+    22.3,
+    27.04
+   ],
+   "fZ": [
+    56.42,
+    54.74,
+    59.75
+   ]
+  },
+  {
+   "id": "screen-clone.render/small",
+   "bR": [
+    139.06,
+    134.99,
+    146.92
+   ],
+   "bZ": [
+    156.43,
+    154.36,
+    163.57
+   ],
+   "fR": [
+    138.96,
+    135.35,
+    142.54
+   ],
+   "fZ": [
+    156.34,
+    155.24,
+    157.61
+   ]
+  },
+  {
+   "id": "apc-parser",
+   "bR": [
+    7.1,
+    6.42,
+    10.19
+   ],
+   "bZ": [
+    11.44,
+    10.38,
+    13.33
+   ],
+   "fR": [
+    6.81,
+    6.2,
+    8.95
+   ],
+   "fZ": [
+    8.8,
+    8.63,
+    9.76
+   ]
+  },
+  {
+   "id": "hyperlink-map.lookup",
+   "bR": [
+    4.19,
+    4.04,
+    4.29
+   ],
+   "bZ": [
+    10.46,
+    8.93,
+    11.46
+   ],
+   "fR": [
+    4.27,
+    4.18,
+    4.69
+   ],
+   "fZ": [
+    8.35,
+    7.46,
+    8.56
+   ]
+  },
+  {
+   "id": "hyperlink-map.churn",
+   "bR": [
+    6.56,
+    6.06,
+    6.81
+   ],
+   "bZ": [
+    11.87,
+    10.46,
+    13.0
+   ],
+   "fR": [
+    6.73,
+    6.4,
+    6.94
+   ],
+   "fZ": [
+    9.59,
+    9.22,
+    10.36
+   ]
+  },
+  {
+   "id": "terminal-resize.cols",
+   "bR": [
+    413.01,
+    405.96,
+    418.89
+   ],
+   "bZ": [
+    341.68,
+    335.64,
+    351.67
+   ],
+   "fR": [
+    390.77,
+    387.26,
+    396.97
+   ],
+   "fZ": [
+    331.99,
+    326.01,
+    338.16
+   ]
+  },
+  {
+   "id": "terminal-resize.cols-no-reflow",
+   "bR": [
+    2466.21,
+    2320.79,
+    2561.96
+   ],
+   "bZ": [
+    3228.44,
+    3183.76,
+    3519.21
+   ],
+   "fR": [
+    2456.78,
+    2359.0,
+    2783.25
+   ],
+   "fZ": [
+    2321.4,
+    2244.2,
+    2398.34
+   ]
+  },
+  {
+   "id": "terminal-resize.rows",
+   "bR": [
+    2048.55,
+    1992.38,
+    2125.04
+   ],
+   "bZ": [
+    1615.72,
+    1595.85,
+    1626.21
+   ],
+   "fR": [
+    1587.97,
+    1559.59,
+    1602.85
+   ],
+   "fZ": [
+    1608.2,
+    1584.37,
+    1624.67
+   ]
+  },
+  {
+   "id": "terminal-resize.both",
+   "bR": [
+    410.67,
+    406.53,
+    417.76
+   ],
+   "bZ": [
+    332.81,
+    327.82,
+    338.69
+   ],
+   "fR": [
+    395.29,
+    390.73,
+    397.63
+   ],
+   "fZ": [
+    331.12,
+    328.11,
+    337.74
+   ]
+  },
+  {
+   "id": "terminal-snapshot.encode",
+   "bR": [
+    34.83,
+    34.17,
+    36.0
+   ],
+   "bZ": [
+    30.54,
+    28.83,
+    30.83
+   ],
+   "fR": [
+    33.74,
+    33.3,
+    35.31
+   ],
+   "fZ": [
+    29.13,
+    28.36,
+    30.21
+   ]
+  },
+  {
+   "id": "terminal-snapshot.decode",
+   "bR": [
+    63.05,
+    60.91,
+    68.08
+   ],
+   "bZ": [
+    58.88,
+    55.05,
+    61.48
+   ],
+   "fR": [
+    63.4,
+    62.25,
+    68.02
+   ],
+   "fZ": [
+    60.91,
+    55.77,
+    63.85
+   ]
+  },
+  {
+   "id": "terminal-snapshot.decode-ready",
+   "bR": [
+    10.53,
+    10.32,
+    11.43
+   ],
+   "bZ": [
+    14.16,
+    12.78,
+    17.67
+   ],
+   "fR": [
+    11.19,
+    10.67,
+    11.95
+   ],
+   "fZ": [
+    13.2,
+    12.61,
+    14.35
+   ]
+  },
+  {
+   "id": "terminal-formatter.noop",
+   "bR": [
+    10.16,
+    10.1,
+    11.05
+   ],
+   "bZ": [
+    14.55,
+    13.56,
+    15.25
+   ],
+   "fR": [
+    10.72,
+    9.99,
+    11.45
+   ],
+   "fZ": [
+    14.22,
+    13.43,
+    14.58
+   ]
+  },
+  {
+   "id": "terminal-formatter.format-vt",
+   "bR": [
+    252.99,
+    251.53,
+    254.01
+   ],
+   "bZ": [
+    207.12,
+    205.48,
+    214.09
+   ],
+   "fR": [
+    241.65,
+    240.19,
+    246.18
+   ],
+   "fZ": [
+    208.43,
+    205.28,
+    210.18
+   ]
+  },
+  {
+   "id": "terminal-formatter.format-plain",
+   "bR": [
+    174.55,
+    173.12,
+    176.26
+   ],
+   "bZ": [
+    163.43,
+    159.25,
+    167.39
+   ],
+   "fR": [
+    169.33,
+    167.65,
+    171.22
+   ],
+   "fZ": [
+    162.44,
+    159.22,
+    168.24
+   ]
+  },
+  {
+   "id": "scrollback-compression.compress",
+   "bR": [
+    32.04,
+    30.82,
+    40.12
+   ],
+   "bZ": [
+    30.56,
+    29.88,
+    32.2
+   ],
+   "fR": [
+    30.35,
+    29.66,
+    32.1
+   ],
+   "fZ": [
+    30.25,
+    29.58,
+    35.12
+   ]
+  },
+  {
+   "id": "scrollback-compression.incremental",
+   "bR": [
+    33.5,
+    31.65,
+    35.5
+   ],
+   "bZ": [
+    31.79,
+    30.51,
+    33.06
+   ],
+   "fR": [
+    29.59,
+    28.92,
+    31.12
+   ],
+   "fZ": [
+    29.99,
+    29.67,
+    32.42
+   ]
+  },
+  {
+   "id": "scrollback-compression.restore",
+   "bR": [
+    36.31,
+    34.39,
+    38.53
+   ],
+   "bZ": [
+    31.71,
+    31.36,
+    32.5
+   ],
+   "fR": [
+    31.86,
+    31.09,
+    32.66
+   ],
+   "fZ": [
+    31.76,
+    31.31,
+    34.37
+   ]
+  },
+  {
+   "id": "page-compression.compress",
+   "bR": [
+    9.21,
+    8.9,
+    10.26
+   ],
+   "bZ": [
+    16.46,
+    14.92,
+    18.43
+   ],
+   "fR": [
+    10.4,
+    9.58,
+    11.74
+   ],
+   "fZ": [
+    14.66,
+    14.23,
+    21.36
+   ]
+  },
+  {
+   "id": "page-compression.store",
+   "bR": [
+    9.07,
+    8.86,
+    10.96
+   ],
+   "bZ": [
+    14.61,
+    14.43,
+    14.89
+   ],
+   "fR": [
+    10.12,
+    9.58,
+    11.2
+   ],
+   "fZ": [
+    14.46,
+    13.86,
+    14.84
+   ]
+  },
+  {
+   "id": "page-compression.decompress",
+   "bR": [
+    12.1,
+    11.01,
+    14.18
+   ],
+   "bZ": [
+    16.66,
+    16.54,
+    18.47
+   ],
+   "fR": [
+    11.92,
+    11.34,
+    12.85
+   ],
+   "fZ": [
+    16.93,
+    16.59,
+    17.37
+   ]
+  }
+ ],
+ "pin": [
+  {
+   "bench": "terminal-parser",
+   "ghostty_ms": "591.25",
+   "rustty_ms": "130.51",
+   "ratio_ws10_fence1_n9": "0.221",
+   "ratio_g8b_run": "0.222",
+   "oracle_rev": "12752b2ac",
+   "date": "2026-10-07",
+   "rustty_head": "ad5c0040e",
+   "provenance": "DOCUMENTED VERIFICATION_DEBT.md V17"
+  },
+  {
+   "bench": "terminal-stream",
+   "ghostty_ms": "47.27",
+   "rustty_ms": "46.5",
+   "ratio_ws10_fence1_n9": "0.984",
+   "ratio_g8b_run": "0.969",
+   "oracle_rev": "12752b2ac",
+   "date": "2026-10-07",
+   "rustty_head": "ad5c0040e",
+   "provenance": "DOCUMENTED VERIFICATION_DEBT.md V17"
+  },
+  {
+   "bench": "codepoint-width.noop",
+   "ghostty_ms": "5.85",
+   "rustty_ms": "3.54",
+   "ratio_ws10_fence1_n9": "0.606",
+   "ratio_g8b_run": "0.616",
+   "oracle_rev": "12752b2ac",
+   "date": "2026-10-07",
+   "rustty_head": "ad5c0040e",
+   "provenance": "DOCUMENTED VERIFICATION_DEBT.md V17"
+  },
+  {
+   "bench": "codepoint-width.table",
+   "ghostty_ms": "214.03",
+   "rustty_ms": "185.14",
+   "ratio_ws10_fence1_n9": "0.865",
+   "ratio_g8b_run": "0.868",
+   "oracle_rev": "12752b2ac",
+   "date": "2026-10-07",
+   "rustty_head": "ad5c0040e",
+   "provenance": "DOCUMENTED VERIFICATION_DEBT.md V17"
+  },
+  {
+   "bench": "codepoint-width.simd",
+   "ghostty_ms": "458.52",
+   "rustty_ms": "401.35",
+   "ratio_ws10_fence1_n9": "0.875",
+   "ratio_g8b_run": "0.878",
+   "oracle_rev": "12752b2ac",
+   "date": "2026-10-07",
+   "rustty_head": "ad5c0040e",
+   "provenance": "DOCUMENTED VERIFICATION_DEBT.md V17"
+  },
+  {
+   "bench": "codepoint-width.wcwidth",
+   "ghostty_ms": "704.14",
+   "rustty_ms": "646.71",
+   "ratio_ws10_fence1_n9": "0.918",
+   "ratio_g8b_run": "0.923",
+   "oracle_rev": "12752b2ac",
+   "date": "2026-10-07",
+   "rustty_head": "ad5c0040e",
+   "provenance": "DOCUMENTED VERIFICATION_DEBT.md V17"
+  },
+  {
+   "bench": "grapheme-break.noop",
+   "ghostty_ms": "212.99",
+   "rustty_ms": "190.95",
+   "ratio_ws10_fence1_n9": "0.897",
+   "ratio_g8b_run": "0.9",
+   "oracle_rev": "12752b2ac",
+   "date": "2026-10-07",
+   "rustty_head": "ad5c0040e",
+   "provenance": "DOCUMENTED VERIFICATION_DEBT.md V17"
+  },
+  {
+   "bench": "grapheme-break.table",
+   "ghostty_ms": "237.58",
+   "rustty_ms": "196.55",
+   "ratio_ws10_fence1_n9": "0.827",
+   "ratio_g8b_run": "0.835",
+   "oracle_rev": "12752b2ac",
+   "date": "2026-10-07",
+   "rustty_head": "ad5c0040e",
+   "provenance": "DOCUMENTED VERIFICATION_DEBT.md V17"
+  },
+  {
+   "bench": "is-symbol.table",
+   "ghostty_ms": "218.19",
+   "rustty_ms": "179.91",
+   "ratio_ws10_fence1_n9": "0.825",
+   "ratio_g8b_run": "0.828",
+   "oracle_rev": "12752b2ac",
+   "date": "2026-10-07",
+   "rustty_head": "ad5c0040e",
+   "provenance": "DOCUMENTED VERIFICATION_DEBT.md V17"
+  },
+  {
+   "bench": "is-symbol.uucode",
+   "ghostty_ms": "213.2",
+   "rustty_ms": "187.81",
+   "ratio_ws10_fence1_n9": "0.881",
+   "ratio_g8b_run": "0.888",
+   "oracle_rev": "12752b2ac",
+   "date": "2026-10-07",
+   "rustty_head": "ad5c0040e",
+   "provenance": "DOCUMENTED VERIFICATION_DEBT.md V17"
+  },
+  {
+   "bench": "osc-parser",
+   "ghostty_ms": "177.16",
+   "rustty_ms": "45.11",
+   "ratio_ws10_fence1_n9": "0.255",
+   "ratio_g8b_run": "0.251",
+   "oracle_rev": "12752b2ac",
+   "date": "2026-10-07",
+   "rustty_head": "ad5c0040e",
+   "provenance": "DOCUMENTED VERIFICATION_DEBT.md V17"
+  },
+  {
+   "bench": "screen-clone.noop",
+   "ghostty_ms": "8.18",
+   "rustty_ms": "4.5",
+   "ratio_ws10_fence1_n9": "0.55",
+   "ratio_g8b_run": "0.508",
+   "oracle_rev": "12752b2ac",
+   "date": "2026-10-07",
+   "rustty_head": "ad5c0040e",
+   "provenance": "DOCUMENTED VERIFICATION_DEBT.md V17"
+  },
+  {
+   "bench": "screen-clone.clone",
+   "ghostty_ms": "47.54",
+   "rustty_ms": "17.99",
+   "ratio_ws10_fence1_n9": "0.378",
+   "ratio_g8b_run": "0.388",
+   "oracle_rev": "12752b2ac",
+   "date": "2026-10-07",
+   "rustty_head": "ad5c0040e",
+   "provenance": "DOCUMENTED VERIFICATION_DEBT.md V17"
+  },
+  {
+   "bench": "screen-clone.render",
+   "ghostty_ms": "145.09",
+   "rustty_ms": "127.62",
+   "ratio_ws10_fence1_n9": "0.88",
+   "ratio_g8b_run": "0.905",
+   "oracle_rev": "12752b2ac",
+   "date": "2026-10-07",
+   "rustty_head": "ad5c0040e",
+   "provenance": "DOCUMENTED VERIFICATION_DEBT.md V17"
+  }
+ ],
+ "n511": [
+  {
+   "config": "apc-parser",
+   "stage": "first paired (P7-W19)",
+   "rustty_over_ghostty": "1.81",
+   "metric": "child CPU ms (instr 943M vs 241M)",
+   "date": "2026-10-07",
+   "commit": "75ce42c45",
+   "provenance": "DOCUMENTED V18"
+  },
+  {
+   "config": "apc-parser",
+   "stage": "after NEON group test (P7-W20)",
+   "rustty_over_ghostty": "1.1",
+   "metric": "child CPU",
+   "date": "2026-10-07",
+   "commit": "5a7f2d1c8",
+   "provenance": "DOCUMENTED V18/N511"
+  },
+  {
+   "config": "apc-parser",
+   "stage": "idle re-measure (P7-W23)",
+   "rustty_over_ghostty": "1.11",
+   "metric": "child CPU",
+   "date": "2026-10-07",
+   "commit": "b61e273e6",
+   "provenance": "DOCUMENTED V18"
+  },
+  {
+   "config": "hyperlink-map.churn",
+   "stage": "first paired (P7-W19)",
+   "rustty_over_ghostty": "1.26",
+   "metric": "per-loop slope",
+   "date": "2026-10-07",
+   "commit": "75ce42c45",
+   "provenance": "DOCUMENTED V18"
+  },
+  {
+   "config": "hyperlink-map.churn",
+   "stage": "after inlining (P7-W20)",
+   "rustty_over_ghostty": "0.94",
+   "metric": "child CPU (provisional)",
+   "date": "2026-10-07",
+   "commit": "5a7f2d1c8",
+   "provenance": "DOCUMENTED V18"
+  },
+  {
+   "config": "hyperlink-map.churn",
+   "stage": "idle re-measure (P7-W23)",
+   "rustty_over_ghostty": "1.01",
+   "metric": "child CPU (0.99-1.03)",
+   "date": "2026-10-07",
+   "commit": "b61e273e6",
+   "provenance": "DOCUMENTED V18"
+  },
+  {
+   "config": "hyperlink-map.lookup",
+   "stage": "first paired (P7-W19)",
+   "rustty_over_ghostty": "1.17",
+   "metric": "per-loop slope",
+   "date": "2026-10-07",
+   "commit": "75ce42c45",
+   "provenance": "DOCUMENTED V18"
+  },
+  {
+   "config": "hyperlink-map.lookup",
+   "stage": "after inlining (P7-W20)",
+   "rustty_over_ghostty": "1.09",
+   "metric": "child CPU",
+   "date": "2026-10-07",
+   "commit": "5a7f2d1c8",
+   "provenance": "DOCUMENTED V18"
+  },
+  {
+   "config": "hyperlink-map.lookup",
+   "stage": "idle re-measure (P7-W23)",
+   "rustty_over_ghostty": "1.1",
+   "metric": "child CPU",
+   "date": "2026-10-07",
+   "commit": "b61e273e6",
+   "provenance": "DOCUMENTED V18"
+  }
+ ],
+ "comptime": [
+  {
+   "bench": "terminal-snapshot.encode",
+   "order": "0",
+   "fix": "baseline",
+   "hazard_subclass": "-",
+   "metric": "delta_pct_vs_zig",
+   "value_after": "295",
+   "provenance": "DIAGNOSIS.md"
+  },
+  {
+   "bench": "terminal-snapshot.encode",
+   "order": "1",
+   "fix": "const-generic SIZE for encoded width (runtime width = memcpy per cell)",
+   "hazard_subclass": "comptime param -> runtime enum",
+   "metric": "delta_pct_vs_zig",
+   "value_after": "85",
+   "provenance": "DIAGNOSIS.md #4"
+  },
+  {
+   "bench": "terminal-snapshot.encode",
+   "order": "2",
+   "fix": "hoist 4 KiB row chunk out of row loop (was memset per row)",
+   "hazard_subclass": "undefined buffer -> zeroed in loop",
+   "metric": "delta_pct_vs_zig",
+   "value_after": "28",
+   "provenance": "DIAGNOSIS.md #5"
+  },
+  {
+   "bench": "terminal-snapshot.encode",
+   "order": "3",
+   "fix": "pack four truncated values into one 4*SIZE store",
+   "hazard_subclass": "scalar spelling of vector shuffle",
+   "metric": "delta_pct_vs_zig",
+   "value_after": "16",
+   "provenance": "DIAGNOSIS.md #6"
+  },
+  {
+   "bench": "hyperlink-map.churn",
+   "order": "0",
+   "fix": "baseline (floor-corrected ns/op ratio)",
+   "hazard_subclass": "-",
+   "metric": "rust_over_zig_x",
+   "value_after": "6.1",
+   "provenance": "DIAGNOSIS.md"
+  },
+  {
+   "bench": "hyperlink-map.churn",
+   "order": "1",
+   "fix": "#[inline] on Wyhash public API (LTO banned)",
+   "hazard_subclass": "missing cross-crate #[inline]",
+   "metric": "rust_over_zig_x",
+   "value_after": "3.9",
+   "provenance": "DIAGNOSIS.md #1"
+  },
+  {
+   "bench": "hyperlink-map.churn",
+   "order": "2",
+   "fix": "one-shot hash with CONST key length (hasUniqueRepresentation)",
+   "hazard_subclass": "comptime length -> runtime length",
+   "metric": "rust_over_zig_x",
+   "value_after": "1.5",
+   "provenance": "DIAGNOSIS.md #2"
+  },
+  {
+   "bench": "hyperlink-map.churn",
+   "order": "3",
+   "fix": "#[inline] on Page accessors + map get paths",
+   "hazard_subclass": "missing cross-crate #[inline]",
+   "metric": "rust_over_zig_x",
+   "value_after": "1.26",
+   "provenance": "DIAGNOSIS.md #3"
+  },
+  {
+   "bench": "terminal-resize.rows",
+   "order": "0",
+   "fix": "baseline",
+   "hazard_subclass": "-",
+   "metric": "delta_pct_vs_zig",
+   "value_after": "33.6",
+   "provenance": "RESULTS.md"
+  },
+  {
+   "bench": "terminal-resize.rows",
+   "order": "1",
+   "fix": "OnceLock std_size + #[inline] Page::layout/Style::hash",
+   "hazard_subclass": "comptime const -> recomputed fn",
+   "metric": "delta_pct_vs_zig",
+   "value_after": "25.3",
+   "provenance": "RESULTS.md post-fix"
+  },
+  {
+   "bench": "terminal-resize.rows",
+   "order": "2",
+   "fix": "#[inline(always)] Page::layout (254-instr fn, hard Zig inline)",
+   "hazard_subclass": "#[inline] is only a hint",
+   "metric": "delta_pct_vs_zig",
+   "value_after": "-1.3",
+   "provenance": "RESULTS.md wave 2"
+  },
+  {
+   "bench": "terminal-formatter.format-vt",
+   "order": "0",
+   "fix": "baseline",
+   "hazard_subclass": "-",
+   "metric": "delta_pct_vs_zig",
+   "value_after": "85.3",
+   "provenance": "RESULTS.md"
+  },
+  {
+   "bench": "terminal-formatter.format-vt",
+   "order": "1",
+   "fix": "byte-core format_into, const-generic EMIT, hoisted 512 B run buffer, inlined SGR chain",
+   "hazard_subclass": "comptime param + zeroed buffer",
+   "metric": "delta_pct_vs_zig",
+   "value_after": "21.7",
+   "provenance": "RESULTS.md post-fix"
+  },
+  {
+   "bench": "terminal-formatter.format-vt",
+   "order": "2",
+   "fix": "SGR chain inline(always), BufOut buffered emission",
+   "hazard_subclass": "-",
+   "metric": "delta_pct_vs_zig",
+   "value_after": "15.9",
+   "provenance": "RESULTS.md wave 2"
+  }
+ ],
+ "new7": [
+  {
+   "bench": "apc-parser",
+   "delta_pct_before": "-36.0",
+   "delta_pct_after": "-31.2",
+   "oracle_rev": "4540d499a",
+   "date": "2026-08-28",
+   "fix_commit": "1d50073f6",
+   "provenance": "DOCUMENTED perf-new7/RESULTS.md (wall-clock; short benches floor-biased)"
+  },
+  {
+   "bench": "hyperlink-map.lookup",
+   "delta_pct_before": "-15.0",
+   "delta_pct_after": "-45.6",
+   "oracle_rev": "4540d499a",
+   "date": "2026-08-28",
+   "fix_commit": "1d50073f6",
+   "provenance": "DOCUMENTED perf-new7/RESULTS.md (wall-clock; short benches floor-biased)"
+  },
+  {
+   "bench": "hyperlink-map.churn",
+   "delta_pct_before": "38.1",
+   "delta_pct_after": "-40.8",
+   "oracle_rev": "4540d499a",
+   "date": "2026-08-28",
+   "fix_commit": "1d50073f6",
+   "provenance": "DOCUMENTED perf-new7/RESULTS.md (wall-clock; short benches floor-biased)"
+  },
+  {
+   "bench": "terminal-resize.cols",
+   "delta_pct_before": "27.9",
+   "delta_pct_after": "20.4",
+   "oracle_rev": "4540d499a",
+   "date": "2026-08-28",
+   "fix_commit": "1d50073f6",
+   "provenance": "DOCUMENTED perf-new7/RESULTS.md (wall-clock; short benches floor-biased)"
+  },
+  {
+   "bench": "terminal-resize.cols-no-reflow",
+   "delta_pct_before": "5.5",
+   "delta_pct_after": "4.2",
+   "oracle_rev": "4540d499a",
+   "date": "2026-08-28",
+   "fix_commit": "1d50073f6",
+   "provenance": "DOCUMENTED perf-new7/RESULTS.md (wall-clock; short benches floor-biased)"
+  },
+  {
+   "bench": "terminal-resize.rows",
+   "delta_pct_before": "33.6",
+   "delta_pct_after": "25.3",
+   "oracle_rev": "4540d499a",
+   "date": "2026-08-28",
+   "fix_commit": "1d50073f6",
+   "provenance": "DOCUMENTED perf-new7/RESULTS.md (wall-clock; short benches floor-biased)"
+  },
+  {
+   "bench": "terminal-resize.both",
+   "delta_pct_before": "28.8",
+   "delta_pct_after": "25.9",
+   "oracle_rev": "4540d499a",
+   "date": "2026-08-28",
+   "fix_commit": "1d50073f6",
+   "provenance": "DOCUMENTED perf-new7/RESULTS.md (wall-clock; short benches floor-biased)"
+  },
+  {
+   "bench": "terminal-snapshot.encode",
+   "delta_pct_before": "287.3",
+   "delta_pct_after": "15.9",
+   "oracle_rev": "4540d499a",
+   "date": "2026-08-28",
+   "fix_commit": "1d50073f6",
+   "provenance": "DOCUMENTED perf-new7/RESULTS.md (wall-clock; short benches floor-biased)"
+  },
+  {
+   "bench": "terminal-snapshot.decode",
+   "delta_pct_before": "51.5",
+   "delta_pct_after": "11.5",
+   "oracle_rev": "4540d499a",
+   "date": "2026-08-28",
+   "fix_commit": "1d50073f6",
+   "provenance": "DOCUMENTED perf-new7/RESULTS.md (wall-clock; short benches floor-biased)"
+  },
+  {
+   "bench": "terminal-snapshot.decode-ready",
+   "delta_pct_before": "10.8",
+   "delta_pct_after": "-26.9",
+   "oracle_rev": "4540d499a",
+   "date": "2026-08-28",
+   "fix_commit": "1d50073f6",
+   "provenance": "DOCUMENTED perf-new7/RESULTS.md (wall-clock; short benches floor-biased)"
+  },
+  {
+   "bench": "terminal-formatter.noop",
+   "delta_pct_before": "-20.3",
+   "delta_pct_after": "-24.7",
+   "oracle_rev": "4540d499a",
+   "date": "2026-08-28",
+   "fix_commit": "1d50073f6",
+   "provenance": "DOCUMENTED perf-new7/RESULTS.md (wall-clock; short benches floor-biased)"
+  },
+  {
+   "bench": "terminal-formatter.format-vt",
+   "delta_pct_before": "85.3",
+   "delta_pct_after": "21.7",
+   "oracle_rev": "4540d499a",
+   "date": "2026-08-28",
+   "fix_commit": "1d50073f6",
+   "provenance": "DOCUMENTED perf-new7/RESULTS.md (wall-clock; short benches floor-biased)"
+  },
+  {
+   "bench": "terminal-formatter.format-plain",
+   "delta_pct_before": "22.4",
+   "delta_pct_after": "7.1",
+   "oracle_rev": "4540d499a",
+   "date": "2026-08-28",
+   "fix_commit": "1d50073f6",
+   "provenance": "DOCUMENTED perf-new7/RESULTS.md (wall-clock; short benches floor-biased)"
+  },
+  {
+   "bench": "scrollback-compression.compress",
+   "delta_pct_before": "7.5",
+   "delta_pct_after": "6.9",
+   "oracle_rev": "4540d499a",
+   "date": "2026-08-28",
+   "fix_commit": "1d50073f6",
+   "provenance": "DOCUMENTED perf-new7/RESULTS.md (wall-clock; short benches floor-biased)"
+  },
+  {
+   "bench": "scrollback-compression.incremental",
+   "delta_pct_before": "7.6",
+   "delta_pct_after": "3.9",
+   "oracle_rev": "4540d499a",
+   "date": "2026-08-28",
+   "fix_commit": "1d50073f6",
+   "provenance": "DOCUMENTED perf-new7/RESULTS.md (wall-clock; short benches floor-biased)"
+  },
+  {
+   "bench": "scrollback-compression.restore",
+   "delta_pct_before": "8.4",
+   "delta_pct_after": "8.5",
+   "oracle_rev": "4540d499a",
+   "date": "2026-08-28",
+   "fix_commit": "1d50073f6",
+   "provenance": "DOCUMENTED perf-new7/RESULTS.md (wall-clock; short benches floor-biased)"
+  },
+  {
+   "bench": "page-compression.compress",
+   "delta_pct_before": "-36.0",
+   "delta_pct_after": "-40.3",
+   "oracle_rev": "4540d499a",
+   "date": "2026-08-28",
+   "fix_commit": "1d50073f6",
+   "provenance": "DOCUMENTED perf-new7/RESULTS.md (wall-clock; short benches floor-biased)"
+  },
+  {
+   "bench": "page-compression.store",
+   "delta_pct_before": "-35.8",
+   "delta_pct_after": "-37.8",
+   "oracle_rev": "4540d499a",
+   "date": "2026-08-28",
+   "fix_commit": "1d50073f6",
+   "provenance": "DOCUMENTED perf-new7/RESULTS.md (wall-clock; short benches floor-biased)"
+  },
+  {
+   "bench": "page-compression.decompress",
+   "delta_pct_before": "-33.1",
+   "delta_pct_after": "-29.3",
+   "oracle_rev": "4540d499a",
+   "date": "2026-08-28",
+   "fix_commit": "1d50073f6",
+   "provenance": "DOCUMENTED perf-new7/RESULTS.md (wall-clock; short benches floor-biased)"
+  }
+ ],
+ "gap": [
+  {
+   "class": "comptime param flattened to runtime enum",
+   "zig_construct": "comptime width / comptime emit: Format",
+   "port_spelling_that_lost": "runtime enum param; dynamic-length copy_from_slice = libc memcpy per cell",
+   "fix": "const-generic param + runtime match at the inline-else site",
+   "example": "snapshot encode, formatter",
+   "worst_gap_before": "3.9x (snapshot encode)",
+   "provenance": "perf-new7/DIAGNOSIS.md"
+  },
+  {
+   "class": "missing cross-crate #[inline] (LTO banned)",
+   "zig_construct": "single-CU Zig build inlines freely",
+   "port_spelling_that_lost": "out-of-line Wyhash update/finalize, Page accessors, Style::hash",
+   "fix": "#[inline] on hot pub fns; const hash lengths",
+   "example": "hyperlink-map",
+   "worst_gap_before": "6.1x (churn, floor-corrected)",
+   "provenance": "perf-new7/DIAGNOSIS.md"
+  },
+  {
+   "class": "comptime constant recomputed at runtime",
+   "zig_construct": "PagePool.item_size comptime",
+   "port_spelling_that_lost": "std_size() re-running ~90-line Page::layout per resize",
+   "fix": "OnceLock cache",
+   "example": "terminal-resize",
+   "worst_gap_before": "+34% (rows)",
+   "provenance": "perf-new7/DIAGNOSIS.md"
+  },
+  {
+   "class": "undefined buffer zeroed in hot loop",
+   "zig_construct": "var buf: [N]u8 = undefined",
+   "port_spelling_that_lost": "[0; N] inside loop (4 KiB/row; 512 B x2 per style boundary)",
+   "fix": "hoist to caller, zero once",
+   "example": "snapshot encode, formatter",
+   "worst_gap_before": "36% of encode time",
+   "provenance": "perf-new7/DIAGNOSIS.md"
+  },
+  {
+   "class": "#[inline] hint lost to cost model",
+   "zig_construct": "pub inline fn (hard)",
+   "port_spelling_that_lost": "#[inline] on 254-instr Page::layout",
+   "fix": "#[inline(always)]",
+   "example": "terminal-resize.rows",
+   "worst_gap_before": "+27% -> -1%",
+   "provenance": "perf-new7/RESULTS.md"
+  },
+  {
+   "class": "scalar early-exit scan loops",
+   "zig_construct": "branchless @Vector bitmask reduce",
+   "port_spelling_that_lost": "per-lane break blocks vectorization",
+   "fix": "bitmask accumulate + trailing_zeros",
+   "example": "terminal-stream",
+   "worst_gap_before": "5.3x on scan micro",
+   "provenance": "memory comptime-flattening-perf-hazard"
+  },
+  {
+   "class": "black_box mis-port of doNotOptimizeAway",
+   "zig_construct": "register constraint",
+   "port_spelling_that_lost": "stack spill + memory clobber per call",
+   "fix": "asm register sink",
+   "example": "unicode bench family",
+   "worst_gap_before": "-",
+   "provenance": "perf-new7/RESULTS.md wave 2"
+  },
+  {
+   "class": "unbuffered DataFile reads",
+   "zig_construct": "buffered reader",
+   "port_spelling_that_lost": "16384 syscalls per 64 MiB",
+   "fix": "256 KiB BufReader (256 syscalls)",
+   "example": "bench harness",
+   "worst_gap_before": "-",
+   "provenance": "perf-new7/RESULTS.md wave 2"
+  },
+  {
+   "class": "enum drop glue on per-byte return",
+   "zig_construct": "union(enum) Action has no destructor",
+   "port_spelling_that_lost": "[Option<Action>;3] with droppy variant forces materialization + drop_in_place",
+   "fix": "box the droppy payloads; Action 16 B",
+   "example": "terminal-parser",
+   "worst_gap_before": "~53% of parse loop",
+   "provenance": "PERF_LOG.md Round 2"
+  },
+  {
+   "class": "by-value large args",
+   "zig_construct": "Zig passes big params by const ref",
+   "port_spelling_that_lost": "24-28 B Style marshalled to stack per call",
+   "fix": "raw-pointer internal entry points",
+   "example": "screen-clone.clone",
+   "worst_gap_before": "documented floor until r5",
+   "provenance": "PERF_LOG.md Round 3/5"
+  },
+  {
+   "class": "bench build-config mismatch",
+   "zig_construct": "ghostty-bench builds simd=true",
+   "port_spelling_that_lost": "rustty-bench ran scalar fallback",
+   "fix": "bench-scoped simd feature",
+   "example": "terminal-stream",
+   "worst_gap_before": "~24% at r5 (8.2% by WS10)",
+   "provenance": "PERF_LOG.md Round 5, WS10 Fence 2"
+  }
+ ],
+ "neg": [
+  {
+   "experiment": "fat/thin LTO + cgu=1 + panic=abort",
+   "target_bench": "terminal-parser",
+   "measured_effect": "+65% (322 -> 531 ms); osc/clone -16%",
+   "why": "per-byte parser path over-inlined; register pressure (hypothesis)",
+   "date": "2026-07-16",
+   "provenance": "PERF_LOG.md LTO finding"
+  },
+  {
+   "experiment": "color-list prealloc (SegmentedList inline)",
+   "target_bench": "osc-parser",
+   "measured_effect": "0 osc gain; terminal-stream canary -3.3% when removed",
+   "why": "no win; reverted 408ddaa",
+   "date": "2026-07-16",
+   "provenance": "PERF_LOG.md"
+  },
+  {
+   "experiment": "by-value InlineVec Action payloads",
+   "target_bench": "terminal-parser",
+   "measured_effect": "+25..60%",
+   "why": "droppy OscDispatch variant forces full 192-216 B array materialization per byte",
+   "date": "2026-07-16",
+   "provenance": "PERF_LOG.md Round 2"
+  },
+  {
+   "experiment": "csel mask restructure in copy_with_managed_reset",
+   "target_bench": "screen-clone.clone",
+   "measured_effect": "54.4 -> 54.9 ms",
+   "why": "LLVM re-fuses masks; constants die across call",
+   "date": "2026-07-16",
+   "provenance": "PERF_LOG.md Round 3"
+  },
+  {
+   "experiment": "style value-memoization in render",
+   "target_bench": "screen-clone.render",
+   "measured_effect": "+42% (22.64 vs 15.94 ms)",
+   "why": "SROA splits cached 21 B Style into ~7 GPRs; 15 scalar stores per hit",
+   "date": "2026-07-16",
+   "provenance": "PERF_LOG.md Round 4"
+  },
+  {
+   "experiment": "plain-run memcpy + outlined per-cell handler",
+   "target_bench": "screen-clone.clone",
+   "measured_effect": "+28% (52.5 -> 67 ms)",
+   "why": "per-cell outlined call + scan overhead swamped savings",
+   "date": "2026-07-16",
+   "provenance": "PERF_LOG.md Round 5"
+  },
+  {
+   "experiment": "branchless UTF-8 DFA",
+   "target_bench": "decode family",
+   "measured_effect": "-94% noop lane (DCE) but +12..22% real lanes",
+   "why": "serializes loop-carried state chain",
+   "date": "2026-07-16",
+   "provenance": "PERF_LOG.md Round 5"
+  },
+  {
+   "experiment": "OSC per-byte loop variants x4 (hot-word, repr(C), state-first, cold-alloc-arm)",
+   "target_bench": "osc-parser",
+   "measured_effect": "all worse",
+   "why": "M4 store-forward renaming floor (NONE-SAFE)",
+   "date": "2026-07-16",
+   "provenance": "PERF_LOG.md Round 5"
+  },
+  {
+   "experiment": "hot assert! -> debug_assert!",
+   "target_bench": "terminal-resize.rows",
+   "measured_effect": "neutral on cols, reproducibly worse on rows",
+   "why": "ReleaseFast assert keeps the unreachable hint; debug_assert gives neither check nor hint",
+   "date": "2026-08-28",
+   "provenance": "perf-new7/DIAGNOSIS.md #9"
+  },
+  {
+   "experiment": "transposed 16x256 DFA table",
+   "target_bench": "decode family",
+   "measured_effect": "+5..13%",
+   "why": "512 B -> 4 KB table footprint beat shorter chain",
+   "date": "2026-08-28",
+   "provenance": "perf-new7/RESULTS.md wave 2"
+  },
+  {
+   "experiment": "grapheme Value packed back to u8",
+   "target_bench": "grapheme-break.table",
+   "measured_effect": "+7%",
+   "why": "aligned 2-byte pair load beats unpack ALU",
+   "date": "2026-08-28",
+   "provenance": "perf-new7/RESULTS.md wave 2"
+  }
+ ],
+ "alloc": [
+  {
+   "metric": "page allocs, full PageList workload",
+   "zig": "6",
+   "rust": "6",
+   "unit": "count",
+   "delta_pct": "0.0",
+   "official": "yes",
+   "note": "was reported 7 vs 3 (unequal scope); arena resize-seam fix removed the reset realloc",
+   "provenance": "PERF_LOG.md Rounds 2-3; ALLOC_BENCH_V2.md"
+  },
+  {
+   "metric": "peak outstanding page bytes",
+   "zig": "7502136",
+   "rust": "5271864",
+   "unit": "bytes",
+   "delta_pct": "-29.7",
+   "official": "yes",
+   "note": "geometry: port carries upstream b953bb346 BitmapAllocator fix the pinned oracle predates",
+   "provenance": "PERF_LOG.md"
+  },
+  {
+   "metric": "std page size (geometry)",
+   "zig": "589824",
+   "rust": "409600",
+   "unit": "bytes",
+   "delta_pct": "-30.6",
+   "official": "yes",
+   "note": "grapheme_alloc 131136 vs 8256, string_alloc 65544 vs 2056",
+   "provenance": "ALLOC_BENCH_V2.md"
+  },
+  {
+   "metric": "PageList workload latency (median of 9)",
+   "zig": "809",
+   "rust": "768.6",
+   "unit": "us",
+   "delta_pct": "-5.0",
+   "official": "yes (idle)",
+   "note": "",
+   "provenance": "PERF_LOG.md"
+  },
+  {
+   "metric": "peak RSS, alloc bench",
+   "zig": "7864320",
+   "rust": "10305536",
+   "unit": "bytes",
+   "delta_pct": "31.0",
+   "official": "yes",
+   "note": "asymmetric: Rust binary carries the TrackingAllocator seam",
+   "provenance": "PERF_LOG.md"
+  },
+  {
+   "metric": "peak RSS terminal-parser",
+   "zig": "7.06",
+   "rust": "6.29",
+   "unit": "MB",
+   "delta_pct": "-10.9",
+   "official": "r2-SHIP",
+   "note": "/usr/bin/time -l",
+   "provenance": "PERF_LOG.md"
+  },
+  {
+   "metric": "peak RSS screen-clone.clone",
+   "zig": "157.2",
+   "rust": "139.9",
+   "unit": "MB",
+   "delta_pct": "-11.0",
+   "official": "r2-SHIP",
+   "note": "/usr/bin/time -l",
+   "provenance": "PERF_LOG.md"
+  },
+  {
+   "metric": "peak RSS screen-clone.render",
+   "zig": "9.18",
+   "rust": "8.04",
+   "unit": "MB",
+   "delta_pct": "-12.4",
+   "official": "r2-SHIP",
+   "note": "/usr/bin/time -l",
+   "provenance": "PERF_LOG.md"
+  },
+  {
+   "metric": "peak RSS osc-parser",
+   "zig": "7.01",
+   "rust": "7.5",
+   "unit": "MB",
+   "delta_pct": "7.0",
+   "official": "r2-SHIP",
+   "note": "only config where Rust RSS is higher (7 of 8 lower)",
+   "provenance": "PERF_LOG.md"
+  }
+ ],
+ "size": [
+  {
+   "artifact": "ghostty-bench (ReleaseFast)",
+   "ghostty_bytes": "4029184",
+   "rustty_counterpart": "rustty-bench (release-fast)",
+   "rustty_bytes": "2957840",
+   "ratio": "0.734",
+   "note": "-26.6%",
+   "provenance": "BASELINE.json"
+  },
+  {
+   "artifact": "ghostty-gen (ReleaseFast)",
+   "ghostty_bytes": "464408",
+   "rustty_counterpart": "rustty-gen (release-fast)",
+   "rustty_bytes": "505296",
+   "ratio": "1.088",
+   "note": "+8.8%: unwind tables + longer Rust mangled symbols; __text 8 KB smaller",
+   "provenance": "BASELINE.json"
+  },
+  {
+   "artifact": "libghostty-vt.0.1.0.dylib",
+   "ghostty_bytes": "1924784",
+   "rustty_counterpart": "librustty_vt_c.dylib (release)",
+   "rustty_bytes": "2071760",
+   "ratio": "1.076",
+   "note": "+7.6% after N512 cut it from 2,498,112 B (1.30x)",
+   "provenance": "BASELINE.json"
+  }
+ ],
+ "libvt": [
+  {
+   "artifact": "librustty_vt_c.dylib (release; macOS arm64)",
+   "bytes": "2108032",
+   "build": "cargo build -p rustty-vt-c --release (fresh tmp target)",
+   "rev": "HEAD 1d22ba80d (pin a60e9e2a5)",
+   "provenance": "MEASURED",
+   "source": "stat of the built file; __TEXT 1654784 / __text 1290996 (size -m)"
+  },
+  {
+   "artifact": "rustty_vt_c.wasm (wasm32-unknown-unknown; raw before the growable-table patch)",
+   "bytes": "1385595",
+   "build": "cargo rustc -p rustty-vt-c --target wasm32-unknown-unknown --release -- -C link-arg=--export-table -C link-arg=-zstack-size=131072",
+   "rev": "HEAD 1d22ba80d",
+   "provenance": "MEASURED",
+   "source": "stat of the built file"
+  },
+  {
+   "artifact": "librustty_vt_c.a (release static; unpruned Rust staticlib)",
+   "bytes": "26633672",
+   "build": "same native build",
+   "rev": "HEAD 1d22ba80d",
+   "provenance": "MEASURED",
+   "source": "not like-for-like with libghostty-vt.a (BASELINE.json drops the static lib for that reason)"
+  },
+  {
+   "artifact": "librustty_vt_c.dylib at the size re-base",
+   "bytes": "2071760",
+   "build": "cargo build -p rustty-vt-c --release",
+   "rev": "P7-W22 2026-10-07",
+   "provenance": "DOCUMENTED",
+   "source": ".port/phase-0/baseline/BASELINE.json binary_sizes_bytes"
+  },
+  {
+   "artifact": "libghostty-vt.0.1.0.dylib (ReleaseFast) oracle",
+   "bytes": "1924784",
+   "build": "zig build -Demit-lib-vt=true -Doptimize=ReleaseFast",
+   "rev": "12752b2ac",
+   "provenance": "DOCUMENTED",
+   "source": ".port/phase-0/baseline/BASELINE.json"
+  },
+  {
+   "artifact": "libghostty-vt.a (ReleaseFast) oracle",
+   "bytes": "10901856",
+   "build": "same",
+   "rev": "12752b2ac",
+   "provenance": "DOCUMENTED",
+   "source": ".port/phase-0/baseline/BASELINE.json binary_sizes_dropped"
+  },
+  {
+   "artifact": "librustty_vt_c.dylib before the N512 size work",
+   "bytes": "2498112",
+   "build": "",
+   "rev": "P7-W22",
+   "provenance": "DOCUMENTED",
+   "source": "BASELINE.json gap_attribution"
+  },
+  {
+   "artifact": "rustty_vt_c.wasm (wasm32-wasip1 with C deps; July)",
+   "bytes": "~1020000",
+   "build": ".port/tools/build-wasm.sh --release",
+   "rev": "July 2026",
+   "provenance": "DOCUMENTED",
+   "source": ".port/phase-2/DEFERRALS.md (~1.02 MB; 157 exports)"
+  },
+  {
+   "artifact": "rustty_wasm.wasm (main wasm)",
+   "bytes": "992196",
+   "build": ".port/tools/build-main-wasm.sh --release",
+   "rev": "parity closure",
+   "provenance": "DOCUMENTED",
+   "source": ".port/parity-closure/DECISION-logging.md"
+  },
+  {
+   "artifact": "ghostty-vt.wasm oracle",
+   "bytes": "",
+   "build": "not built (would write into the read-only Ghostty checkout)",
+   "rev": "",
+   "provenance": "GAP",
+   "source": ""
+  }
+ ],
+ "timeline": [
+  {
+   "date": "2026-07-15",
+   "event": "first head-to-head (release profile)",
+   "wins_of_total": "0/14 (1 tie)",
+   "suite_delta_pct": "42.0",
+   "oracle_rev": "4749c4e93",
+   "commit": "10cc614",
+   "provenance": "MEASURED from perf/*.jsonl"
+  },
+  {
+   "date": "2026-07-16",
+   "event": "round 1 (profile + inline/DFA/destage/SoA)",
+   "wins_of_total": "10/14",
+   "suite_delta_pct": "-5.8",
+   "oracle_rev": "4749c4e93",
+   "commit": "9e1837b",
+   "provenance": "PERF_LOG.md"
+  },
+  {
+   "date": "2026-07-16",
+   "event": "round 2 (boxed Action, packed Style::eql)",
+   "wins_of_total": "12/14",
+   "suite_delta_pct": "-10.0",
+   "oracle_rev": "4749c4e93",
+   "commit": "9e386ab",
+   "provenance": "PERF_LOG.md"
+  },
+  {
+   "date": "2026-07-16",
+   "event": "round 3 (outline cold arms; parity bug found)",
+   "wins_of_total": "13/14 (1 parity)",
+   "suite_delta_pct": "-11.1",
+   "oracle_rev": "4749c4e93",
+   "commit": "10f2091",
+   "provenance": "PERF_LOG.md"
+  },
+  {
+   "date": "2026-07-16",
+   "event": "rounds 4+5 (parser fast path, style runs, simd fairness)",
+   "wins_of_total": "14/14",
+   "suite_delta_pct": "-21.7",
+   "oracle_rev": "4749c4e93",
+   "commit": "349e5d1",
+   "provenance": "PERF_LOG.md"
+  },
+  {
+   "date": "2026-07-30",
+   "event": "WS10 T21 paired re-measure (provisional, load 6.08)",
+   "wins_of_total": "13/13 comparable",
+   "suite_delta_pct": "",
+   "oracle_rev": "4749c4e93",
+   "commit": "a6537673a",
+   "provenance": "PERF_LOG.md WS10"
+  },
+  {
+   "date": "2026-08-28",
+   "event": "33-config full suite vs current main, after comptime fixes",
+   "wins_of_total": "23/33",
+   "suite_delta_pct": "-15.2",
+   "oracle_rev": "4540d499a",
+   "commit": "1d50073f6,2a84648ea",
+   "provenance": "perf-new7/RESULTS.md"
+  },
+  {
+   "date": "2026-10-07",
+   "event": "idle run vs oracle rebuilt at pin",
+   "wins_of_total": "14/14",
+   "suite_delta_pct": "-27.9",
+   "oracle_rev": "12752b2ac",
+   "commit": "b61e273e6",
+   "provenance": "VERIFICATION_DEBT.md V17"
+  }
+ ]
+}

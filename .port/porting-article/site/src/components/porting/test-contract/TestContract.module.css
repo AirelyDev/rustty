@@ -1,0 +1,523 @@
+/* The test contract widget body. Values follow the approved mockup
+   (03-test-contract) inside the shared instrument card. */
+
+/* Widget root: the four panels stacked. */
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  color: #d9ded6;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The replay panel (sits directly in the outer card). */
+.panel {
+  min-width: 0;
+}
+
+/* Sub-panel: a framed section inside the outer card. */
+.subPanel {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #262927;
+  border-radius: 12px;
+}
+
+/* Sub-panel header: outlined source pill and uppercase label. */
+.subHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin-bottom: 10px;
+}
+/* A sub-panel pill that links to its source: same look, underline on hover. */
+.subPill.subPillLink {
+  color: #d97934;
+  text-decoration: none;
+}
+.subPillLink:hover {
+  text-decoration: underline;
+}
+.subPillLink:focus-visible {
+  outline: 2px solid #d97934;
+  outline-offset: 2px;
+}
+
+.subPill {
+  max-width: 100%;
+  padding: 2px 9px;
+  border: 1px solid #d97934;
+  border-radius: 999px;
+  color: #d97934;
+  font: 500 9.5px/1.5 var(--jetbrains-mono), ui-monospace, monospace;
+  overflow-wrap: anywhere;
+}
+.subLabel {
+  color: #858a84;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+/* Big mono figure and its subtitle. */
+.big {
+  color: #f4f1ed;
+  font: 700 30px/1.1 var(--jetbrains-mono), ui-monospace, monospace;
+}
+.sub {
+  margin-top: 2px;
+  color: #858a84;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.sub code,
+.note code,
+.ins code,
+.why code {
+  font-family: var(--jetbrains-mono), ui-monospace, monospace;
+}
+
+/* Live counters under the replay headline. */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+.stat {
+  min-width: 0;
+  padding-left: 9px;
+  border-left: 2px solid #262927;
+}
+.stat b {
+  display: block;
+  color: #f4f1ed;
+  font: 700 18px/1.2 var(--jetbrains-mono), ui-monospace, monospace;
+  white-space: nowrap;
+}
+.stat span {
+  color: #858a84;
+  font-size: 11px;
+}
+.statCu {
+  border-color: #d97934;
+}
+.statTeal {
+  border-color: #64d8c6;
+}
+.statGold {
+  border-color: #ffbc7a;
+}
+
+/* Square grid box: positioning context for its tooltip. */
+.gridBox {
+  position: relative;
+  width: 100%;
+}
+.gridSvg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  cursor: crosshair;
+}
+.gridSvg:focus-visible,
+.plotSvg:focus-visible {
+  outline: 2px solid #64d8c6;
+  outline-offset: 2px;
+}
+.gridLabel {
+  fill: #858a84;
+  font: 9px var(--jetbrains-mono), ui-monospace, monospace;
+}
+
+/* Covered-share sparkline, aligned over the replay scrubber. */
+.spark {
+  margin: 10px 0 -4px 88px;
+}
+.sparkSvg {
+  display: block;
+  width: 100%;
+  height: 34px;
+}
+
+/* Rolling event line under the replay controls. */
+.events {
+  min-height: 18px;
+  margin-top: 6px;
+  color: #9aa09a;
+  font: 11.5px/1.5 var(--jetbrains-mono), ui-monospace, monospace;
+}
+.events em {
+  color: #ffbc7a;
+  font-style: normal;
+}
+
+/* Grid legend. */
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-top: 10px;
+  color: #9aa09a;
+  font-size: 11.5px;
+}
+.legend i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  border-radius: 2px;
+  vertical-align: -1px;
+}
+.legend .legendFuture {
+  background: #1d201f;
+  outline: 1px solid #2c302e;
+}
+
+/* Interaction hint. */
+.hint {
+  margin: 8px 0 0;
+  color: #858a84;
+  font-size: 11.5px;
+}
+
+/* Insight tiles. */
+.insights {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+.ins {
+  padding: 10px 12px;
+  background: #101211;
+  border: 1px solid #262927;
+  border-radius: 10px;
+  color: #c1c8c0;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.ins b {
+  display: block;
+  margin-bottom: 3px;
+  color: #f4f1ed;
+  font: 700 17px/1.2 var(--jetbrains-mono), ui-monospace, monospace;
+}
+
+/* Method notes at the foot of each panel. */
+.note {
+  margin: 12px 0 0;
+  color: #858a84;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.note code {
+  color: #9aa09a;
+  font-size: 11px;
+}
+
+/* Visually hidden, read by screen readers. */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Scatter and moving-contract panels side by side. */
+.two {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+}
+
+/* Tier toggle chips. */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+.chip {
+  padding: 2px 9px;
+  background: transparent;
+  border: 1px solid #262927;
+  border-radius: 999px;
+  color: #9aa09a;
+  font: 11px var(--jetbrains-mono), ui-monospace, monospace;
+  cursor: pointer;
+}
+.chip i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 5px;
+  border-radius: 50%;
+}
+.chip[aria-pressed="false"] {
+  opacity: 0.4;
+}
+.chip:focus-visible {
+  outline: 2px solid #64d8c6;
+  outline-offset: 2px;
+}
+
+/* Plot box: positioning context for the tooltip; the inner box scrolls on phones. */
+.plotBox {
+  position: relative;
+}
+.plotScroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.plotSvg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+  touch-action: pan-x pan-y;
+}
+.plotSvg text {
+  fill: #858a84;
+  font: 10px var(--jetbrains-mono), ui-monospace, monospace;
+}
+.plotSvg .tick9 {
+  font-size: 9px;
+}
+.scrollHint {
+  display: none;
+  margin: 0 0 6px;
+  color: #858a84;
+  font: 11px var(--jetbrains-mono), ui-monospace, monospace;
+  text-align: center;
+}
+
+/* Floating chart tooltip. */
+.tip {
+  position: absolute;
+  z-index: 5;
+  max-width: 280px;
+  padding: 8px 10px;
+  background: #141615;
+  border: 1px solid #3a3f3c;
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  color: #d9ded6;
+  font: 11.5px/1.45 var(--jetbrains-mono), ui-monospace, monospace;
+  pointer-events: none;
+}
+.tip[hidden] {
+  display: none;
+}
+.tip b {
+  color: #f4f1ed;
+}
+.k {
+  color: #858a84;
+}
+
+/* Notes on the ≥2× modules. */
+.why {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+.why > div {
+  padding-left: 9px;
+  border-left: 2px solid #262927;
+  color: #c1c8c0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.why code {
+  color: #ffbc7a;
+  font-size: 10.5px;
+  word-break: break-all;
+}
+.m {
+  color: #f4f1ed;
+  font: 600 11.5px var(--jetbrains-mono), ui-monospace, monospace;
+}
+
+/* Per-sync table. */
+.tableWrap {
+  overflow-x: auto;
+}
+.table {
+  width: 100%;
+  margin-top: 10px;
+  border-collapse: collapse;
+  font: 11.5px var(--jetbrains-mono), ui-monospace, monospace;
+}
+.table th {
+  padding: 4px 6px;
+  border-bottom: 1px solid #262927;
+  color: #858a84;
+  font-weight: 500;
+  text-align: right;
+  white-space: nowrap;
+}
+.table td {
+  padding: 4px 6px;
+  border-bottom: 1px solid #161918;
+  color: #c1c8c0;
+  text-align: right;
+  white-space: nowrap;
+}
+.table th:first-child,
+.table td:first-child {
+  text-align: left;
+}
+.table .hl td {
+  background: #17140f;
+}
+.lag {
+  color: #858a84;
+}
+.same {
+  color: #98c379;
+}
+.table .total {
+  color: #f4f1ed;
+}
+
+/* Skip census: headline arrow. */
+.arrow {
+  color: #f4f1ed;
+  font: 700 26px var(--jetbrains-mono), ui-monospace, monospace;
+}
+.struck {
+  color: #e06c75;
+  text-decoration-thickness: 2px;
+}
+.zero {
+  color: #98c379;
+}
+.arrowNote {
+  color: #858a84;
+  font: 500 13px var(--sans, system-ui), sans-serif;
+}
+
+/* Skip census: two columns of stacks and bars. */
+.skipGrid {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  gap: 20px;
+  margin-top: 14px;
+}
+.h4 {
+  margin: 0 0 8px;
+  color: #c1c8c0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+.h4Gap {
+  margin-top: 16px;
+}
+.noteGap {
+  margin: 0 0 8px;
+}
+.strong {
+  color: #c1c8c0;
+}
+.barsGap {
+  margin-top: 8px;
+}
+
+/* Stacked bar of segments; each segment is a tooltip trigger. */
+.stack {
+  display: flex;
+  gap: 2px;
+  height: 22px;
+  margin: 6px 0 4px;
+}
+.seg {
+  min-width: 2px;
+  height: 100%;
+}
+.seg > span {
+  display: block;
+  height: 100%;
+}
+.seg button {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.segFill {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.seg:first-child .segFill {
+  border-radius: 4px 0 0 4px;
+}
+.seg:last-child .segFill {
+  border-radius: 0 4px 4px 0;
+}
+
+/* Horizontal bar rows: label, bar, count. */
+.bar {
+  display: grid;
+  grid-template-columns: 150px 1fr 40px;
+  align-items: center;
+  gap: 8px;
+  margin: 3px 0;
+  color: #9aa09a;
+  font-size: 11.5px;
+}
+.barFill {
+  min-width: 2px;
+  height: 12px;
+  border-radius: 0 4px 4px 0;
+}
+.barN {
+  color: #d9ded6;
+  font: 600 11.5px var(--jetbrains-mono), ui-monospace, monospace;
+  text-align: right;
+}
+
+/* Touch screens: sideways swipes scroll the plot boxes. */
+@media (pointer: coarse) {
+  .plotSvg,
+  .gridSvg {
+    touch-action: pan-x pan-y;
+  }
+}
+
+/* Narrow: panels stacked, plots keep a readable width and scroll sideways. */
+@media (max-width: 800px) {
+  .two,
+  .skipGrid {
+    grid-template-columns: 1fr;
+  }
+  .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .insights {
+    grid-template-columns: 1fr;
+  }
+  .subPanel {
+    padding: 12px;
+  }
+  .bar {
+    grid-template-columns: 110px 1fr 34px;
+  }
+}
+
+/* Phone: the plots keep a readable width and scroll sideways in their own box. */
+@media (max-width: 540px) {
+  .plotSvg {
+    min-width: 420px;
+  }
+  .scrollHint {
+    display: block;
+  }
+}

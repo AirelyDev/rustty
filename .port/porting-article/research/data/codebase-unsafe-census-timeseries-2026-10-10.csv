@@ -1,0 +1,6 @@
+snapshot_commit,date,sites,total_lines,density_per_kloc_lines,source
+b4845f4,2026-07-10,11145,412464,27.02,.port/audits/unsafe-census-b4845f4.json
+47b2dbbb,2026-08-25,18645,662381,28.15,.port/audits/unsafe-census-47b2dbbb.json
+b0685c0d,2026-08-25,18826,675517,27.87,.port/audits/unsafe-census-b0685c0d.json
+1d22ba80d,2026-10-08,22311,836910,26.66,MEASURED: count-unsafe.sh -> research/tmp/unsafe-census-head.json
+58aa62a81,2026-10-10,22241,838132,26.54,MEASURED: count-unsafe.sh -> research/tmp/refresh-2026-10-10/unsafe-census-58aa62a81.json

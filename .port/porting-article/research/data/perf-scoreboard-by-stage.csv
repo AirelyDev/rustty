@@ -1,0 +1,8 @@
+stage,date,wins,ties_abs_lt_1.5pct,losses,suite_zig_ms,suite_rust_ms,suite_delta_pct,rustty_code,profile,note
+0-baseline,2026-07-15,0,1,13,3105.6,4410.9,42.0,10cc614,release (overflow-checks on),"first head-to-head, PERF_COMPARISON.md"
+1-prefix-release,2026-07-16,5,2,7,2908.2,3341.3,14.9,10cc614,release (overflow-checks on),"same code as baseline, r1 session"
+1-prefix-release-fast,2026-07-16,6,3,5,2908.2,3302.5,13.6,10cc614,release-fast,profile-only change
+2-r1-ship,2026-07-16,10,1,3,2908.2,2740.3,-5.8,9e1837b,release-fast,round 1
+3-r2-ship,2026-07-16,12,0,2,2887.5,2599.7,-10.0,r2 (9e386ab),release-fast,round 2
+4-r3-ship,2026-07-16,13,0,1,2915.8,2592.5,-11.1,10f2091,release-fast,round 3 (incl. parity fix)
+5-r5-ship,2026-07-16,14,0,0,2897.3,2269.1,-21.7,a3a2b23,release-fast,"rounds 4+5, FINAL"

@@ -1,0 +1,22 @@
+side,metric,value,provenance,method
+rust,test fns (#[test] family) in tracked crates/ crates-sys/ xtask/,7270,MEASURED,scratchpad rsskip.py over git ls-files (matches round-1 7270)
+rust,test fns with no skip mechanism at all,6325,MEASURED,7270 - 945
+rust,plain #[ignore] (always skipped by default; run on request by dedicated lanes),133,MEASURED,rsskip.py; 100 are rustty-apprt headed GTK/display/D-Bus tests
+rust,cfg_attr(<pred> ignore) naming miri (skipped only under Miri),475,MEASURED,rsskip.py incl. multi-line rustfmt attributes; Miri cross-check doc says 468 (.port/phase-2/MIRI_EXCEPTIONS.md)
+rust,of which all(miri debug_assertions) (G6c runs them with debug assertions off),128,MEASURED,rsskip.py; G6c doc: 124 of 124 green
+rust,cfg_attr(<pred> ignore) not naming miri (feature/platform scope),136,MEASURED,rsskip.py (e.g. not(feature=kitty-graphics) 44; windows 17)
+rust,test fns with a non-test #[cfg(..)] (compiled only on some platforms/features),259,MEASURED,rsskip.py (not(windows) 32; macos 27; windows 26; unix 25; oniguruma 19)
+rust,test modules gated by cfg(all(test <platform/feature>)),35,MEASURED,rsskip.py
+rust,silent early-return skips at HEAD,0,DOCUMENTED,.port/phase-8/w0/g-skip-finale-at-a60e9e2a5.txt (G-SKIP: 0 sites; 265 guarded returns accepted)
+rust,silent skip sites before the no-silent-skips rule (2026-09-23),185,DOCUMENTED,commit 1096fa4cd; NEW-FINDINGS N196 (145 early returns + 22 all-cfg bodies + 17 unpivoted skipping prints + 1 else-less if)
+rust,G-SKIP allow-list entries (cap),4 sites (cap 6) + 1 guard (cap 2),MEASURED,.port/tools/gates/check_silent_skips.py ALLOW_SITES / ALLOW_GUARDS
+rust,strict-mode skip pivots require_<x>_or_skip: call sites / helpers,88 / 18,MEASURED,git grep require_*_or_skip in crates/ (RUSTTY_REQUIRE_<X>=1 turns the skip into a failure)
+rust,runtime ignored count in the full Linux Valgrind run,156 ignored (6614 passed),DOCUMENTED,.port/parity-closure/README.md G-VALGRIND full run
+rust,runtime ignored rustty-vt (cargo test -p rustty-vt),3 ignored (2974 passed),DOCUMENTED,.port/phase-6/README.md:81 (Phase 6 pin)
+zig,test blocks in Ghostty src/ at a60e9e2a5,4423,MEASURED,regex ^\s*test\s*("|{) (scratchpad zigskip.py)
+zig,test blocks whose body contains error.SkipZigTest,199,MEASURED,zigskip.py brace-matched bodies (floor: skips reached via helper fns not counted)
+zig,of which guard is comptime platform/build option,167,ESTIMATED,keyword classifier on the 300 chars before the skip
+zig,of which guard is runtime (valgrind 10; font/shaper missing; decode_png null; GTK init; etc.),32,ESTIMATED,same
+zig,SkipZigTest occurrences in src/ (all),217 in 45 files,MEASURED,git grep -c SkipZigTest a60e9e2a5 -- src/
+parity,live oracle test blocks with a Rust counterpart or written reason,4277 / 4277 (0 unexplained),DOCUMENTED,.port/phase-8/w0/g-tests-finale-at-a60e9e2a5.txt
+parity,per-module test counts Rust >= Zig,211 modules / 0 below,DOCUMENTED,BRIEF #8 (G1b)

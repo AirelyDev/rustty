@@ -1,0 +1,13 @@
+surface,metric,ghostty_value,rustty_value,provenance,evidence
+libghostty-vt vs librustty-vt headers,header files under include/<name>/,35,35,MEASURED,"find ../ghostty/include/ghostty -name '*.h' | wc -l ; find include/rustty -name '*.h' | wc -l"
+libghostty-vt vs librustty-vt headers,header lines,13926,13933,MEASURED,"find ... -name '*.h' | xargs wc -l"
+libghostty-vt vs librustty-vt headers,distinct exported functions declared,208,208,MEASURED,"grep -rhoE '\b(ghostty|rustty)_[a-z0-9_]+\s*\(' include/... | sort -u | wc -l"
+libghostty-vt vs librustty-vt headers,C enums with _MAX_VALUE int-sizing sentinel,79,79,MEASURED,"grep -rh '_MAX_VALUE = (GHOSTTY|RUSTTY)_ENUM_MAX_VALUE'"
+libghostty-vt vs librustty-vt headers,#[no_mangle]/export_name sites in rustty-vt-c,,206,MEASURED,"grep -rE '#\[(unsafe\()?no_mangle|export_name' crates/rustty-vt-c/src | wc -l"
+embedding API (ghostty.h vs rustty-embed.h),header lines,1286,1290,MEASURED,wc -l
+embedding API (ghostty.h vs rustty-embed.h),GHOSTTY_API entrypoints mapped in CABI_SYMBOLS.tsv,90,90,DOCUMENTED,.port/tools/gates/check_symbol_manifest.sh header (== 90); .port/audits/CABI_SYMBOLS.tsv
+embedding API (ghostty.h vs rustty-embed.h),#[no_mangle] sites in rustty-apprt-c,,80,MEASURED,grep no_mangle crates/rustty-apprt-c/src
+embedding API (ghostty.h vs rustty-embed.h),config C-ABI #[no_mangle] sites in rustty-config,,17,MEASURED,grep no_mangle crates/rustty-config/src
+WASM,main_wasm.zig / rustty-wasm+rustty-web-canvas code LOC,17,538,MEASURED,tokei
+WASM,#[no_mangle] sites in rustty-wasm + rustty-web-canvas,,20,MEASURED,grep no_mangle
+font-shaper web_canvas,#[no_mangle] sites in rustty-font-shaper,,19,MEASURED,grep no_mangle crates/rustty-font-shaper/src

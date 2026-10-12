@@ -1,0 +1,883 @@
+{
+ "pins": [
+  [
+   "4749c4e93",
+   "06-21",
+   "baseline"
+  ],
+  [
+   "6ad1fe7d8",
+   "07-31",
+   "1st move"
+  ],
+  [
+   "12967b68f",
+   "08-17",
+   "2nd"
+  ],
+  [
+   "683d8db64",
+   "08-25",
+   "3rd"
+  ],
+  [
+   "88f57ee66",
+   "08-26",
+   "drift"
+  ],
+  [
+   "20abdb50a",
+   "09-01",
+   "5th"
+  ],
+  [
+   "12752b2ac",
+   "09-28",
+   "7th"
+  ],
+  [
+   "a60e9e2a5",
+   "10-07",
+   "previous"
+  ],
+  [
+   "246f70287",
+   "10-09",
+   "current"
+  ]
+ ],
+ "hosts": [
+  [
+   "mac",
+   "macOS",
+   "MacBook Pro, Apple M4 Pro"
+  ],
+  [
+   "lin",
+   "Linux VM",
+   "Fedora 44 aarch64, 8 vCPU"
+  ],
+  [
+   "msvc",
+   "Windows MSVC",
+   "x86_64 under emulation"
+  ],
+  [
+   "gnu",
+   "Windows GNU",
+   "x86_64-pc-windows-gnu"
+  ]
+ ],
+ "tools": [
+  [
+   "sb",
+   "Miri · Stacked Borrows"
+  ],
+  [
+   "tb",
+   "Miri · Tree Borrows"
+  ],
+  [
+   "capi",
+   "Miri · C API (vt-c)"
+  ],
+  [
+   "asan",
+   "ASan"
+  ],
+  [
+   "lsan",
+   "LSan"
+  ],
+  [
+   "msan",
+   "MSan"
+  ],
+  [
+   "tsan",
+   "TSan"
+  ],
+  [
+   "hwasan",
+   "HWASan"
+  ],
+  [
+   "vg",
+   "Valgrind"
+  ],
+  [
+   "xb",
+   "cross-build"
+  ],
+  [
+   "ts",
+   "test suites"
+  ]
+ ],
+ "na": {
+  "msan|mac": "compiler-rt has no MSan for Darwin",
+  "hwasan|mac": "HWASan runs on aarch64 Linux only",
+  "sb|lin": "Miri lanes run on the Mac",
+  "tb|lin": "Miri lanes run on the Mac",
+  "capi|lin": "Miri lanes run on the Mac"
+ },
+ "runs": [
+  [
+   0,
+   "sb",
+   "mac",
+   "f",
+   2037,
+   null,
+   "07-11",
+   "First full rustty-vt sweep: 1,948 clean, one real aliasing bug in search (9 tests), fixed about 7 h later; 74 tests routed as written exceptions",
+   9,
+   0,
+   "3277f2f78 · 9e3fe1c25"
+  ],
+  [
+   0,
+   "sb",
+   "mac",
+   "f",
+   null,
+   null,
+   "07-30",
+   "vt Miri sweep before the first pin move: uninitialised struct padding hashed by the page compressor, and an argument freed mid-call",
+   2,
+   0,
+   "9d8fafb82"
+  ],
+  [
+   0,
+   "capi",
+   "mac",
+   "f",
+   null,
+   null,
+   "07-10",
+   "Widened lane over vt-c: writes through a const-derived slice, a handler built from a temporary's tag, a kitty alias pop",
+   4,
+   0,
+   "c4758b431"
+  ],
+  [
+   0,
+   "ts",
+   "mac",
+   "g",
+   3005,
+   null,
+   "06-28",
+   "3,005 tests by 06-28 against the 3,234-test Zig contract inventoried before porting; the first runnable app on 07-12",
+   0,
+   0,
+   "timeline dossier"
+  ],
+  [
+   0,
+   "ts",
+   "lin",
+   "g",
+   null,
+   null,
+   "07-18",
+   "GTK first light (07-17) and a live terminal in a GTK window (07-18), checked by hand on GNOME, X11 and sway",
+   0,
+   0,
+   "3dad6d7a2 · 9bc62e574"
+  ],
+  [
+   0,
+   "xb",
+   "mac",
+   "g",
+   null,
+   null,
+   "07-23",
+   "macOS build restored after the Linux and libxev merges",
+   0,
+   0,
+   "e47728fcb"
+  ],
+  [
+   1,
+   "sb",
+   "mac",
+   "f",
+   null,
+   null,
+   "07-31",
+   "libxev thread pool under Stacked and Tree Borrows, 8 seeds: a wildcard container_of, a protector against workers, a Relaxed load racing teardown",
+   3,
+   0,
+   "70a4b2909"
+  ],
+  [
+   1,
+   "asan",
+   "mac",
+   "f",
+   null,
+   null,
+   "07-31",
+   "Adversarial re-vet: the 'ASan crash' was a dropped Zig field default (16 KiB thread stack); the module returned to ASan coverage",
+   1,
+   0,
+   "5243303fb"
+  ],
+  [
+   1,
+   "xb",
+   "msvc",
+   "g",
+   null,
+   null,
+   "08-11",
+   "Windows type-check restored (was 25 errors) in the audit remediation commit",
+   0,
+   0,
+   "8120dd10d"
+  ],
+  [
+   2,
+   "sb",
+   "mac",
+   "f",
+   129,
+   null,
+   "08-25",
+   "Curated 129-test lane over the snapshot subsystem: an allocation alias invalidated by a re-protect, and a pool leak",
+   2,
+   0,
+   "47b2dbbb7"
+  ],
+  [
+   2,
+   "ts",
+   "lin",
+   "f",
+   null,
+   null,
+   "08-25",
+   "Linux-lane fixes at the end of the second upstream catch-up, including a font-matching double destroy recorded as a Ghostty bug",
+   0,
+   1,
+   "445239ad0"
+  ],
+  [
+   5,
+   "sb",
+   "mac",
+   "x",
+   null,
+   null,
+   "09-08",
+   "The full check script never finished Miri: the rustty-core lane burned 26.5 h of CPU (~30 h wall) without finishing; per-crate lanes on 09-27 found 2 more (a box move in a benchmark, a shared row slice held across writes; the C API one is in its own row)",
+   2,
+   0,
+   "phase-6 README · 09-27 lane commits"
+  ],
+  [
+   5,
+   "capi",
+   "mac",
+   "f",
+   null,
+   null,
+   "09-27",
+   "rustty-vt-c Miri lane green with 5 OS-boundary and 7 budget exceptions; found an 8-byte store through a 1-byte field pointer",
+   1,
+   0,
+   "f2c7d0180"
+  ],
+  [
+   5,
+   "asan",
+   "mac",
+   "g",
+   88,
+   null,
+   "09-24",
+   "rustty-font under ASan, 88 of 88",
+   0,
+   0,
+   "6abf60df8"
+  ],
+  [
+   5,
+   "vg",
+   "lin",
+   "f",
+   null,
+   null,
+   "09-27",
+   "First Valgrind memcheck runs: a font collection leaked when grid setup fails (a Ghostty defect)",
+   0,
+   1,
+   "7d8a101a8"
+  ],
+  [
+   5,
+   "ts",
+   "mac",
+   "g",
+   5406,
+   null,
+   "09-01",
+   "ci.sh: fmt, clippy, build and 5,406 workspace tests pass; one throughput test flaky under load",
+   0,
+   0,
+   "phase-6 README"
+  ],
+  [
+   5,
+   "ts",
+   "lin",
+   "f",
+   418,
+   null,
+   "09-08",
+   "Early lane 418 passed / 0 failed; the full ci.sh lane ran 35 pass, 5 fail, 12 blocked and exposed 3 failures macOS cannot see (all 25 C/C++ examples unbuildable on Linux among them)",
+   3,
+   0,
+   "d328db1f7"
+  ],
+  [
+   5,
+   "ts",
+   "msvc",
+   "g",
+   42,
+   null,
+   "09-27",
+   "rustty-xev 42 of 42 with the IOCP backend executing",
+   0,
+   0,
+   "verification-debt record"
+  ],
+  [
+   6,
+   "sb",
+   "mac",
+   "g",
+   3104,
+   13354,
+   "10-06",
+   "38 crates green on nextest (rustty-vt 3,104 tests in 9,525 s); debug-assertions-off lane 124 of 124 in 1,110 s",
+   0,
+   0,
+   "parity-closure README"
+  ],
+  [
+   6,
+   "tb",
+   "mac",
+   "f",
+   2375,
+   26220,
+   "10-02",
+   "13 test-side bugs (reborrow, then the owner touched), all fixed: 5 from an earlier run over the search tests and 8 from the two full runs (1,018 tests 11,100 s; 2,375 tests 15,120 s); then green over vt, vt-c (570), core, xev, renderer",
+   13,
+   0,
+   "bugs-verification-gates.csv"
+  ],
+  [
+   6,
+   "capi",
+   "mac",
+   "f",
+   570,
+   null,
+   "09-29",
+   "Review + isolated harness: C effect callbacks and the paste reader re-entering the terminal under protected borrows; Tree Borrows green over 570 vt-c tests",
+   3,
+   0,
+   "port-findings ledger"
+  ],
+  [
+   6,
+   "asan",
+   "mac",
+   "g",
+   9850,
+   900,
+   "10-02",
+   "9,850 tests, 117 of 117 ASan claims verified; 459 Miri-excepted tests ran, 9 expected absent. First runs also produced entries in the port-findings ledger (counted under LSan where they are leaks)",
+   0,
+   0,
+   "parity-closure README"
+  ],
+  [
+   6,
+   "lsan",
+   "mac",
+   "f",
+   9850,
+   1980,
+   "10-02",
+   "Green after fixes: Dear ImGui's Metal backend leaked every frame (Ghostty side), per-surface render-thread leaks (port)",
+   2,
+   1,
+   "20a586b20"
+  ],
+  [
+   6,
+   "lsan",
+   "lin",
+   "f",
+   10111,
+   1200,
+   "10-02",
+   "10,111 tests; cross-check 412 ran, 56 expected absent. Found app-config and bench clone leaks; on 10-07 LSan on a live GTK surface found a gtk4-rs closure leak",
+   3,
+   0,
+   "parity-closure README · 4a32358ae"
+  ],
+  [
+   6,
+   "msan",
+   "lin",
+   "g",
+   6183,
+   3000,
+   "10-02",
+   "6,183 tests over 58 members; 0 findings in Rustty code",
+   0,
+   0,
+   "parity-closure README"
+  ],
+  [
+   6,
+   "tsan",
+   "mac",
+   "f",
+   4380,
+   2280,
+   "10-07",
+   "Green after fixing a data race in vendored Highway's chosen-target mask (Ghostty dependency)",
+   0,
+   1,
+   "parity-closure README"
+  ],
+  [
+   6,
+   "tsan",
+   "lin",
+   "g",
+   4428,
+   1245,
+   "10-07",
+   "4,428 tests, 0 reports, 20.75 min",
+   0,
+   0,
+   "4a32358ae"
+  ],
+  [
+   6,
+   "hwasan",
+   "lin",
+   "g",
+   9987,
+   3360,
+   "10-02",
+   "9,987 tests over 63 specs, 56 min",
+   0,
+   0,
+   "1a13056ae"
+  ],
+  [
+   6,
+   "vg",
+   "lin",
+   "f",
+   6614,
+   13451,
+   "10-07",
+   "914 memcheck processes, 6,614 tests, 3 h 44 min; renderer-only RED fixed by a test fix and Mesa suppressions; 0 errors in Rustty code",
+   0,
+   0,
+   "f31fcc032"
+  ],
+  [
+   6,
+   "xb",
+   "mac",
+   "g",
+   null,
+   null,
+   "09-30",
+   "Cross-platform build check: Linux, Windows x64 + ARM64 + GNU, macOS",
+   0,
+   0,
+   "9076dfefd"
+  ],
+  [
+   6,
+   "xb",
+   "lin",
+   "g",
+   null,
+   null,
+   "09-30",
+   "Part of the cross-platform build check",
+   0,
+   0,
+   "9076dfefd"
+  ],
+  [
+   6,
+   "xb",
+   "msvc",
+   "g",
+   null,
+   null,
+   "09-30",
+   "Part of the cross-platform build check",
+   0,
+   0,
+   "9076dfefd"
+  ],
+  [
+   6,
+   "xb",
+   "gnu",
+   "g",
+   null,
+   null,
+   "09-30",
+   "Part of the cross-platform build check",
+   0,
+   0,
+   "9076dfefd"
+  ],
+  [
+   6,
+   "ts",
+   "mac",
+   "g",
+   403,
+   null,
+   "09-30",
+   "XCTest app tests 403 pass",
+   0,
+   0,
+   "phase-7 README"
+  ],
+  [
+   6,
+   "ts",
+   "lin",
+   "g",
+   3332,
+   null,
+   "09-30",
+   "cargo test for the 29 crates the phase touched (vt 3,332; vt-c 586; GTK apprt 174 …) and the live GTK window tests",
+   0,
+   0,
+   "phase-7 README"
+  ],
+  [
+   6,
+   "ts",
+   "msvc",
+   "g",
+   442,
+   null,
+   "09-30",
+   "vt kitty 393 + mem 4, rss probe, rustty-xev 45",
+   0,
+   0,
+   "phase-7 README"
+  ],
+  [
+   6,
+   "ts",
+   "gnu",
+   "g",
+   137,
+   null,
+   "09-30",
+   "font-shaper 133 + fontconfig-sys 4",
+   0,
+   0,
+   "phase-7 README"
+  ],
+  [
+   7,
+   "xb",
+   "mac",
+   "g",
+   null,
+   50,
+   "10-08",
+   "cargo build --workspace --all-targets 49.6 s; app BUILD SUCCEEDED",
+   0,
+   0,
+   "cross-host record"
+  ],
+  [
+   7,
+   "xb",
+   "lin",
+   "g",
+   null,
+   191,
+   "10-08",
+   "Fresh clone, workspace + GTK, X11, Wayland 3 m 11 s; clippy -D warnings; release build",
+   0,
+   0,
+   "cross-host record"
+  ],
+  [
+   7,
+   "xb",
+   "msvc",
+   "g",
+   null,
+   157,
+   "10-08",
+   "Workspace build 2 m 37 s, clippy, vt-c release (3 -sys crates excluded)",
+   0,
+   0,
+   "cross-host record"
+  ],
+  [
+   7,
+   "xb",
+   "gnu",
+   "g",
+   null,
+   116,
+   "10-08",
+   "font-shaper with the fontconfig/FreeType backend 1 m 56 s",
+   0,
+   0,
+   "cross-host record"
+  ],
+  [
+   7,
+   "ts",
+   "mac",
+   "g",
+   404,
+   null,
+   "10-08",
+   "XCTest 404 passed, 0 failed; menu-shortcut parity 51 actions byte-identical",
+   0,
+   0,
+   "phase-8 README"
+  ],
+  [
+   7,
+   "ts",
+   "lin",
+   "g",
+   3373,
+   null,
+   "10-08",
+   "Targeted: 18 touched packages (vt 3,373; vt-c 604; GTK apprt 173 …); live GTK window tests 18 of 18. The full-workspace run is part of the pending verification run",
+   0,
+   0,
+   "phase-8 README"
+  ],
+  [
+   7,
+   "ts",
+   "msvc",
+   "g",
+   null,
+   null,
+   "10-08",
+   "C example built against the vt-c DLL: output byte-identical to the golden",
+   0,
+   0,
+   "phase-8 README"
+  ],
+  [
+   7,
+   "asan",
+   "lin",
+   "p",
+   null,
+   null,
+   "10-08",
+   "Current-pin run in progress on an unmerged branch",
+   0,
+   0,
+   "rvm, 10-08"
+  ],
+  [
+   7,
+   "lsan",
+   "lin",
+   "p",
+   null,
+   null,
+   "10-08",
+   "Current-pin run in progress on an unmerged branch",
+   0,
+   0,
+   "rvm, 10-08"
+  ],
+  [
+   7,
+   "msan",
+   "lin",
+   "p",
+   null,
+   null,
+   "10-08",
+   "Current-pin run in progress on an unmerged branch",
+   0,
+   0,
+   "rvm, 10-08"
+  ],
+  [
+   7,
+   "tsan",
+   "lin",
+   "p",
+   null,
+   null,
+   "10-08",
+   "Current-pin run in progress on an unmerged branch",
+   0,
+   0,
+   "rvm, 10-08"
+  ],
+  [
+   7,
+   "hwasan",
+   "lin",
+   "p",
+   null,
+   null,
+   "10-08",
+   "Current-pin run in progress on an unmerged branch",
+   0,
+   0,
+   "rvm, 10-08"
+  ],
+  [
+   7,
+   "vg",
+   "lin",
+   "p",
+   null,
+   null,
+   "10-08",
+   "Scheduled with the current-pin verification run",
+   0,
+   0,
+   "phase-8 README"
+  ],
+  [
+   7,
+   "sb",
+   "mac",
+   "p",
+   null,
+   null,
+   "10-08",
+   "Scheduled with the current-pin verification run",
+   0,
+   0,
+   "phase-8 README"
+  ],
+  [
+   7,
+   "tb",
+   "mac",
+   "p",
+   null,
+   null,
+   "10-08",
+   "Scheduled with the current-pin verification run",
+   0,
+   0,
+   "phase-8 README"
+  ],
+  [
+   7,
+   "capi",
+   "mac",
+   "p",
+   null,
+   null,
+   "10-08",
+   "Scheduled with the current-pin verification run",
+   0,
+   0,
+   "phase-8 README"
+  ]
+ ],
+ "notes": {
+  "7": "Reference commit a60e9e2a5 (10-07). Every lane completed here: the Linux sanitizers green after a fixed first-use race in the Oniguruma regex library's initialisation, a full Windows workspace run after one flaky test was fixed, and Miri with two test-only Tree Borrows bugs fixed (rustty-core did not finish under Tree Borrows at this commit). The Linux sanitizer lanes have not run at the current commit yet, so these are their latest results.",
+  "6": "Reference commit 12752b2ac (09-28): the first time every lane ran to completion. Each red-dot cell found bugs on its first run; all were fixed and the lane re-run green before the next pin move.",
+  "5": "Fifth move: both hosts ran the full check script for the first time. The Linux lane found three failures macOS cannot see; the Miri lane did not finish in ~30 hours, which led to the one-process-per-test runner.",
+  "0": "Baseline: Miri from day 2 (the first aliasing fix landed 06-22), the first full Miri sweep of the terminal engine on 07-11, and the GTK app first run on a Linux VM on 07-17.",
+  "1": "First pin move: the Miri exception families were re-audited adversarially and libxev's thread pool proven under both borrow models.",
+  "2": "Second pin move: the Linux lane ran at the finale.",
+  "3": "Third pin move (same day as the second finale): no separate verification record.",
+  "4": "Two-commit drift absorb: no separate verification record.",
+  "8": "Current reference commit 246f70287 (10-09). The full check script ran on both hosts (macOS 98 checks green, Linux VM 94), including Miri Stacked and Tree Borrows, the macOS sanitizers (two test-only fixes, then clean scoped re-runs) and a complete Valgrind run; a full Windows workspace run passed 6,418 tests with none failing. The Linux sanitizer re-run at this commit is still to come, so their latest results are at a60e9e2a5."
+ },
+ "durations": [
+  [
+   "Miri SB, 38 crates",
+   "mac",
+   13354
+  ],
+  [
+   "Miri TB, two runs",
+   "mac",
+   26220
+  ],
+  [
+   "Valgrind",
+   "lin",
+   13451
+  ],
+  [
+   "HWASan",
+   "lin",
+   3360
+  ],
+  [
+   "MSan",
+   "lin",
+   3000
+  ],
+  [
+   "TSan",
+   "mac",
+   2280
+  ],
+  [
+   "TSan",
+   "lin",
+   1245
+  ],
+  [
+   "LSan",
+   "mac",
+   1980
+  ],
+  [
+   "LSan",
+   "lin",
+   1200
+  ],
+  [
+   "Miri, assertions off",
+   "mac",
+   1110
+  ],
+  [
+   "ASan",
+   "mac",
+   900
+  ]
+ ]
+}

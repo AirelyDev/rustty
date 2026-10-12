@@ -1,0 +1,4 @@
+artifact,ghostty_bytes,rustty_counterpart,rustty_bytes,ratio,note,provenance
+ghostty-bench (ReleaseFast),4029184,rustty-bench (release-fast),2957840,0.734,-26.6%,BASELINE.json
+ghostty-gen (ReleaseFast),464408,rustty-gen (release-fast),505296,1.088,+8.8%: unwind tables + longer Rust mangled symbols; __text 8 KB smaller,BASELINE.json
+libghostty-vt.0.1.0.dylib,1924784,librustty_vt_c.dylib (release),2071760,1.076,"+7.6% after N512 cut it from 2,498,112 B (1.30x)",BASELINE.json

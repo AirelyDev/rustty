@@ -1,0 +1,99 @@
+stage,date,bench,zig_ms,rust_ms,rust_over_zig,delta_pct,rustty_code,profile,rust_source,zig_source
+0-baseline,2026-07-15,terminal-parser,286.36,833.69,2.911,191.1,10cc614,release (overflow-checks on),perf/rust.jsonl,perf/zig.jsonl
+0-baseline,2026-07-15,terminal-stream,570.41,577.84,1.013,1.3,10cc614,release (overflow-checks on),perf/rust.jsonl,perf/zig.jsonl
+0-baseline,2026-07-15,codepoint-width.noop,4.83,6.92,1.434,43.4,10cc614,release (overflow-checks on),perf/rust.jsonl,perf/zig.jsonl
+0-baseline,2026-07-15,codepoint-width.table,245.87,302.02,1.228,22.8,10cc614,release (overflow-checks on),perf/rust.jsonl,perf/zig.jsonl
+0-baseline,2026-07-15,codepoint-width.simd,539.54,637.68,1.182,18.2,10cc614,release (overflow-checks on),perf/rust.jsonl,perf/zig.jsonl
+0-baseline,2026-07-15,codepoint-width.wcwidth,273.46,347.22,1.27,27.0,10cc614,release (overflow-checks on),perf/rust.jsonl,perf/zig.jsonl
+0-baseline,2026-07-15,grapheme-break.noop,244.62,320.55,1.31,31.0,10cc614,release (overflow-checks on),perf/rust.jsonl,perf/zig.jsonl
+0-baseline,2026-07-15,grapheme-break.table,280.99,366.5,1.304,30.4,10cc614,release (overflow-checks on),perf/rust.jsonl,perf/zig.jsonl
+0-baseline,2026-07-15,is-symbol.table,258.63,321.22,1.242,24.2,10cc614,release (overflow-checks on),perf/rust.jsonl,perf/zig.jsonl
+0-baseline,2026-07-15,is-symbol.uucode,252.44,309.47,1.226,22.6,10cc614,release (overflow-checks on),perf/rust.jsonl,perf/zig.jsonl
+0-baseline,2026-07-15,osc-parser,62.67,204.19,3.258,225.8,10cc614,release (overflow-checks on),perf/rust.jsonl,perf/zig.jsonl
+0-baseline,2026-07-15,screen-clone.noop,7.88,15.82,2.006,100.6,10cc614,release (overflow-checks on),perf/rust.jsonl,perf/zig.jsonl
+0-baseline,2026-07-15,screen-clone.clone,57.93,117.88,2.035,103.5,10cc614,release (overflow-checks on),perf/rust.jsonl,perf/zig.jsonl
+0-baseline,2026-07-15,screen-clone.render,19.98,49.89,2.497,149.7,10cc614,release (overflow-checks on),perf/rust.jsonl,perf/zig.jsonl
+1-prefix-release,2026-07-16,terminal-parser,262.94,667.08,2.537,153.7,10cc614,release (overflow-checks on),perf-v2/frozen_A.jsonl,perf-v2/zig.jsonl
+1-prefix-release,2026-07-16,terminal-stream,562.56,447.28,0.795,-20.5,10cc614,release (overflow-checks on),perf-v2/frozen_A.jsonl,perf-v2/zig.jsonl
+1-prefix-release,2026-07-16,codepoint-width.noop,3.91,3.0,0.766,-23.4,10cc614,release (overflow-checks on),perf-v2/frozen_A.jsonl,perf-v2/zig.jsonl
+1-prefix-release,2026-07-16,codepoint-width.table,233.16,237.95,1.021,2.1,10cc614,release (overflow-checks on),perf-v2/frozen_A.jsonl,perf-v2/zig.jsonl
+1-prefix-release,2026-07-16,codepoint-width.simd,502.79,482.95,0.961,-3.9,10cc614,release (overflow-checks on),perf-v2/frozen_A.jsonl,perf-v2/zig.jsonl
+1-prefix-release,2026-07-16,codepoint-width.wcwidth,258.57,260.37,1.007,0.7,10cc614,release (overflow-checks on),perf-v2/frozen_A.jsonl,perf-v2/zig.jsonl
+1-prefix-release,2026-07-16,grapheme-break.noop,231.25,260.12,1.125,12.5,10cc614,release (overflow-checks on),perf-v2/frozen_A.jsonl,perf-v2/zig.jsonl
+1-prefix-release,2026-07-16,grapheme-break.table,255.43,267.24,1.046,4.6,10cc614,release (overflow-checks on),perf-v2/frozen_A.jsonl,perf-v2/zig.jsonl
+1-prefix-release,2026-07-16,is-symbol.table,239.01,225.71,0.944,-5.6,10cc614,release (overflow-checks on),perf-v2/frozen_A.jsonl,perf-v2/zig.jsonl
+1-prefix-release,2026-07-16,is-symbol.uucode,230.31,230.8,1.002,0.2,10cc614,release (overflow-checks on),perf-v2/frozen_A.jsonl,perf-v2/zig.jsonl
+1-prefix-release,2026-07-16,osc-parser,57.31,143.2,2.498,149.8,10cc614,release (overflow-checks on),perf-v2/frozen_A.jsonl,perf-v2/zig.jsonl
+1-prefix-release,2026-07-16,screen-clone.noop,5.62,5.27,0.937,-6.3,10cc614,release (overflow-checks on),perf-v2/frozen_A.jsonl,perf-v2/zig.jsonl
+1-prefix-release,2026-07-16,screen-clone.clone,49.72,78.95,1.588,58.8,10cc614,release (overflow-checks on),perf-v2/frozen_A.jsonl,perf-v2/zig.jsonl
+1-prefix-release,2026-07-16,screen-clone.render,15.64,31.38,2.006,100.6,10cc614,release (overflow-checks on),perf-v2/frozen_A.jsonl,perf-v2/zig.jsonl
+1-prefix-release-fast,2026-07-16,terminal-parser,262.94,660.13,2.511,151.1,10cc614,release-fast,perf-v2/frozen_B.jsonl,perf-v2/zig.jsonl
+1-prefix-release-fast,2026-07-16,terminal-stream,562.56,443.19,0.788,-21.2,10cc614,release-fast,perf-v2/frozen_B.jsonl,perf-v2/zig.jsonl
+1-prefix-release-fast,2026-07-16,codepoint-width.noop,3.91,3.04,0.777,-22.3,10cc614,release-fast,perf-v2/frozen_B.jsonl,perf-v2/zig.jsonl
+1-prefix-release-fast,2026-07-16,codepoint-width.table,233.16,229.16,0.983,-1.7,10cc614,release-fast,perf-v2/frozen_B.jsonl,perf-v2/zig.jsonl
+1-prefix-release-fast,2026-07-16,codepoint-width.simd,502.79,490.26,0.975,-2.5,10cc614,release-fast,perf-v2/frozen_B.jsonl,perf-v2/zig.jsonl
+1-prefix-release-fast,2026-07-16,codepoint-width.wcwidth,258.57,259.63,1.004,0.4,10cc614,release-fast,perf-v2/frozen_B.jsonl,perf-v2/zig.jsonl
+1-prefix-release-fast,2026-07-16,grapheme-break.noop,231.25,232.89,1.007,0.7,10cc614,release-fast,perf-v2/frozen_B.jsonl,perf-v2/zig.jsonl
+1-prefix-release-fast,2026-07-16,grapheme-break.table,255.43,268.86,1.053,5.3,10cc614,release-fast,perf-v2/frozen_B.jsonl,perf-v2/zig.jsonl
+1-prefix-release-fast,2026-07-16,is-symbol.table,239.01,226.03,0.946,-5.4,10cc614,release-fast,perf-v2/frozen_B.jsonl,perf-v2/zig.jsonl
+1-prefix-release-fast,2026-07-16,is-symbol.uucode,230.31,228.13,0.991,-0.9,10cc614,release-fast,perf-v2/frozen_B.jsonl,perf-v2/zig.jsonl
+1-prefix-release-fast,2026-07-16,osc-parser,57.31,146.36,2.554,155.4,10cc614,release-fast,perf-v2/frozen_B.jsonl,perf-v2/zig.jsonl
+1-prefix-release-fast,2026-07-16,screen-clone.noop,5.62,4.98,0.885,-11.5,10cc614,release-fast,perf-v2/frozen_B.jsonl,perf-v2/zig.jsonl
+1-prefix-release-fast,2026-07-16,screen-clone.clone,49.72,79.44,1.598,59.8,10cc614,release-fast,perf-v2/frozen_B.jsonl,perf-v2/zig.jsonl
+1-prefix-release-fast,2026-07-16,screen-clone.render,15.64,30.39,1.943,94.3,10cc614,release-fast,perf-v2/frozen_B.jsonl,perf-v2/zig.jsonl
+2-r1-ship,2026-07-16,terminal-parser,262.94,322.69,1.227,22.7,9e1837b,release-fast,perf-v2/SHIP_RF.jsonl,perf-v2/zig.jsonl
+2-r1-ship,2026-07-16,terminal-stream,562.56,458.44,0.815,-18.5,9e1837b,release-fast,perf-v2/SHIP_RF.jsonl,perf-v2/zig.jsonl
+2-r1-ship,2026-07-16,codepoint-width.noop,3.91,3.06,0.782,-21.8,9e1837b,release-fast,perf-v2/SHIP_RF.jsonl,perf-v2/zig.jsonl
+2-r1-ship,2026-07-16,codepoint-width.table,233.16,218.44,0.937,-6.3,9e1837b,release-fast,perf-v2/SHIP_RF.jsonl,perf-v2/zig.jsonl
+2-r1-ship,2026-07-16,codepoint-width.simd,502.79,473.98,0.943,-5.7,9e1837b,release-fast,perf-v2/SHIP_RF.jsonl,perf-v2/zig.jsonl
+2-r1-ship,2026-07-16,codepoint-width.wcwidth,258.57,242.24,0.937,-6.3,9e1837b,release-fast,perf-v2/SHIP_RF.jsonl,perf-v2/zig.jsonl
+2-r1-ship,2026-07-16,grapheme-break.noop,231.25,219.11,0.947,-5.3,9e1837b,release-fast,perf-v2/SHIP_RF.jsonl,perf-v2/zig.jsonl
+2-r1-ship,2026-07-16,grapheme-break.table,255.43,215.56,0.844,-15.6,9e1837b,release-fast,perf-v2/SHIP_RF.jsonl,perf-v2/zig.jsonl
+2-r1-ship,2026-07-16,is-symbol.table,239.01,205.58,0.86,-14.0,9e1837b,release-fast,perf-v2/SHIP_RF.jsonl,perf-v2/zig.jsonl
+2-r1-ship,2026-07-16,is-symbol.uucode,230.31,214.08,0.93,-7.0,9e1837b,release-fast,perf-v2/SHIP_RF.jsonl,perf-v2/zig.jsonl
+2-r1-ship,2026-07-16,osc-parser,57.31,57.47,1.003,0.3,9e1837b,release-fast,perf-v2/SHIP_RF.jsonl,perf-v2/zig.jsonl
+2-r1-ship,2026-07-16,screen-clone.noop,5.62,5.25,0.933,-6.7,9e1837b,release-fast,perf-v2/SHIP_RF.jsonl,perf-v2/zig.jsonl
+2-r1-ship,2026-07-16,screen-clone.clone,49.72,79.76,1.604,60.4,9e1837b,release-fast,perf-v2/SHIP_RF.jsonl,perf-v2/zig.jsonl
+2-r1-ship,2026-07-16,screen-clone.render,15.64,24.65,1.576,57.6,9e1837b,release-fast,perf-v2/SHIP_RF.jsonl,perf-v2/zig.jsonl
+3-r2-ship,2026-07-16,terminal-parser,260.75,216.89,0.832,-16.8,r2 (9e386ab),release-fast,perf-v3/r2ship.jsonl,perf-v3/zig.jsonl
+3-r2-ship,2026-07-16,terminal-stream,545.44,452.96,0.83,-17.0,r2 (9e386ab),release-fast,perf-v3/r2ship.jsonl,perf-v3/zig.jsonl
+3-r2-ship,2026-07-16,codepoint-width.noop,3.7,2.99,0.809,-19.1,r2 (9e386ab),release-fast,perf-v3/r2ship.jsonl,perf-v3/zig.jsonl
+3-r2-ship,2026-07-16,codepoint-width.table,232.43,218.38,0.94,-6.0,r2 (9e386ab),release-fast,perf-v3/r2ship.jsonl,perf-v3/zig.jsonl
+3-r2-ship,2026-07-16,codepoint-width.simd,500.95,474.6,0.947,-5.3,r2 (9e386ab),release-fast,perf-v3/r2ship.jsonl,perf-v3/zig.jsonl
+3-r2-ship,2026-07-16,codepoint-width.wcwidth,257.69,247.56,0.961,-3.9,r2 (9e386ab),release-fast,perf-v3/r2ship.jsonl,perf-v3/zig.jsonl
+3-r2-ship,2026-07-16,grapheme-break.noop,231.71,218.45,0.943,-5.7,r2 (9e386ab),release-fast,perf-v3/r2ship.jsonl,perf-v3/zig.jsonl
+3-r2-ship,2026-07-16,grapheme-break.table,255.9,216.95,0.848,-15.2,r2 (9e386ab),release-fast,perf-v3/r2ship.jsonl,perf-v3/zig.jsonl
+3-r2-ship,2026-07-16,is-symbol.table,239.36,207.87,0.868,-13.2,r2 (9e386ab),release-fast,perf-v3/r2ship.jsonl,perf-v3/zig.jsonl
+3-r2-ship,2026-07-16,is-symbol.uucode,230.17,214.6,0.932,-6.8,r2 (9e386ab),release-fast,perf-v3/r2ship.jsonl,perf-v3/zig.jsonl
+3-r2-ship,2026-07-16,osc-parser,56.88,49.32,0.867,-13.3,r2 (9e386ab),release-fast,perf-v3/r2ship.jsonl,perf-v3/zig.jsonl
+3-r2-ship,2026-07-16,screen-clone.noop,5.63,5.43,0.964,-3.6,r2 (9e386ab),release-fast,perf-v3/r2ship.jsonl,perf-v3/zig.jsonl
+3-r2-ship,2026-07-16,screen-clone.clone,51.27,56.67,1.105,10.5,r2 (9e386ab),release-fast,perf-v3/r2ship.jsonl,perf-v3/zig.jsonl
+3-r2-ship,2026-07-16,screen-clone.render,15.66,17.01,1.086,8.6,r2 (9e386ab),release-fast,perf-v3/r2ship.jsonl,perf-v3/zig.jsonl
+4-r3-ship,2026-07-16,terminal-parser,266.03,210.61,0.792,-20.8,10f2091,release-fast,perf-v3/r3_r3ship.jsonl,perf-v3/r3_zig.jsonl
+4-r3-ship,2026-07-16,terminal-stream,566.18,460.82,0.814,-18.6,10f2091,release-fast,perf-v3/r3_r3ship.jsonl,perf-v3/r3_zig.jsonl
+4-r3-ship,2026-07-16,codepoint-width.noop,3.53,3.03,0.859,-14.1,10f2091,release-fast,perf-v3/r3_r3ship.jsonl,perf-v3/r3_zig.jsonl
+4-r3-ship,2026-07-16,codepoint-width.table,231.01,217.92,0.943,-5.7,10f2091,release-fast,perf-v3/r3_r3ship.jsonl,perf-v3/r3_zig.jsonl
+4-r3-ship,2026-07-16,codepoint-width.simd,503.54,472.84,0.939,-6.1,10f2091,release-fast,perf-v3/r3_r3ship.jsonl,perf-v3/r3_zig.jsonl
+4-r3-ship,2026-07-16,codepoint-width.wcwidth,258.95,247.32,0.955,-4.5,10f2091,release-fast,perf-v3/r3_r3ship.jsonl,perf-v3/r3_zig.jsonl
+4-r3-ship,2026-07-16,grapheme-break.noop,231.66,220.24,0.951,-4.9,10f2091,release-fast,perf-v3/r3_r3ship.jsonl,perf-v3/r3_zig.jsonl
+4-r3-ship,2026-07-16,grapheme-break.table,256.08,217.45,0.849,-15.1,10f2091,release-fast,perf-v3/r3_r3ship.jsonl,perf-v3/r3_zig.jsonl
+4-r3-ship,2026-07-16,is-symbol.table,238.43,208.77,0.876,-12.4,10f2091,release-fast,perf-v3/r3_r3ship.jsonl,perf-v3/r3_zig.jsonl
+4-r3-ship,2026-07-16,is-symbol.uucode,229.88,213.19,0.927,-7.3,10f2091,release-fast,perf-v3/r3_r3ship.jsonl,perf-v3/r3_zig.jsonl
+4-r3-ship,2026-07-16,osc-parser,57.45,48.46,0.844,-15.6,10f2091,release-fast,perf-v3/r3_r3ship.jsonl,perf-v3/r3_zig.jsonl
+4-r3-ship,2026-07-16,screen-clone.noop,5.7,5.23,0.917,-8.3,10f2091,release-fast,perf-v3/r3_r3ship.jsonl,perf-v3/r3_zig.jsonl
+4-r3-ship,2026-07-16,screen-clone.clone,51.58,50.5,0.979,-2.1,10f2091,release-fast,perf-v3/r3_r3ship.jsonl,perf-v3/r3_zig.jsonl
+4-r3-ship,2026-07-16,screen-clone.render,15.74,16.06,1.02,2.0,10f2091,release-fast,perf-v3/r3_r3ship.jsonl,perf-v3/r3_zig.jsonl
+5-r5-ship,2026-07-16,terminal-parser,263.8,92.47,0.351,-64.9,a3a2b23,release-fast,perf-v5/r5ship.jsonl,perf-v5/zig.jsonl
+5-r5-ship,2026-07-16,terminal-stream,551.46,343.32,0.623,-37.7,a3a2b23,release-fast,perf-v5/r5ship.jsonl,perf-v5/zig.jsonl
+5-r5-ship,2026-07-16,codepoint-width.noop,3.65,2.99,0.817,-18.3,a3a2b23,release-fast,perf-v5/r5ship.jsonl,perf-v5/zig.jsonl
+5-r5-ship,2026-07-16,codepoint-width.table,234.31,207.85,0.887,-11.3,a3a2b23,release-fast,perf-v5/r5ship.jsonl,perf-v5/zig.jsonl
+5-r5-ship,2026-07-16,codepoint-width.simd,501.14,466.36,0.931,-6.9,a3a2b23,release-fast,perf-v5/r5ship.jsonl,perf-v5/zig.jsonl
+5-r5-ship,2026-07-16,codepoint-width.wcwidth,258.38,237.64,0.92,-8.0,a3a2b23,release-fast,perf-v5/r5ship.jsonl,perf-v5/zig.jsonl
+5-r5-ship,2026-07-16,grapheme-break.noop,231.04,211.77,0.917,-8.3,a3a2b23,release-fast,perf-v5/r5ship.jsonl,perf-v5/zig.jsonl
+5-r5-ship,2026-07-16,grapheme-break.table,256.41,211.45,0.825,-17.5,a3a2b23,release-fast,perf-v5/r5ship.jsonl,perf-v5/zig.jsonl
+5-r5-ship,2026-07-16,is-symbol.table,238.63,200.52,0.84,-16.0,a3a2b23,release-fast,perf-v5/r5ship.jsonl,perf-v5/zig.jsonl
+5-r5-ship,2026-07-16,is-symbol.uucode,229.87,206.1,0.897,-10.3,a3a2b23,release-fast,perf-v5/r5ship.jsonl,perf-v5/zig.jsonl
+5-r5-ship,2026-07-16,osc-parser,57.15,49.39,0.864,-13.6,a3a2b23,release-fast,perf-v5/r5ship.jsonl,perf-v5/zig.jsonl
+5-r5-ship,2026-07-16,screen-clone.noop,5.49,4.56,0.831,-16.9,a3a2b23,release-fast,perf-v5/r5ship.jsonl,perf-v5/zig.jsonl
+5-r5-ship,2026-07-16,screen-clone.clone,50.59,20.88,0.413,-58.7,a3a2b23,release-fast,perf-v5/r5ship.jsonl,perf-v5/zig.jsonl
+5-r5-ship,2026-07-16,screen-clone.render,15.4,13.84,0.899,-10.1,a3a2b23,release-fast,perf-v5/r5ship.jsonl,perf-v5/zig.jsonl

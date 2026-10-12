@@ -1,0 +1,148 @@
+tier,group_id,member_rows,codex_title,claude_verdict,severity_agreement,fix_category,known_deferred,fixable_now,fix_status,fix_wave,tests_added
+P1,F-001,1,Windows,confirmed,agree,deferred-platform,True,False,verified,w2,1
+P1,F-002,1,FreeBSD,confirmed,agree,deferred-platform,True,False,verified,w2,1
+P1,F-003,1,"FreeBSD, later Windows",confirmed,disagree,deferred-platform,True,False,verified,w2,3
+P1,F-004,1,FreeBSD,confirmed,agree,deferred-platform,True,False,verified,w2,5
+P1,F-005,1,Linux,confirmed,agree,deferred-platform,True,False,verified,w2,7
+P1,W35-B08,3,"Terminal getter normal behavior matched, but `terminal_get_multi` selector arrays bypass raw C selector validation befor",confirmed,agree,code-fix,False,True,verified,w1,2
+P1,W60-B01-001,1,FreeBSD/other non-Linux POSIX shared VT page allocator is compiled under broad non-wasm cfgs but defines `MAP_PRIVATE`/`,confirmed,agree,code-fix,False,True,verified,w1,0
+P2,F-006,1,Browser/WASM,confirmed,agree,build-config,False,True,verified,w1,1
+P2,F-007,1,Default Linux build,confirmed,agree,build-config,False,True,verified,w1,1
+P2,F-008,1,C ABI,confirmed,agree,code-fix,False,True,verified,w1,3
+P2,F-009,1,Linux GTK,confirmed,agree,code-fix,False,True,verified,w1,1
+P2,F-010,1,Linux GTK,confirmed,agree,code-fix,False,True,verified,w1,1
+P2,F-011,1,Linux GTK,confirmed,agree,code-fix,True,True,verified,w1,2
+P2,F-012,1,Linux,confirmed,agree,deferred-platform,True,False,verified,w2,0
+P2,F-013,1,Linux,confirmed,agree,code-fix,True,True,verified,w1,3
+P2,F-014,1,Linux GTK,confirmed,agree,code-fix,True,True,verified,w1,8
+P2,W12-01,1,caller allocator/OOM divergence extends canonical F-008 across five more constructors plus render/selection owned alloca,confirmed,agree,code-fix,False,True,verified,w1,10
+P2,W27-B02-STMODE-001,1,"Rustty's stream mode `set_mode`/`reset_mode`/`restore_mode` trait arms discard fallible `do_set_mode` errors, so alt-scr",confirmed,agree,code-fix,False,True,verified,w1,1
+P2,W27-B04-001,1,"Rustty emits unbounded XTVERSION callback responses from a `Vec`, while Ghostty's fixed `[288]u8` `bufPrintZ` response c",confirmed,agree,code-fix,False,True,verified,w1,2
+P2,W27-B06-HYPERLINK-001,1,"Rustty drops fallible OSC 8 `start_hyperlink` errors at the stream trait boundary, while Ghostty routes the terminal-own",confirmed,agree,code-fix,False,True,verified,w1,1
+P2,W34-B02,3,"Render exported-symbol wiring matched for all 21 symbols, but C-boundary selector handling diverges for multi-get arrays",confirmed,agree,code-fix,False,True,verified,w1,4
+P2,W34-B03,2,"Render wrapper front mostly matched, but public `RusttyRenderStateDirty` C enum storage is 4 bytes while Rustty's wrappe",confirmed,agree,code-fix,False,True,verified,w1,3
+P2,W83-B01,2,"Cell getter implementation matched valid single-get/multi-get behavior, null array handling, optional `out_written`, typ",confirmed,agree,code-fix,False,True,verified,w1,1
+P2,W84-B01,2,"Row getter implementation matched valid single-get/multi-get behavior, null array handling, optional `out_written`, type",confirmed,agree,code-fix,False,True,verified,w1,1
+P2,W84-B04,1,"Adversarial C-boundary probe confirmed single `rustty_row_get` rejects raw `999`, valid multi-get works, `.invalid` sent",confirmed,agree,code-fix,False,True,no_change_needed,w1,0
+P2,W9F-01,1,Shared-grid and glyph-fallback Fontconfig iterators leak their owned native pattern/font-set handles,confirmed,agree,code-fix,False,True,verified,w1,1
+P2,W9R-01,1,Unicode 16 emoji classification rejects all seven Unicode 17 default-emoji native fallbacks,confirmed,agree,code-fix,False,True,verified,w1,2
+P3,F-015,1,"VT core, principally Linux",confirmed,agree,code-fix,True,True,verified,w1,4
+P3,F-016,1,Test infrastructure,confirmed,agree,infra,False,True,verified,w1,2
+P3,F-017,1,Test infrastructure,confirmed,agree,test-add,True,True,verified,w1,10
+P3,W10-01,1,Native CLI actions leak internal configuration reads to stderr despite the action logging gate,confirmed,agree,code-fix,False,True,verified,w1,3
+P3,W11-01,1,Nushell `ssh` and `sudo` wrappers omit external-completer delegation,confirmed,agree,code-fix,False,True,verified,w1,1
+P3,W12-02,1,checked generated verification header is reproducibly stale and both checked/fresh versions alias 72-byte terminal Style,confirmed,agree,build-config,False,True,verified,w1,2
+P3,W12-05,1,public `type_json()` hides scroll-viewport/scrollbar field maps and labels one enum as `i32`,confirmed,agree,code-fix,False,True,verified,w1,1
+P3,W13A-01,1,kqueue timers armed after a blocking callback derive their deadline from stale cached time and can fire immediately,confirmed,agree,code-fix,False,True,verified,w1,1
+P3,W13B-01,1,current Vaxis accepts signed negative SGR mouse coordinates while Rustty consumes the input and emits no event,confirmed,agree,none,True,False,known_deferred,,0
+P3,W13C-01,1,"no live Rustty VT fuzz target consumes Ghostty's three fuzz harnesses or 3,947 fuzz corpus files",confirmed,agree,test-add,True,True,verified,w1,5
+P3,W15-04,1,explicit Linux Sentry/Breakpad feature contract is unavailable and the retained backend is in-process only,confirmed,agree,build-config,False,True,verified,w1,4
+P3,W16-CABI-01,1,first `rustty_type_json()` call grows WASM memory and detaches existing JavaScript views,confirmed,agree,code-fix,False,True,verified,w1,1
+P3,W16-FONT-01,1,`rustty_wasm.wasm` retains Atlas exports but omits Ghostty's DeferredFace/WebCanvas face/shaper exports,confirmed,agree,code-fix,False,True,verified,w1,1
+P3,W16-GTK-01,1,GTK terminal child environment does not use Ghostty's Flatpak empty-env baseline,confirmed,agree,code-fix,False,True,verified,w1,1
+P3,W16-GTK-02,1,GTK Flatpak resources-dir override is ported but unreachable from Rustty global init,confirmed,agree,deferred-platform,True,False,verified,w2,2
+P3,W16-TARGET-01,1,default non-WASM app/VT-C builds leave `rustty-vt/simd` off while Ghostty defaults terminal SIMD on,confirmed,agree,build-config,False,True,verified,w1,3
+P3,W17-B05-NORMAL-01,1,"vxfw `App.deinit` skips `Tty::deinit()` on normal shutdown/error, unlike libvaxis 0.5.1",confirmed,agree,code-fix,False,True,verified,w1,1
+P3,W19-B03-CABI-01,1,C `default_cursor_style` option accepts the public cursor-style sentinel instead of Ghostty's clean `invalid_value` path,confirmed,agree,code-fix,False,True,verified,w1,1
+P3,W2-03,1,terminfo generation contradicts FreeBSD layout and hardcodes Unix tools,confirmed,agree,code-fix,False,True,verified,w1,3
+P3,W21-B02-RGB-01,1,"RGB parser edge cases diverge: Ghostty accepts NaN `rgbi` intensities as black while Rustty rejects them, and Rustty acc",confirmed,agree,code-fix,False,True,verified,w1,2
+P3,W24-B01-F1,1,"Rustty `AutoContext` uses Rust `DefaultHasher` rather than Ghostty seed-0 Wyhash, preserving logical lookups but changin",confirmed,agree,code-fix,False,True,verified,w1,5
+P3,W29-B02,2,"Rustty `print_string` maps invalid UTF-8 validation failure to `OutOfMemory`, while Ghostty propagates the Unicode valid",confirmed,agree,code-fix,False,True,verified,w1,2
+P3,W29-B03,2,"Terminal scalar print/cursor normal behavior matched, but independent replay found an extra Rustty allocation during cro",confirmed,agree,code-fix,False,True,verified,w1,2
+P3,W29-B04,2,Rustty Terminal scroll/index routes omit some Ghostty `kitty_images.dirty = true` updates despite live Kitty image stora,confirmed,agree,code-fix,False,True,verified,w1,7
+P3,W29-B05,2,"Terminal region mutation, erase, attributes, Kitty/Glyph, DECCOLM, and resize mostly matched; independent replay correct",confirmed,agree,code-fix,False,True,verified,w1,3
+P3,W29-B06,2,"Rustty does not mark already-created destination-screen Kitty image storage dirty on screen switch, while Ghostty sets `",confirmed,agree,code-fix,False,True,verified,w1,1
+P3,W35-B12,3,"Terminal callback/title/resize tests mostly matched, but Rustty lacks two Ghostty C test assertions: progress callback r",confirmed,agree,test-add,False,True,verified,w1,1
+P3,W36-B03,2,"Sys decode/front ABI matched and callback copy/free is normal-use safe, but combined Rustty Cargo builds can feature-uni",confirmed,agree,build-config,False,True,verified,w1,1
+P3,W36-B04,2,"Sys set/log implementation matched for setters, callback reentrancy, and successful chunk counts, but Rustty's C ABI log",confirmed,agree,code-fix,False,True,verified,w1,1
+P3,W4-02,1,Linux/FreeBSD teardown abandons live child reap after ten seconds,confirmed,agree,docs,True,True,verified,w1,0
+P3,W43-B01,2,"Screen dump helpers matched formatter/plain/trim setup, `Content::Selection` construction, top-left/bottom-right default",confirmed,agree,code-fix,False,True,verified,w1,1
+P3,W5-01,1,routine VT dispatch adds aborting allocations and loses recoverable OOM,confirmed,agree,code-fix,True,True,verified,w1,2
+P3,W6-02,1,hyperlink/search constructors advertise recoverable OOM but abort,confirmed,agree,code-fix,False,True,verified,w1,4
+P3,W60-PAGE-ALIGN-01,1,"Public manual page-buffer APIs weaken Ghostty's aligned-buffer contract: release `Page::init_buf(OffsetBuf, Layout)` and",confirmed,agree,code-fix,False,True,verified,w1,2
+P3,W61-B05-001,1,Rustty direct page grapheme APIs accept and persist `u32` grapheme tail values outside Ghostty's `u21` domain; normal te,confirmed,agree,code-fix,False,True,verified,w1,3
+P3,W62-B04-001,1,Rustty direct `Cell::init`/`set_content_codepoint` APIs accept out-of-`u21` `u32` values and can leave nonzero high cont,confirmed,agree,code-fix,False,True,verified,w1,2
+P3,W66-BEHAVIOR-RAW-01,1,Public VT-C SelectionGesture event behavior table accepts raw out-of-range nested `Behavior` enum fields and returns suc,confirmed,agree,code-fix,False,True,verified,w1,1
+P3,W66-GETMULTI-RAW-01,1,"Public VT-C `rustty_selection_gesture_get_multi` accepts a typed Rust enum key array, so raw out-of-range C selector sto",confirmed,agree,code-fix,False,True,verified,w1,1
+P3,W7-01,1,live key encoding rebuilds Ghostty's compile-time lookup tables on every event,confirmed,agree,code-fix,False,True,verified,w1,2
+P3,W8-03,1,live Linux GPU tests can pass after skipping all live-GL assertions,confirmed,agree,test-add,False,True,verified,w1,3
+P3,W81-B01,2,"Key-encoder implementation matched allocation/free, valid option parsing, terminal-derived options, length-only query, s",confirmed,agree,code-fix,False,True,verified,w1,6
+P3,W88-B02-01,1,Public small encoder wrappers can leave fewer failure-prefix bytes in too-small non-null caller buffers than Ghostty's f,confirmed,agree,code-fix,False,True,verified,w1,4
+P3,W92-B02-01,1,Generated implementation header `include/rustty-apprt.h` declares 73 exported functions without defining or applying `RU,confirmed,agree,build-config,True,True,verified,w1,1
+P3,W92-B02-02,1,Generated implementation header `include/rustty-apprt.h` omits the public config/info/translate/CLI/benchmark tail (`rus,confirmed,agree,build-config,False,True,verified,w1,2
+P3,W92-B02-03,1,"Generated implementation header `include/rustty-apprt.h` exposes Rust implementation types/prototypes (`App *`, `Config ",not_a_gap,disagree,none,False,False,no_fix_needed,,0
+P3,W92-B02-04,1,"Generated implementation header `include/rustty-apprt.h` exposes Apple-only display-id, quicklook, and Metal inspector d",confirmed,agree,build-config,False,True,verified,w1,1
+P3,W93-B01-DIAG-01,1,"Public config C diagnostics can report a nonzero in-range diagnostic count while `rustty_config_get_diagnostic(cfg, 0)` ",confirmed,agree,code-fix,False,True,verified,w1,5
+P3,W93-B02-01,1,`rustty_config_get` returns unsupported for populated optional `Path` config keys `background-image` and `bell-audio-pat,confirmed,agree,code-fix,False,True,verified,w1,1
+P3,W94-B02-01,1,Non-UTF-8 POSIX `XDG_CONFIG_HOME` is discarded before Rustty default config-file discovery because the XDG helper conver,confirmed,agree,code-fix,False,True,verified,w1,2
+P3,W9F-02,1,Native font owners on recoverable construction/error paths are dropped without their required manual destructors,confirmed,agree,code-fix,False,True,verified,w1,4
+P3,W9F-03,1,WebCanvas returns RGBA bytes through an atlas ABI declared BGRA,confirmed,agree,code-fix,False,True,verified,w1,1
+P4,F-018,1,Linux distribution,confirmed,agree,build-config,True,True,verified,w1,4
+P4,F-019,1,Linux GTK,confirmed,agree,code-fix,True,True,verified,w1,2
+P4,F-020,1,Linux inspector,confirmed,agree,deferred-platform,True,False,verified,w2,2
+P4,W10-02,1,POSIX-only helpers mishandle Windows drive/UNC config and expansion paths plus drive-qualified themes,confirmed,agree,code-fix,True,True,verified,w1,2
+P4,W12-03,1,public terminal header omits both scrollback page-granularity/accuracy contracts,confirmed,agree,docs,False,True,verified,w1,2
+P4,W12-04,1,clipboard callback-removal assertions are absent from the mapped Rustty test,confirmed,agree,test-add,False,True,verified,w1,1
+P4,W13A-02,1,current pinned libxev `queuePWrite` final-content KAT is absent; the gate uses a stale package and does not map `watcher,confirmed,agree,test-add,True,True,verified,w1,2
+P4,W13A-03,1,epoll/io_uring/kqueue completion and termio-message layout/assertion contracts are larger and non-equivalent in Rustty,confirmed,agree,docs,True,True,verified,w1,0
+P4,W13B-02,1,current zf defaults `rank` to case-sensitive while Rustty's public old-port default remains case-insensitive,confirmed,agree,test-add,True,True,verified,w1,1
+P4,W14-01,1,live Linux GTK application-icon resources route pinned Ghostty PNG bytes under Rustty's application identity,confirmed,agree,code-fix,False,True,verified,w1,1
+P4,W14-02,1,substitute Wuffs `too_big` fixtures do not detect an effective guard widened to 8 GiB,confirmed,agree,test-add,False,True,verified,w1,1
+P4,W14-C01,1,resource generation does not enforce the declared gettext locale set,confirmed,agree,code-fix,False,True,verified,w1,3
+P4,W15-01,1,public Fontconfig carve omits package API and five pinned tests despite claiming package/test completeness,confirmed,agree,code-fix,False,True,verified,w1,4
+P4,W15-02,1,public FreeType carve is explicitly minimal and omits the pinned package's seven tests,confirmed,agree,code-fix,True,True,verified,w1,7
+P4,W15-03,1,public HarfBuzz carve is explicitly minimal and omits six shared/native package tests,confirmed,agree,code-fix,True,True,verified,w1,7
+P4,W16-EXPLICIT-01,1,`rustty-vaxis` stores panic-recovery TTY state but never installs Ghostty/libvaxis's panic recovery path,confirmed,agree,code-fix,True,True,verified,w1,3
+P4,W18-B07-PLUS-01,1,Kitty color OSC 21 palette key parsing accepts `+1` as palette 1 in Rustty while Ghostty rejects the key via `std.fmt.pa,confirmed,agree,code-fix,False,True,verified,w1,3
+P4,W2-01,1,promised offline/self-contained source archive lacks Cargo vendor inputs,confirmed,agree,code-fix,False,True,verified,w1,1
+P4,W2-05,1,repository release/tip/package automation is absent,confirmed,agree,infra,True,False,verified,w2,15
+P4,W22-B01-TEST-01,1,MouseShape header parity test is self-derived from the descriptor under test and does not actually read the checked-in/g,confirmed,agree,test-add,False,True,verified,w1,3
+P4,W22-B02-DIAG-01,1,"Invalid `rustty_surface_mouse_pressure` raw stage prints a stderr diagnostic before returning, while Ghostty silently re",confirmed,agree,code-fix,False,True,verified,w1,1
+P4,W22-B08-01,1,`StringMap.string` uses plain `Vec<u8>` and comments/tests overstate Ghostty's `[:0]const u8` sentinel contract; current,confirmed,agree,docs,False,True,verified,w1,1
+P4,W24-B03-ZST-01,1,`removeByPtr` zero-sized-key fallback uses slot 0 even when a true ZST key hashes to another slot at capacity greater th,confirmed,agree,code-fix,False,True,verified,w1,1
+P4,W25-B01-API-01,1,"Rustty omits Ghostty's public VT root-module `TerminalStream`, `Stream`, and first-class `StreamAction` symbols; module-",confirmed,agree,code-fix,False,True,verified,w1,1
+P4,W28-B03-T01,1,Rustty's clipboard null-callback test omits Ghostty's follow-on printable-text assertion after a valid OSC 52 write is i,confirmed,agree,test-add,False,True,verified,w1,1
+P4,W32-B02,2,Direct Kitty graphics command parser error classification differs for unsigned negative fields: Rustty maps values such ,confirmed,agree,code-fix,False,True,verified,w1,4
+P4,W33-B02,2,"Kitty graphics exported-symbol wiring matched for 16 symbols, header reachability, platform gates, and declared selector",confirmed,agree,test-add,False,True,verified,w1,2
+P4,W33-B07,2,Terminal C integration mostly matched; Rustty truncates overlarge `uint64_t` Kitty image storage limits to `usize` on 32,confirmed,agree,code-fix,False,True,verified,w1,2
+P4,W35-B03,2,"Terminal exported-symbol/header/oracle wiring matched, but invalid raw terminal/selection selector diagnostics do not ro",confirmed,agree,code-fix,False,True,verified,w1,1
+P4,W35-B06,2,"Terminal option ordinals/input behavior and setters matched for normal behavior, but invalid `terminal_set` selector dia",confirmed,agree,code-fix,True,True,verified,w1,1
+P4,W35-B07,2,"Terminal cursor/viewport/resize/modes/data-front valid behavior matched, but invalid raw scroll viewport tags silently r",confirmed,agree,code-fix,False,True,verified,w1,1
+P4,W36-B02,2,"Build-info C module matched for ordinals/output mapping/version packing/tests, but Rustty `release-safe` C build-info re",confirmed,agree,code-fix,False,True,verified,w1,2
+P4,W36-B06,2,"Allocator C convenience wrappers use the supplied allocator for normal nonzero calls, but Rustty calls the raw allocator",confirmed,agree,code-fix,False,True,verified,w1,3
+P4,W36-B07,2,"Root/lib export wiring for focused build/sys/allocator/type-json/WASM helpers matched, but Rustty lacks Ghostty's C ABI ",confirmed,agree,code-fix,True,True,verified,w1,1
+P4,W37-B03,2,"Rustty explicit no-reflow row-growth `grow()` OOM can return after resized PageList limits remain installed, while Ghost",confirmed,agree,code-fix,False,True,verified,w1,1
+P4,W4-03,1,Linux process watcher omits nonzero/already-reaped assertions,confirmed,agree,test-add,False,True,verified,w1,6
+P4,W4-04,1,Linux async watcher omits notify-first/coalescing assertions,confirmed,agree,test-add,False,True,verified,w1,6
+P4,W4-05,1,Linux PTY stream omits direction/direct-write/ordering assertions,confirmed,agree,test-add,False,True,verified,w1,9
+P4,W45-B09,2,"Hyperlink-dense row moved to a fresh page behaves correctly, but Rustty's committed test omits Ghostty's final active-ro",confirmed,agree,test-add,False,True,verified,w1,1
+P4,W48-B04,2,"Resize error rollback behavior passed, but Rustty's rollback test omits saved-cursor `style` and `charset` comparisons t",confirmed,agree,test-add,False,True,verified,w1,1
+P4,W57-B03,2,"Implicit hyperlink ID wrap runtime behavior and debug rollback test passed, but release tests ignore the allocation-fail",confirmed,agree,build-config,True,True,verified,w1,2
+P4,W59-B04,2,`selectionString` map allocation cleanup passes in debug but the release test is ignored and forced release execution fa,confirmed,agree,build-config,True,True,verified,w1,3
+P4,W62-B06-001,1,"Rustty `Mask<..., GROUP_LEN = 0>` group operations compile and return vacuous results, while Ghostty rejects zero-lane v",confirmed,agree,code-fix,False,True,verified,w1,2
+P4,W69-B03-DOC-01,1,"`include/rustty/vt/unicode.h` says `rustty_unicode_grapheme_width` only permits `cps == NULL` when `len == 0`, but Ghost",not_a_gap,disagree,none,False,False,no_fix_needed,,0
+P4,W8-02,1,"public `Program.setUniform` is explicitly unported, with no present oracle caller",confirmed,agree,none,True,False,known_deferred,,0
+P4,W80-B02-01,1,"`rustty_key_event_set_utf8` copies caller bytes into Rust-owned storage, so `rustty_key_event_get_utf8` returns a differ",confirmed,agree,code-fix,False,True,verified,w1,2
+P4,W9-01,1,The accepted sprite oracle masks one live one-pixel U+25FA rendering divergence,confirmed,agree,none,True,False,known_deferred,,0
+P4,W9-02,1,Sprite and glyf visual KATs omit Ghostty's encoded-PNG integrity assertion,confirmed,agree,test-add,False,True,verified,w1,4
+P4,W9-03,1,Five live native non-macOS font/shaping tests are incorrectly macOS-only,confirmed,agree,test-add,True,True,verified,w1,5
+P4,W9-04,1,The live WebCanvas `face_metrics` counterpart is a named zero-assertion test,confirmed,agree,test-add,True,True,verified,w1,0
+P4,W90-B04-01,1,"`rustty_formatter_terminal_new` validates an invalid non-null selection before allocating its formatter wrapper, so a su",confirmed,agree,code-fix,False,True,verified,w1,3
+P4,W92-B04-02,1,"`rustty_info_s` / `rustty_build_mode_e` are implemented and publicly declared, but `crates/rustty-apprt-c/tests/abi_layo",confirmed,agree,test-add,False,True,verified,w1,4
+P4,W93-B03-02,1,"Browser config helper error paths call Rustty `eprintln!`, and the emitted `rustty_wasm.wasm` imports no `env.log`, wher",confirmed,agree,code-fix,False,True,verified,w1,1
+P4,W94-B01-01,1,"Overlong optional `Path` and `RepeatablePath` formatter values succeed in Rustty because it allocates `path.len() + 1`, ",confirmed,agree,code-fix,False,True,verified,w1,2
+P4,W94-B03-01,1,"Malformed theme name/path bytes are replaced with U+FFFD in Rustty theme diagnostics via `String::from_utf8_lossy`, whil",confirmed,agree,code-fix,False,True,verified,w1,2
+P4,W95-B02-01,1,"`ReadableIO.formatEntry` formats overlong `raw:`/`path:` values in Rustty through a growable buffer, while Ghostty build",confirmed,agree,code-fix,False,True,verified,w1,1
+P4,W95-B03-01,1,Escaped surrogate `\u{D800}` through config `string.parse` is reported as `OutOfMemory` by Rustty's `char::from_u32` map,confirmed,agree,code-fix,False,True,verified,w1,1
+P4,W95-B04-01,1,"`RepeatableStringMap` formats overlong `key=value` entries in Rustty through a growable buffer, while Ghostty formats ea",confirmed,agree,code-fix,False,True,verified,w1,1
+P4,W95-B04-02,1,"`clipboard-codepoint-map` wrapper formatting accepts overlong string replacements in Rustty through a growable buffer, w",confirmed,agree,code-fix,False,True,verified,w1,1
+P4,W96-B01-001,1,Config `os` conditionals on NetBSD/OpenBSD/DragonFly-style targets cannot match their real OS tag in Rustty because `OsT,confirmed,agree,code-fix,False,True,verified,w1,2
+P4,W97-B04-C1,1,"Rustty omits Ghostty-style config package root aliases for shared field types such as `BoldColor`, `Command`, `Path`, `F",confirmed,agree,code-fix,False,True,verified,w1,1
+P4,W98-B01-01,1,Rustty rejects Ghostty's shared `window-theme = ghostty` token and instead accepts/formats `window-theme = rustty`,not_a_gap,agree,code-fix,True,True,no_fix_needed,,0
+P4,W98-B02-01,1,"`background-blur` numeric radius parsing accepts malformed underscore placements such as `0x_10`, `_12`, and `12_`, wher",confirmed,agree,code-fix,False,True,verified,w1,1
+P4,W98-B04-01,1,"`Keybinds.formatEntry` accepts overlong table-binding prefixes in Rustty through a growable buffer, while Ghostty format",confirmed,agree,code-fix,False,True,verified,w1,1
+P4,W99-B01-02,1,"`clipboard-codepoint-map` replacement codepoints reject Ghostty-accepted `std.fmt.parseInt(u21, ..., 16)` forms such as ",confirmed,agree,code-fix,False,True,verified,w1,1
+P4,W99-B01-03,1,"`RepeatableCodepointMap.equal` compares font family bytes by content in Rustty, while Ghostty's `std.meta.eql` observes ",confirmed,agree,test-add,True,True,verified,w1,1
+P4,W99-B03-01,1,"`quick-terminal-size` rejects Ghostty-accepted numeric spellings such as `+69px`, `1_0px`, and `1_0%` because Rustty use",confirmed,agree,code-fix,False,True,verified,w1,1
+P4,W99-B04-01,1,"`window-padding-*` rejects Ghostty-accepted leading-plus and underscore decimal spellings such as `+1`, `+1,+2`, `1_0`, ",confirmed,agree,code-fix,False,True,verified,w1,1
+P4,W9F-04,1,WASM SharedGridSet passes embedded TTF bytes as a CSS font name and silently keeps the fallback font,confirmed,agree,code-fix,False,True,verified,w1,1

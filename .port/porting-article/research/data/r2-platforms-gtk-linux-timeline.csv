@@ -1,0 +1,33 @@
+date,hash,host,milestone,provenance
+2026-07-15,648d1afeb,macOS,"AGENTS.md ported from Ghostty with the note 'GTK app ... (note: not yet live)', before any Linux work; never updated since",MEASURED git log -S'not yet live' -- AGENTS.md
+2026-07-16,(prompt),macOS,"Author: 'I'll aim to run this on a linux environment instead'; asks how to set up a GNOME-on-Wayland VM (19:11 -0700)",MEASURED ~/.claude/history.jsonl
+2026-07-16,(prompt),macOS,"VM #1 up at 192.168.64.3; Claude sets up the build environment (20:11 -0700)",MEASURED ~/.claude/history.jsonl
+2026-07-16,85d19023a,VM #1,"First Linux commit: fix never-compiled -sys build breaks on aarch64 glibc / GCC 16",MEASURED git log
+2026-07-16,f32352ab1,VM #1,"GTK roadmap + L1 plan (oracle path /home/gael/projects/ghostty)",MEASURED git log -G'/home/gael/'
+2026-07-17,5c801a295,VM #1,"Real OpenGL renderer wired into the core renderer seam (first light, offscreen)",MEASURED git log
+2026-07-17,3dad6d7a2,VM #1,"GTK FIRST LIGHT: AdwApplicationWindow + GLArea renders a live terminal frame (KAT gtk_first_light)",MEASURED git log
+2026-07-17,269845ec9,VM #1,"GL-ATTACH: draw into GDK's GLArea context (first light on screen)",MEASURED git log
+2026-07-18,9bc62e574,VM #1,"Window/Tab/Surface wired: a live terminal in the window (llvmpipe, DISPLAY=:0)",MEASURED git log
+2026-07-18,8d38349c8,VM #1,"Handoff plan: VM #1 had 3D acceleration disabled; 77 commits made there, unpushed (no SSH key)",DOCUMENTED docs/superpowers/plans/2026-07-18-linux-gtk-finish-with-3d-accel.md; MEASURED commit count
+2026-07-18,5ce0d0269,rvm,"First rvm commit from a Claude Code session on the VM: fix terminal swallowing all input (author reported typing did nothing)",MEASURED rvm transcript + git log
+2026-07-18,42749b5e3,rvm,"Linux/GTK manual test plan: full parity checklist vs Ghostty",MEASURED git log
+2026-07-19,4006e602a,rvm,"X11 and Wayland winproto arms implemented; X11 validated in a real Xfce session (author prompts 09:40-10:23 UTC)",MEASURED rvm history + git log
+2026-07-19,6317426(91),rvm,"GTK inspector (Dear ImGui over OpenGL) with framebuffer KAT",MEASURED rvm transcript
+2026-07-19,a62f11f87,rvm,"Quick terminal over wlr-layer-shell; author compares Ghostty vs Rustty in a real sway session: 'works exactly as Ghostty to me'",MEASURED rvm history + git log
+2026-07-19,9de16be19,rvm,"libxev File/TCP/UDP/ThreadPool complete on Linux",MEASURED rvm transcript + git log
+2026-07-22,cddffa093,rvm,"loadRuntimeCss ported (author asked why the title bar was striped); pushed from rvm 2026-07-23 UTC",MEASURED rvm transcript + git log
+2026-07-29,2690b7139,rvm (ssh from Mac),"GlobalShortcuts portal round trip + activation on GNOME 50",MEASURED git log
+2026-07-29,07b64dbef,rvm (ssh from Mac),"X11 winproto residual (XKB init, eventMods, WINDOWID) + live verification",MEASURED git log
+2026-07-29,b12ea5ec8,rvm (ssh from Mac),"set_urgent verified against a real headless mutter",MEASURED git log
+2026-07-29,(V3),rvm (ssh from Mac),"KDE decoration globals bind under nested KWin 6.7.3",DOCUMENTED .port/phase-2/VERIFICATION_DEBT.md V3
+2026-07-30,f3128262b,rvm (ssh from Mac),"Linux build verification and fixes (9 commits)",MEASURED git log
+2026-07-31,2dfee2973,rvm (ssh from Mac),"Wayland global hotkeys F-W1..F-W4 landed",MEASURED git log
+2026-08-26,b8e6a9eb8,rvm (ssh from Mac),"Flatpak built, installed and run: 'Rustty 0.1.0'",MEASURED git log
+2026-09-08,d328db1f7,rvm (ssh from Mac),"Phase 6 Linux lane: 3 macOS-invisible defects fixed (d38b014ba, d591a9857)",DOCUMENTED .port/phase-6/README.md
+2026-09-27,e78b34ad9,rvm (ssh from Mac),"gtk_split_drop measured on rvm",MEASURED git log
+2026-09-29,5af770b30,rvm (ssh from Mac),"Live GTK test harness: canonical headless-sway launcher",MEASURED git log
+2026-10-02,1a13056ae,rvm (ssh from Mac),"G-HWASAN GREEN on rvm (9,987 tests, 56 min); LSan 10,111 and MSan 6,183 GREEN same week",DOCUMENTED commit + parity-closure README
+2026-10-07,f31fcc032,rvm (ssh from Mac),"G-VALGRIND GREEN on rvm (6,614 tests)",MEASURED git log
+2026-10-07,4a32358ae,rvm (ssh from Mac),"G-TSAN GREEN on Linux (4,428 tests); G-LSAN-GTK live GTK surface under ASan+LSan in headless sway",DOCUMENTED VERIFICATION_DEBT V32/V33
+2026-10-08,1d22ba80d,rvm + rwin + macOS,"Cross-host build GREEN at pin a60e9e2a5 (build, clippy -D warnings, release)",MEASURED git log
+2026-10-08,25f8da30c,rvm (ssh from Mac),"P8-W9 T2 lanes (unmerged branch phase-8/w9t2v): full workspace tests 6,748 pass; GTK feature lane, ASan, LSan, LSan-GTK, examples, esctest GREEN; MSan, TSan, HWASan RED, provisionally environment/gate-scope",MEASURED ssh rvm logs + git show

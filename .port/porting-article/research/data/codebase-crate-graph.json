@@ -1,0 +1,2885 @@
+{
+ "nodes": [
+  {
+   "id": "rustty-util",
+   "group": "crate",
+   "rust_code": 416,
+   "tests": 6,
+   "unsafe_total": 1,
+   "targets": [
+    "lib"
+   ],
+   "depth": 0,
+   "dependents": 15,
+   "dependencies": 0,
+   "tier": "Foundations"
+  },
+  {
+   "id": "rustty-build-config",
+   "group": "crate",
+   "rust_code": 615,
+   "tests": 5,
+   "unsafe_total": 0,
+   "targets": [
+    "custom-build",
+    "lib"
+   ],
+   "depth": 3,
+   "dependents": 17,
+   "dependencies": 2,
+   "tier": "Foundations"
+  },
+  {
+   "id": "rustty-datastruct",
+   "group": "crate",
+   "rust_code": 5814,
+   "tests": 100,
+   "unsafe_total": 216,
+   "targets": [
+    "lib"
+   ],
+   "depth": 2,
+   "dependents": 16,
+   "dependencies": 2,
+   "tier": "Foundations"
+  },
+  {
+   "id": "rustty-zigstd",
+   "group": "crate",
+   "rust_code": 4720,
+   "tests": 88,
+   "unsafe_total": 113,
+   "targets": [
+    "custom-build",
+    "lib"
+   ],
+   "depth": 1,
+   "dependents": 16,
+   "dependencies": 1,
+   "tier": "Foundations"
+  },
+  {
+   "id": "rustty-identity",
+   "group": "crate",
+   "rust_code": 105,
+   "tests": 2,
+   "unsafe_total": 0,
+   "targets": [
+    "lib"
+   ],
+   "depth": 0,
+   "dependents": 16,
+   "dependencies": 0,
+   "tier": "Foundations"
+  },
+  {
+   "id": "rustty-version",
+   "group": "crate",
+   "rust_code": 439,
+   "tests": 6,
+   "unsafe_total": 0,
+   "targets": [
+    "custom-build",
+    "lib"
+   ],
+   "depth": 4,
+   "dependents": 8,
+   "dependencies": 2,
+   "tier": "Foundations"
+  },
+  {
+   "id": "rustty-unicode",
+   "group": "crate",
+   "rust_code": 5386,
+   "tests": 23,
+   "unsafe_total": 2,
+   "targets": [
+    "example",
+    "lib"
+   ],
+   "depth": 0,
+   "dependents": 9,
+   "dependencies": 0,
+   "tier": "Foundations"
+  },
+  {
+   "id": "rustty-simd",
+   "group": "crate",
+   "rust_code": 1666,
+   "tests": 42,
+   "unsafe_total": 14,
+   "targets": [
+    "custom-build",
+    "lib"
+   ],
+   "depth": 1,
+   "dependents": 3,
+   "dependencies": 4,
+   "tier": "Foundations"
+  },
+  {
+   "id": "highway-sys",
+   "group": "sys",
+   "rust_code": 535,
+   "tests": 19,
+   "unsafe_total": 26,
+   "targets": [
+    "custom-build",
+    "lib"
+   ],
+   "depth": 0,
+   "dependents": 1,
+   "dependencies": 0,
+   "tier": "FFI -sys bindings"
+  },
+  {
+   "id": "simdutf-sys",
+   "group": "sys",
+   "rust_code": 70,
+   "tests": 2,
+   "unsafe_total": 2,
+   "targets": [
+    "custom-build",
+    "lib"
+   ],
+   "depth": 0,
+   "dependents": 1,
+   "dependencies": 0,
+   "tier": "FFI -sys bindings"
+  },
+  {
+   "id": "rustty-lib",
+   "group": "crate",
+   "rust_code": 2621,
+   "tests": 42,
+   "unsafe_total": 41,
+   "targets": [
+    "lib",
+    "test"
+   ],
+   "depth": 2,
+   "dependents": 6,
+   "dependencies": 1,
+   "tier": "Foundations"
+  },
+  {
+   "id": "rustty-global",
+   "group": "crate",
+   "rust_code": 1123,
+   "tests": 25,
+   "unsafe_total": 15,
+   "targets": [
+    "lib",
+    "test"
+   ],
+   "depth": 4,
+   "dependents": 10,
+   "dependencies": 1,
+   "tier": "Foundations"
+  },
+  {
+   "id": "rustty-render-types",
+   "group": "crate",
+   "rust_code": 798,
+   "tests": 12,
+   "unsafe_total": 12,
+   "targets": [
+    "lib"
+   ],
+   "depth": 3,
+   "dependents": 7,
+   "dependencies": 2,
+   "tier": "Foundations"
+  },
+  {
+   "id": "rustty-os",
+   "group": "crate",
+   "rust_code": 9531,
+   "tests": 143,
+   "unsafe_total": 230,
+   "targets": [
+    "custom-build",
+    "lib",
+    "test"
+   ],
+   "depth": 6,
+   "dependents": 17,
+   "dependencies": 8,
+   "tier": "Foundations"
+  },
+  {
+   "id": "rustty-xev",
+   "group": "crate",
+   "rust_code": 30372,
+   "tests": 204,
+   "unsafe_total": 2032,
+   "targets": [
+    "custom-build",
+    "lib",
+    "test"
+   ],
+   "depth": 5,
+   "dependents": 8,
+   "dependencies": 1,
+   "tier": "Ported Zig dependencies"
+  },
+  {
+   "id": "gettext-sys",
+   "group": "sys",
+   "rust_code": 137,
+   "tests": 2,
+   "unsafe_total": 7,
+   "targets": [
+    "custom-build",
+    "lib"
+   ],
+   "depth": 0,
+   "dependents": 1,
+   "dependencies": 0,
+   "tier": "FFI -sys bindings"
+  },
+  {
+   "id": "rustty-vt",
+   "group": "crate",
+   "rust_code": 174265,
+   "tests": 3474,
+   "unsafe_total": 7979,
+   "targets": [
+    "custom-build",
+    "example",
+    "lib",
+    "test"
+   ],
+   "depth": 8,
+   "dependents": 15,
+   "dependencies": 14,
+   "tier": "VT engine"
+  },
+  {
+   "id": "dcimgui-sys",
+   "group": "sys",
+   "rust_code": 610,
+   "tests": 12,
+   "unsafe_total": 7,
+   "targets": [
+    "custom-build",
+    "lib",
+    "test"
+   ],
+   "depth": 2,
+   "dependents": 3,
+   "dependencies": 1,
+   "tier": "FFI -sys bindings"
+  },
+  {
+   "id": "freetype-sys",
+   "group": "sys",
+   "rust_code": 190,
+   "tests": 1,
+   "unsafe_total": 1,
+   "targets": [
+    "custom-build",
+    "lib"
+   ],
+   "depth": 1,
+   "dependents": 4,
+   "dependencies": 1,
+   "tier": "FFI -sys bindings"
+  },
+  {
+   "id": "zlib-sys",
+   "group": "sys",
+   "rust_code": 425,
+   "tests": 11,
+   "unsafe_total": 25,
+   "targets": [
+    "custom-build",
+    "lib"
+   ],
+   "depth": 0,
+   "dependents": 5,
+   "dependencies": 0,
+   "tier": "FFI -sys bindings"
+  },
+  {
+   "id": "rustty-font",
+   "group": "crate",
+   "rust_code": 15767,
+   "tests": 90,
+   "unsafe_total": 38,
+   "targets": [
+    "lib"
+   ],
+   "depth": 7,
+   "dependents": 10,
+   "dependencies": 7,
+   "tier": "Font"
+  },
+  {
+   "id": "rustty-z2d",
+   "group": "crate",
+   "rust_code": 9907,
+   "tests": 105,
+   "unsafe_total": 0,
+   "targets": [
+    "lib",
+    "test"
+   ],
+   "depth": 0,
+   "dependents": 2,
+   "dependencies": 0,
+   "tier": "Ported Zig dependencies"
+  },
+  {
+   "id": "rustty-cfg-fmt",
+   "group": "crate",
+   "rust_code": 312,
+   "tests": 9,
+   "unsafe_total": 0,
+   "targets": [
+    "lib"
+   ],
+   "depth": 0,
+   "dependents": 5,
+   "dependencies": 0,
+   "tier": "Input / config"
+  },
+  {
+   "id": "rustty-oniguruma",
+   "group": "crate",
+   "rust_code": 780,
+   "tests": 2,
+   "unsafe_total": 13,
+   "targets": [
+    "lib"
+   ],
+   "depth": 1,
+   "dependents": 6,
+   "dependencies": 1,
+   "tier": "Ported Zig dependencies"
+  },
+  {
+   "id": "oniguruma-sys",
+   "group": "sys",
+   "rust_code": 211,
+   "tests": 1,
+   "unsafe_total": 1,
+   "targets": [
+    "custom-build",
+    "lib"
+   ],
+   "depth": 0,
+   "dependents": 1,
+   "dependencies": 0,
+   "tier": "FFI -sys bindings"
+  },
+  {
+   "id": "rustty-terminfo",
+   "group": "crate",
+   "rust_code": 772,
+   "tests": 8,
+   "unsafe_total": 0,
+   "targets": [
+    "lib"
+   ],
+   "depth": 1,
+   "dependents": 4,
+   "dependencies": 1,
+   "tier": "Input / config"
+  },
+  {
+   "id": "rustty-synthetic",
+   "group": "crate",
+   "rust_code": 2792,
+   "tests": 27,
+   "unsafe_total": 4,
+   "targets": [
+    "bin",
+    "lib",
+    "test"
+   ],
+   "depth": 9,
+   "dependents": 1,
+   "dependencies": 3,
+   "tier": "CLI / binary / tools"
+  },
+  {
+   "id": "rustty-args",
+   "group": "crate",
+   "rust_code": 3738,
+   "tests": 81,
+   "unsafe_total": 1,
+   "targets": [
+    "lib",
+    "test"
+   ],
+   "depth": 7,
+   "dependents": 6,
+   "dependencies": 4,
+   "tier": "Input / config"
+  },
+  {
+   "id": "rustty-wuffs",
+   "group": "crate",
+   "rust_code": 1096,
+   "tests": 24,
+   "unsafe_total": 52,
+   "targets": [
+    "lib"
+   ],
+   "depth": 1,
+   "dependents": 3,
+   "dependencies": 1,
+   "tier": "Ported Zig dependencies"
+  },
+  {
+   "id": "wuffs-sys",
+   "group": "sys",
+   "rust_code": 190,
+   "tests": 3,
+   "unsafe_total": 9,
+   "targets": [
+    "custom-build",
+    "lib"
+   ],
+   "depth": 0,
+   "dependents": 1,
+   "dependencies": 0,
+   "tier": "FFI -sys bindings"
+  },
+  {
+   "id": "rustty-vt-c",
+   "group": "crate",
+   "rust_code": 41533,
+   "tests": 606,
+   "unsafe_total": 5303,
+   "targets": [
+    "cdylib",
+    "custom-build",
+    "rlib",
+    "staticlib",
+    "test"
+   ],
+   "depth": 9,
+   "dependents": 1,
+   "dependencies": 5,
+   "tier": "C ABI / embedding"
+  },
+  {
+   "id": "rustty-crash",
+   "group": "crate",
+   "rust_code": 2226,
+   "tests": 27,
+   "unsafe_total": 65,
+   "targets": [
+    "lib"
+   ],
+   "depth": 7,
+   "dependents": 5,
+   "dependencies": 7,
+   "tier": "Foundations"
+  },
+  {
+   "id": "sentry-sys",
+   "group": "sys",
+   "rust_code": 297,
+   "tests": 4,
+   "unsafe_total": 2,
+   "targets": [
+    "custom-build",
+    "lib"
+   ],
+   "depth": 1,
+   "dependents": 1,
+   "dependencies": 1,
+   "tier": "FFI -sys bindings"
+  },
+  {
+   "id": "breakpad-sys",
+   "group": "sys",
+   "rust_code": 140,
+   "tests": 1,
+   "unsafe_total": 0,
+   "targets": [
+    "custom-build",
+    "lib"
+   ],
+   "depth": 0,
+   "dependents": 1,
+   "dependencies": 0,
+   "tier": "FFI -sys bindings"
+  },
+  {
+   "id": "rustty-apprt-api",
+   "group": "crate",
+   "rust_code": 2231,
+   "tests": 28,
+   "unsafe_total": 25,
+   "targets": [
+    "lib"
+   ],
+   "depth": 12,
+   "dependents": 5,
+   "dependencies": 9,
+   "tier": "Runtime (termio/core/apprt)"
+  },
+  {
+   "id": "rustty-config",
+   "group": "crate",
+   "rust_code": 19636,
+   "tests": 274,
+   "unsafe_total": 93,
+   "targets": [
+    "custom-build",
+    "lib",
+    "test"
+   ],
+   "depth": 11,
+   "dependents": 8,
+   "dependencies": 17,
+   "tier": "Input / config"
+  },
+  {
+   "id": "rustty-input",
+   "group": "crate",
+   "rust_code": 8645,
+   "tests": 124,
+   "unsafe_total": 26,
+   "targets": [
+    "custom-build",
+    "lib"
+   ],
+   "depth": 9,
+   "dependents": 9,
+   "dependencies": 11,
+   "tier": "Input / config"
+  },
+  {
+   "id": "rustty-helpgen",
+   "group": "crate",
+   "rust_code": 153,
+   "tests": 6,
+   "unsafe_total": 0,
+   "targets": [
+    "lib"
+   ],
+   "depth": 0,
+   "dependents": 3,
+   "dependencies": 0,
+   "tier": "Foundations"
+  },
+  {
+   "id": "rustty-renderer",
+   "group": "crate",
+   "rust_code": 26451,
+   "tests": 242,
+   "unsafe_total": 948,
+   "targets": [
+    "custom-build",
+    "lib",
+    "test"
+   ],
+   "depth": 10,
+   "dependents": 7,
+   "dependencies": 17,
+   "tier": "Rendering"
+  },
+  {
+   "id": "glslang-sys",
+   "group": "sys",
+   "rust_code": 198,
+   "tests": 1,
+   "unsafe_total": 1,
+   "targets": [
+    "custom-build",
+    "lib"
+   ],
+   "depth": 0,
+   "dependents": 1,
+   "dependencies": 0,
+   "tier": "FFI -sys bindings"
+  },
+  {
+   "id": "rustty-font-shaper",
+   "group": "crate",
+   "rust_code": 20930,
+   "tests": 202,
+   "unsafe_total": 837,
+   "targets": [
+    "custom-build",
+    "lib"
+   ],
+   "depth": 9,
+   "dependents": 7,
+   "dependencies": 13,
+   "tier": "Font"
+  },
+  {
+   "id": "fontconfig-sys",
+   "group": "sys",
+   "rust_code": 382,
+   "tests": 4,
+   "unsafe_total": 3,
+   "targets": [
+    "custom-build",
+    "lib"
+   ],
+   "depth": 2,
+   "dependents": 2,
+   "dependencies": 2,
+   "tier": "FFI -sys bindings"
+  },
+  {
+   "id": "libxml2-sys",
+   "group": "sys",
+   "rust_code": 260,
+   "tests": 1,
+   "unsafe_total": 2,
+   "targets": [
+    "custom-build",
+    "lib"
+   ],
+   "depth": 0,
+   "dependents": 1,
+   "dependencies": 0,
+   "tier": "FFI -sys bindings"
+  },
+  {
+   "id": "harfbuzz-sys",
+   "group": "sys",
+   "rust_code": 171,
+   "tests": 1,
+   "unsafe_total": 1,
+   "targets": [
+    "custom-build",
+    "lib"
+   ],
+   "depth": 2,
+   "dependents": 2,
+   "dependencies": 1,
+   "tier": "FFI -sys bindings"
+  },
+  {
+   "id": "spirv-cross-sys",
+   "group": "sys",
+   "rust_code": 173,
+   "tests": 1,
+   "unsafe_total": 1,
+   "targets": [
+    "custom-build",
+    "lib"
+   ],
+   "depth": 0,
+   "dependents": 1,
+   "dependencies": 0,
+   "tier": "FFI -sys bindings"
+  },
+  {
+   "id": "rustty-inspector",
+   "group": "crate",
+   "rust_code": 7086,
+   "tests": 23,
+   "unsafe_total": 1155,
+   "targets": [
+    "lib",
+    "test"
+   ],
+   "depth": 11,
+   "dependents": 3,
+   "dependencies": 9,
+   "tier": "Rendering"
+  },
+  {
+   "id": "rustty-termio",
+   "group": "crate",
+   "rust_code": 13942,
+   "tests": 138,
+   "unsafe_total": 539,
+   "targets": [
+    "custom-build",
+    "lib",
+    "test"
+   ],
+   "depth": 13,
+   "dependents": 2,
+   "dependencies": 17,
+   "tier": "Runtime (termio/core/apprt)"
+  },
+  {
+   "id": "rustty-core",
+   "group": "crate",
+   "rust_code": 13206,
+   "tests": 91,
+   "unsafe_total": 969,
+   "targets": [
+    "custom-build",
+    "lib",
+    "test"
+   ],
+   "depth": 14,
+   "dependents": 4,
+   "dependencies": 21,
+   "tier": "Runtime (termio/core/apprt)"
+  },
+  {
+   "id": "rustty-apprt",
+   "group": "crate",
+   "rust_code": 30399,
+   "tests": 277,
+   "unsafe_total": 536,
+   "targets": [
+    "custom-build",
+    "lib",
+    "test"
+   ],
+   "depth": 15,
+   "dependents": 4,
+   "dependencies": 24,
+   "tier": "Runtime (termio/core/apprt)"
+  },
+  {
+   "id": "rustty-apprt-c",
+   "group": "crate",
+   "rust_code": 3938,
+   "tests": 53,
+   "unsafe_total": 357,
+   "targets": [
+    "bin",
+    "cdylib",
+    "custom-build",
+    "rlib",
+    "staticlib",
+    "test"
+   ],
+   "depth": 17,
+   "dependents": 0,
+   "dependencies": 15,
+   "tier": "C ABI / embedding"
+  },
+  {
+   "id": "rustty-bench",
+   "group": "crate",
+   "rust_code": 5620,
+   "tests": 53,
+   "unsafe_total": 197,
+   "targets": [
+    "bin",
+    "lib",
+    "test"
+   ],
+   "depth": 16,
+   "dependents": 1,
+   "dependencies": 12,
+   "tier": "CLI / binary / tools"
+  },
+  {
+   "id": "rustty-cli",
+   "group": "crate",
+   "rust_code": 11474,
+   "tests": 133,
+   "unsafe_total": 56,
+   "targets": [
+    "custom-build",
+    "lib",
+    "test"
+   ],
+   "depth": 16,
+   "dependents": 3,
+   "dependencies": 23,
+   "tier": "CLI / binary / tools"
+  },
+  {
+   "id": "rustty-vaxis",
+   "group": "crate",
+   "rust_code": 13862,
+   "tests": 174,
+   "unsafe_total": 220,
+   "targets": [
+    "custom-build",
+    "example",
+    "lib",
+    "test"
+   ],
+   "depth": 3,
+   "dependents": 1,
+   "dependencies": 2,
+   "tier": "Ported Zig dependencies"
+  },
+  {
+   "id": "rustty-zigimg",
+   "group": "crate",
+   "rust_code": 662,
+   "tests": 28,
+   "unsafe_total": 5,
+   "targets": [
+    "lib",
+    "test"
+   ],
+   "depth": 2,
+   "dependents": 1,
+   "dependencies": 2,
+   "tier": "Ported Zig dependencies"
+  },
+  {
+   "id": "rustty-zf",
+   "group": "crate",
+   "rust_code": 1423,
+   "tests": 12,
+   "unsafe_total": 20,
+   "targets": [
+    "rlib"
+   ],
+   "depth": 0,
+   "dependents": 1,
+   "dependencies": 0,
+   "tier": "Ported Zig dependencies"
+  },
+  {
+   "id": "rustty-extra",
+   "group": "crate",
+   "rust_code": 2485,
+   "tests": 39,
+   "unsafe_total": 0,
+   "targets": [
+    "lib",
+    "test"
+   ],
+   "depth": 17,
+   "dependents": 1,
+   "dependencies": 7,
+   "tier": "CLI / binary / tools"
+  },
+  {
+   "id": "rustty",
+   "group": "crate",
+   "rust_code": 996,
+   "tests": 26,
+   "unsafe_total": 4,
+   "targets": [
+    "bin",
+    "custom-build",
+    "test"
+   ],
+   "depth": 17,
+   "dependents": 0,
+   "dependencies": 6,
+   "tier": "CLI / binary / tools"
+  },
+  {
+   "id": "libpng-sys",
+   "group": "sys",
+   "rust_code": 111,
+   "tests": 2,
+   "unsafe_total": 3,
+   "targets": [
+    "custom-build",
+    "lib"
+   ],
+   "depth": 1,
+   "dependents": 0,
+   "dependencies": 1,
+   "tier": "FFI -sys bindings"
+  },
+  {
+   "id": "rustty-wasm",
+   "group": "crate",
+   "rust_code": 275,
+   "tests": 1,
+   "unsafe_total": 16,
+   "targets": [
+    "cdylib",
+    "rlib",
+    "test"
+   ],
+   "depth": 12,
+   "dependents": 0,
+   "dependencies": 5,
+   "tier": "C ABI / embedding"
+  },
+  {
+   "id": "rustty-web-canvas",
+   "group": "crate",
+   "rust_code": 263,
+   "tests": 1,
+   "unsafe_total": 26,
+   "targets": [
+    "cdylib",
+    "rlib"
+   ],
+   "depth": 10,
+   "dependents": 0,
+   "dependencies": 3,
+   "tier": "C ABI / embedding"
+  },
+  {
+   "id": "xtask",
+   "group": "xtask",
+   "rust_code": 7157,
+   "tests": 128,
+   "unsafe_total": 0,
+   "targets": [
+    "bin",
+    "test"
+   ],
+   "depth": 18,
+   "dependents": 0,
+   "dependencies": 3,
+   "tier": "CLI / binary / tools"
+  }
+ ],
+ "edges": [
+  {
+   "source": "rustty-build-config",
+   "target": "rustty-datastruct",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-build-config",
+   "target": "rustty-identity",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-datastruct",
+   "target": "rustty-util",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-datastruct",
+   "target": "rustty-zigstd",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-zigstd",
+   "target": "rustty-util",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-version",
+   "target": "rustty-build-config",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-version",
+   "target": "rustty-identity",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-simd",
+   "target": "rustty-unicode",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-simd",
+   "target": "rustty-util",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-simd",
+   "target": "highway-sys",
+   "kind": "normal",
+   "optional": true
+  },
+  {
+   "source": "rustty-simd",
+   "target": "simdutf-sys",
+   "kind": "normal",
+   "optional": true
+  },
+  {
+   "source": "rustty-lib",
+   "target": "rustty-zigstd",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-global",
+   "target": "rustty-build-config",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-render-types",
+   "target": "rustty-datastruct",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-render-types",
+   "target": "rustty-util",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-os",
+   "target": "rustty-build-config",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-os",
+   "target": "rustty-datastruct",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-os",
+   "target": "rustty-global",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-os",
+   "target": "rustty-identity",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-os",
+   "target": "rustty-util",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-os",
+   "target": "rustty-xev",
+   "kind": "normal",
+   "optional": true
+  },
+  {
+   "source": "rustty-os",
+   "target": "rustty-zigstd",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-os",
+   "target": "gettext-sys",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-xev",
+   "target": "rustty-global",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-vt",
+   "target": "dcimgui-sys",
+   "kind": "normal",
+   "optional": true
+  },
+  {
+   "source": "rustty-vt",
+   "target": "rustty-datastruct",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-vt",
+   "target": "rustty-font",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-vt",
+   "target": "rustty-identity",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-vt",
+   "target": "rustty-lib",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-vt",
+   "target": "rustty-oniguruma",
+   "kind": "normal",
+   "optional": true
+  },
+  {
+   "source": "rustty-vt",
+   "target": "rustty-os",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-vt",
+   "target": "rustty-render-types",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-vt",
+   "target": "rustty-simd",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-vt",
+   "target": "rustty-terminfo",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-vt",
+   "target": "rustty-unicode",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-vt",
+   "target": "rustty-util",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-vt",
+   "target": "rustty-zigstd",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-vt",
+   "target": "rustty-synthetic",
+   "kind": "dev",
+   "optional": false
+  },
+  {
+   "source": "rustty-vt",
+   "target": "rustty-util",
+   "kind": "dev",
+   "optional": false
+  },
+  {
+   "source": "rustty-vt",
+   "target": "rustty-zigstd",
+   "kind": "dev",
+   "optional": false
+  },
+  {
+   "source": "rustty-vt",
+   "target": "rustty-wuffs",
+   "kind": "normal",
+   "optional": true
+  },
+  {
+   "source": "dcimgui-sys",
+   "target": "freetype-sys",
+   "kind": "normal",
+   "optional": true
+  },
+  {
+   "source": "freetype-sys",
+   "target": "zlib-sys",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-font",
+   "target": "rustty-datastruct",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-font",
+   "target": "rustty-os",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-font",
+   "target": "rustty-render-types",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-font",
+   "target": "rustty-unicode",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-font",
+   "target": "rustty-util",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-font",
+   "target": "rustty-z2d",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-font",
+   "target": "rustty-zigstd",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-font",
+   "target": "rustty-cfg-fmt",
+   "kind": "dev",
+   "optional": false
+  },
+  {
+   "source": "rustty-font",
+   "target": "rustty-util",
+   "kind": "dev",
+   "optional": false
+  },
+  {
+   "source": "rustty-oniguruma",
+   "target": "oniguruma-sys",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-terminfo",
+   "target": "rustty-identity",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-synthetic",
+   "target": "rustty-args",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-synthetic",
+   "target": "rustty-os",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-synthetic",
+   "target": "rustty-vt",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-args",
+   "target": "rustty-build-config",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-args",
+   "target": "rustty-os",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-args",
+   "target": "rustty-util",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-args",
+   "target": "rustty-zigstd",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-wuffs",
+   "target": "wuffs-sys",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-vt-c",
+   "target": "rustty-lib",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-vt-c",
+   "target": "rustty-os",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-vt-c",
+   "target": "rustty-render-types",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-vt-c",
+   "target": "rustty-unicode",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-vt-c",
+   "target": "rustty-vt",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-vt-c",
+   "target": "rustty-util",
+   "kind": "dev",
+   "optional": false
+  },
+  {
+   "source": "rustty-vt-c",
+   "target": "rustty-vt",
+   "kind": "dev",
+   "optional": false
+  },
+  {
+   "source": "rustty-crash",
+   "target": "rustty-build-config",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-crash",
+   "target": "rustty-global",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-crash",
+   "target": "rustty-identity",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-crash",
+   "target": "rustty-os",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-crash",
+   "target": "rustty-version",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-crash",
+   "target": "rustty-zigstd",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-crash",
+   "target": "sentry-sys",
+   "kind": "normal",
+   "optional": true
+  },
+  {
+   "source": "sentry-sys",
+   "target": "breakpad-sys",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt-api",
+   "target": "rustty-build-config",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt-api",
+   "target": "rustty-config",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt-api",
+   "target": "rustty-crash",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt-api",
+   "target": "rustty-datastruct",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt-api",
+   "target": "rustty-global",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt-api",
+   "target": "rustty-input",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt-api",
+   "target": "rustty-lib",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt-api",
+   "target": "rustty-renderer",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt-api",
+   "target": "rustty-vt",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-config",
+   "target": "rustty-args",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-config",
+   "target": "rustty-build-config",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-config",
+   "target": "rustty-cfg-fmt",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-config",
+   "target": "rustty-datastruct",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-config",
+   "target": "rustty-font",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-config",
+   "target": "rustty-global",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-config",
+   "target": "rustty-identity",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-config",
+   "target": "rustty-input",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-config",
+   "target": "rustty-oniguruma",
+   "kind": "normal",
+   "optional": true
+  },
+  {
+   "source": "rustty-config",
+   "target": "rustty-os",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-config",
+   "target": "rustty-render-types",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-config",
+   "target": "rustty-renderer",
+   "kind": "normal",
+   "optional": true
+  },
+  {
+   "source": "rustty-config",
+   "target": "rustty-util",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-config",
+   "target": "rustty-version",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-config",
+   "target": "rustty-vt",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-config",
+   "target": "rustty-zigstd",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-config",
+   "target": "rustty-helpgen",
+   "kind": "build",
+   "optional": false
+  },
+  {
+   "source": "rustty-input",
+   "target": "rustty-args",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-input",
+   "target": "rustty-cfg-fmt",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-input",
+   "target": "rustty-datastruct",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-input",
+   "target": "rustty-oniguruma",
+   "kind": "normal",
+   "optional": true
+  },
+  {
+   "source": "rustty-input",
+   "target": "rustty-os",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-input",
+   "target": "rustty-render-types",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-input",
+   "target": "rustty-unicode",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-input",
+   "target": "rustty-util",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-input",
+   "target": "rustty-vt",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-input",
+   "target": "rustty-zigstd",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-input",
+   "target": "rustty-helpgen",
+   "kind": "build",
+   "optional": false
+  },
+  {
+   "source": "rustty-renderer",
+   "target": "glslang-sys",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-renderer",
+   "target": "rustty-build-config",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-renderer",
+   "target": "rustty-datastruct",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-renderer",
+   "target": "rustty-font",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-renderer",
+   "target": "rustty-font-shaper",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-renderer",
+   "target": "rustty-input",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-renderer",
+   "target": "rustty-oniguruma",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-renderer",
+   "target": "rustty-os",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-renderer",
+   "target": "rustty-render-types",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-renderer",
+   "target": "rustty-unicode",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-renderer",
+   "target": "rustty-util",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-renderer",
+   "target": "rustty-vt",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-renderer",
+   "target": "rustty-wuffs",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-renderer",
+   "target": "rustty-xev",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-renderer",
+   "target": "rustty-z2d",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-renderer",
+   "target": "rustty-zigstd",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-renderer",
+   "target": "spirv-cross-sys",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-renderer",
+   "target": "rustty-lib",
+   "kind": "dev",
+   "optional": false
+  },
+  {
+   "source": "rustty-font-shaper",
+   "target": "rustty-build-config",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-font-shaper",
+   "target": "rustty-datastruct",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-font-shaper",
+   "target": "rustty-font",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-font-shaper",
+   "target": "rustty-os",
+   "kind": "normal",
+   "optional": true
+  },
+  {
+   "source": "rustty-font-shaper",
+   "target": "rustty-render-types",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-font-shaper",
+   "target": "rustty-unicode",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-font-shaper",
+   "target": "rustty-util",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-font-shaper",
+   "target": "rustty-vt",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-font-shaper",
+   "target": "rustty-zigstd",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-font-shaper",
+   "target": "rustty-util",
+   "kind": "dev",
+   "optional": false
+  },
+  {
+   "source": "rustty-font-shaper",
+   "target": "fontconfig-sys",
+   "kind": "normal",
+   "optional": true
+  },
+  {
+   "source": "rustty-font-shaper",
+   "target": "freetype-sys",
+   "kind": "normal",
+   "optional": true
+  },
+  {
+   "source": "rustty-font-shaper",
+   "target": "harfbuzz-sys",
+   "kind": "normal",
+   "optional": true
+  },
+  {
+   "source": "rustty-font-shaper",
+   "target": "rustty-xev",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "fontconfig-sys",
+   "target": "freetype-sys",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "fontconfig-sys",
+   "target": "libxml2-sys",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "harfbuzz-sys",
+   "target": "freetype-sys",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-inspector",
+   "target": "dcimgui-sys",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-inspector",
+   "target": "rustty-datastruct",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-inspector",
+   "target": "rustty-font",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-inspector",
+   "target": "rustty-input",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-inspector",
+   "target": "rustty-lib",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-inspector",
+   "target": "rustty-renderer",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-inspector",
+   "target": "rustty-util",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-inspector",
+   "target": "rustty-vt",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-inspector",
+   "target": "rustty-xev",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-inspector",
+   "target": "rustty-vt",
+   "kind": "dev",
+   "optional": false
+  },
+  {
+   "source": "rustty-termio",
+   "target": "rustty-apprt-api",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-termio",
+   "target": "rustty-build-config",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-termio",
+   "target": "rustty-config",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-termio",
+   "target": "rustty-crash",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-termio",
+   "target": "rustty-datastruct",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-termio",
+   "target": "rustty-global",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-termio",
+   "target": "rustty-identity",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-termio",
+   "target": "rustty-inspector",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-termio",
+   "target": "rustty-lib",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-termio",
+   "target": "rustty-os",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-termio",
+   "target": "rustty-renderer",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-termio",
+   "target": "rustty-terminfo",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-termio",
+   "target": "rustty-util",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-termio",
+   "target": "rustty-version",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-termio",
+   "target": "rustty-vt",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-termio",
+   "target": "rustty-xev",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-termio",
+   "target": "rustty-zigstd",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-termio",
+   "target": "rustty-args",
+   "kind": "dev",
+   "optional": false
+  },
+  {
+   "source": "rustty-core",
+   "target": "rustty-apprt-api",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-core",
+   "target": "rustty-build-config",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-core",
+   "target": "rustty-config",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-core",
+   "target": "rustty-crash",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-core",
+   "target": "rustty-datastruct",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-core",
+   "target": "rustty-font",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-core",
+   "target": "rustty-font-shaper",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-core",
+   "target": "rustty-global",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-core",
+   "target": "rustty-identity",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-core",
+   "target": "rustty-input",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-core",
+   "target": "rustty-inspector",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-core",
+   "target": "rustty-oniguruma",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-core",
+   "target": "rustty-os",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-core",
+   "target": "rustty-renderer",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-core",
+   "target": "rustty-simd",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-core",
+   "target": "rustty-termio",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-core",
+   "target": "rustty-unicode",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-core",
+   "target": "rustty-util",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-core",
+   "target": "rustty-vt",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-core",
+   "target": "rustty-xev",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-core",
+   "target": "rustty-zigstd",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-core",
+   "target": "rustty-args",
+   "kind": "dev",
+   "optional": false
+  },
+  {
+   "source": "rustty-core",
+   "target": "rustty-vt",
+   "kind": "dev",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "dcimgui-sys",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "harfbuzz-sys",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "rustty-apprt-api",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "rustty-args",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "rustty-build-config",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "rustty-cfg-fmt",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "rustty-config",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "rustty-core",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "rustty-crash",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "rustty-datastruct",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "rustty-font",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "rustty-font-shaper",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "rustty-global",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "rustty-identity",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "rustty-input",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "rustty-inspector",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "rustty-oniguruma",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "rustty-os",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "rustty-renderer",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "rustty-termio",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "rustty-version",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "rustty-vt",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "rustty-xev",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "rustty-identity",
+   "kind": "build",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "rustty-os",
+   "kind": "dev",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "rustty-vt",
+   "kind": "dev",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt",
+   "target": "fontconfig-sys",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt-c",
+   "target": "rustty-apprt",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt-c",
+   "target": "rustty-apprt-api",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt-c",
+   "target": "rustty-bench",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt-c",
+   "target": "rustty-build-config",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt-c",
+   "target": "rustty-cli",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt-c",
+   "target": "rustty-config",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt-c",
+   "target": "rustty-core",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt-c",
+   "target": "rustty-datastruct",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt-c",
+   "target": "rustty-font-shaper",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt-c",
+   "target": "rustty-identity",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt-c",
+   "target": "rustty-input",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt-c",
+   "target": "rustty-os",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt-c",
+   "target": "rustty-renderer",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt-c",
+   "target": "rustty-version",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt-c",
+   "target": "rustty-vt",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt-c",
+   "target": "rustty-core",
+   "kind": "dev",
+   "optional": false
+  },
+  {
+   "source": "rustty-apprt-c",
+   "target": "rustty-xev",
+   "kind": "dev",
+   "optional": false
+  },
+  {
+   "source": "rustty-bench",
+   "target": "rustty-apprt",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-bench",
+   "target": "rustty-args",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-bench",
+   "target": "rustty-build-config",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-bench",
+   "target": "rustty-datastruct",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-bench",
+   "target": "rustty-identity",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-bench",
+   "target": "rustty-lib",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-bench",
+   "target": "rustty-os",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-bench",
+   "target": "rustty-simd",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-bench",
+   "target": "rustty-synthetic",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-bench",
+   "target": "rustty-unicode",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-bench",
+   "target": "rustty-vt",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-bench",
+   "target": "rustty-zigstd",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-bench",
+   "target": "rustty-vt",
+   "kind": "dev",
+   "optional": false
+  },
+  {
+   "source": "rustty-cli",
+   "target": "rustty-apprt",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-cli",
+   "target": "rustty-apprt-api",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-cli",
+   "target": "rustty-args",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-cli",
+   "target": "rustty-build-config",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-cli",
+   "target": "rustty-cfg-fmt",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-cli",
+   "target": "rustty-config",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-cli",
+   "target": "rustty-core",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-cli",
+   "target": "rustty-crash",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-cli",
+   "target": "rustty-font",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-cli",
+   "target": "rustty-font-shaper",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-cli",
+   "target": "rustty-global",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-cli",
+   "target": "rustty-identity",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-cli",
+   "target": "rustty-input",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-cli",
+   "target": "rustty-os",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-cli",
+   "target": "rustty-terminfo",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-cli",
+   "target": "rustty-vaxis",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-cli",
+   "target": "rustty-version",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-cli",
+   "target": "rustty-vt",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-cli",
+   "target": "rustty-xev",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-cli",
+   "target": "rustty-zf",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-cli",
+   "target": "rustty-zigstd",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-cli",
+   "target": "zlib-sys",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-cli",
+   "target": "rustty-helpgen",
+   "kind": "build",
+   "optional": false
+  },
+  {
+   "source": "rustty-cli",
+   "target": "zlib-sys",
+   "kind": "build",
+   "optional": false
+  },
+  {
+   "source": "rustty-vaxis",
+   "target": "rustty-zigimg",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-vaxis",
+   "target": "rustty-zigstd",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-vaxis",
+   "target": "rustty-wuffs",
+   "kind": "dev",
+   "optional": false
+  },
+  {
+   "source": "rustty-zigimg",
+   "target": "rustty-wuffs",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-zigimg",
+   "target": "zlib-sys",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-extra",
+   "target": "rustty-build-config",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-extra",
+   "target": "rustty-cfg-fmt",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-extra",
+   "target": "rustty-cli",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-extra",
+   "target": "rustty-config",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-extra",
+   "target": "rustty-identity",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-extra",
+   "target": "rustty-input",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-extra",
+   "target": "rustty-version",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty",
+   "target": "rustty-apprt",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty",
+   "target": "rustty-build-config",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty",
+   "target": "rustty-cli",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty",
+   "target": "rustty-core",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty",
+   "target": "rustty-global",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty",
+   "target": "rustty-identity",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty",
+   "target": "rustty-build-config",
+   "kind": "dev",
+   "optional": false
+  },
+  {
+   "source": "rustty",
+   "target": "rustty-apprt",
+   "kind": "dev",
+   "optional": false
+  },
+  {
+   "source": "libpng-sys",
+   "target": "zlib-sys",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-wasm",
+   "target": "rustty-config",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-wasm",
+   "target": "rustty-font",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-wasm",
+   "target": "rustty-font-shaper",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-wasm",
+   "target": "rustty-os",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-wasm",
+   "target": "rustty-vt",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-web-canvas",
+   "target": "rustty-font",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-web-canvas",
+   "target": "rustty-font-shaper",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "rustty-web-canvas",
+   "target": "rustty-vt-c",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "xtask",
+   "target": "rustty-extra",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "xtask",
+   "target": "rustty-terminfo",
+   "kind": "normal",
+   "optional": false
+  },
+  {
+   "source": "xtask",
+   "target": "rustty-version",
+   "kind": "normal",
+   "optional": false
+  }
+ ],
+ "notes": "Workspace-internal edges from `cargo metadata --no-deps --offline`; kind in {normal,build,dev}; depth = longest normal/build path to a leaf",
+ "layering_decisions": [
+  {
+   "id": "D1",
+   "claim": "rustty-font is pure and BELOW rustty-vt; rustty-font has no edge to rustty-vt; the shaper tier (rustty-font-shaper: CoreText/FreeType/HarfBuzz) sits ABOVE vt",
+   "edges": [
+    [
+     "rustty-vt",
+     "rustty-font"
+    ],
+    [
+     "rustty-font-shaper",
+     "rustty-vt"
+    ],
+    [
+     "rustty-font-shaper",
+     "rustty-font"
+    ]
+   ]
+  },
+  {
+   "id": "renderer-config",
+   "claim": "rustty-renderer defines a RendererConfig accessor trait (crates/rustty-renderer/src/config.rs:42) implemented in rustty-config (src/renderer_config.rs); renderer never names a config type, config depends on renderer",
+   "edges": [
+    [
+     "rustty-config",
+     "rustty-renderer"
+    ]
+   ]
+  },
+  {
+   "id": "command-termio",
+   "claim": "Ghostty's src/Command.zig lives in rustty-termio (crates/rustty-termio/src/command.rs), not rustty-core, to avoid a core<->termio cycle",
+   "edges": [
+    [
+     "rustty-core",
+     "rustty-termio"
+    ]
+   ]
+  },
+  {
+   "id": "vt-c-sink",
+   "claim": "terminal/c split out as rustty-vt-c, a sink over rustty-vt (cycle break #4)",
+   "edges": [
+    [
+     "rustty-vt-c",
+     "rustty-vt"
+    ]
+   ]
+  },
+  {
+   "id": "apprt-api",
+   "claim": "apprt interface extracted to rustty-apprt-api so core depends on an interface, not on apprt backends",
+   "edges": [
+    [
+     "rustty-core",
+     "rustty-apprt-api"
+    ],
+    [
+     "rustty-apprt",
+     "rustty-core"
+    ]
+   ]
+  },
+  {
+   "id": "global",
+   "claim": "global.zig (the master hub of Ghostty's 345-file import SCC) split into leaf rustty-global; wiring moved up into core",
+   "edges": [
+    [
+     "rustty-xev",
+     "rustty-global"
+    ]
+   ]
+  }
+ ]
+}

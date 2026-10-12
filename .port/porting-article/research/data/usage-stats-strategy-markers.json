@@ -1,0 +1,62 @@
+[
+ {
+  "date": "2026-06-21",
+  "commit": "15c1a9bd7",
+  "label": "Port starts: phase-1 workspace scaffold + phase-0 artifacts"
+ },
+ {
+  "date": "2026-06-21",
+  "commit": "d9fd637ce",
+  "label": "Miri adopted as primary memory/UB/leak gate (G6)"
+ },
+ {
+  "date": "2026-06-22",
+  "commit": "57e999739",
+  "label": "First Workflow orchestration script committed"
+ },
+ {
+  "date": "2026-07-10",
+  "commit": "2c03357ce",
+  "label": "Bun-rewrite learnings + validation sweep #1, realignment plan"
+ },
+ {
+  "date": "2026-07-10",
+  "commit": "ccd14200e",
+  "label": "PORT_RULES R7-R12 ratified (incl. adversarial verification + LIFETIMES)"
+ },
+ {
+  "date": "2026-07-10",
+  "commit": "8f6d781dc",
+  "label": "LIFETIMES.tsv pointer-field ownership ledger (retroactive audit)"
+ },
+ {
+  "date": "2026-07-16",
+  "commit": "",
+  "label": "Codex (gpt-5.5) burst on Mac, Jul 16 - Aug 2 (from usage data)"
+ },
+ {
+  "date": "2026-07-18",
+  "commit": "",
+  "label": "Linux VM (rvm) Claude sessions, Jul 18 - Aug 14 (from usage data)"
+ },
+ {
+  "date": "2026-07-28",
+  "commit": "",
+  "label": "Commit trailers switch Claude Opus 4.8 -> Claude Opus 5"
+ },
+ {
+  "date": "2026-09-01",
+  "commit": "62c1690d9",
+  "label": "Phase 6: oracle pin advance 88f57ee66 -> 20abdb50a; Opus 5.5 orchestrator session begins"
+ },
+ {
+  "date": "2026-09-28",
+  "commit": "9f007b10e",
+  "label": "Phase 7: oracle pin advance 20abdb50a -> 12752b2ac"
+ },
+ {
+  "date": "2026-10-07",
+  "commit": "7719ebb4d",
+  "label": "Phase 8: oracle pin advance 12752b2ac -> a60e9e2a5"
+ }
+]

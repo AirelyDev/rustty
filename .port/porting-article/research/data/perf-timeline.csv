@@ -1,0 +1,9 @@
+date,event,wins_of_total,suite_delta_pct,oracle_rev,commit,provenance
+2026-07-15,first head-to-head (release profile),0/14 (1 tie),42.0,4749c4e93,10cc614,MEASURED from perf/*.jsonl
+2026-07-16,round 1 (profile + inline/DFA/destage/SoA),10/14,-5.8,4749c4e93,9e1837b,PERF_LOG.md
+2026-07-16,"round 2 (boxed Action, packed Style::eql)",12/14,-10.0,4749c4e93,9e386ab,PERF_LOG.md
+2026-07-16,round 3 (outline cold arms; parity bug found),13/14 (1 parity),-11.1,4749c4e93,10f2091,PERF_LOG.md
+2026-07-16,"rounds 4+5 (parser fast path, style runs, simd fairness)",14/14,-21.7,4749c4e93,349e5d1,PERF_LOG.md
+2026-07-30,"WS10 T21 paired re-measure (provisional, load 6.08)",13/13 comparable,,4749c4e93,a6537673a,PERF_LOG.md WS10
+2026-08-28,"33-config full suite vs current main, after comptime fixes",23/33,-15.2,4540d499a,"1d50073f6,2a84648ea",perf-new7/RESULTS.md
+2026-10-07,idle run vs oracle rebuilt at pin,14/14,-27.9,12752b2ac,b61e273e6,VERIFICATION_DEBT.md V17

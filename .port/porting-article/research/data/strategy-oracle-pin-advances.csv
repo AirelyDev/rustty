@@ -1,0 +1,8 @@
+advanced,from_sha,to_sha,phase,upstream_commits,upstream_non_merge
+2026-07-31,4749c4e93,6ad1fe7d8,Phase 3,365,250
+2026-08-17,6ad1fe7d8,12967b68f,Phase 4,543,359
+2026-08-25,12967b68f,683d8db64,Phase 5,245,169
+2026-08-26,683d8db64,88f57ee66,Gap-close,4,2
+2026-09-01,88f57ee66,20abdb50a,Phase 6,121,74
+2026-09-28,20abdb50a,12752b2ac,Phase 7,333,234
+2026-10-07,12752b2ac,a60e9e2a5,Phase 8,107,69

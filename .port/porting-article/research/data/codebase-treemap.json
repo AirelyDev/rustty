@@ -1,0 +1,432 @@
+{
+ "name": "rustty",
+ "children": [
+  {
+   "name": "Foundations",
+   "value": 35613,
+   "children": [
+    {
+     "name": "rustty-os",
+     "value": 9531,
+     "tests": 143,
+     "unsafe": 230
+    },
+    {
+     "name": "rustty-datastruct",
+     "value": 5814,
+     "tests": 100,
+     "unsafe": 216
+    },
+    {
+     "name": "rustty-unicode",
+     "value": 5386,
+     "tests": 23,
+     "unsafe": 2
+    },
+    {
+     "name": "rustty-zigstd",
+     "value": 4720,
+     "tests": 88,
+     "unsafe": 113
+    },
+    {
+     "name": "rustty-lib",
+     "value": 2621,
+     "tests": 42,
+     "unsafe": 41
+    },
+    {
+     "name": "rustty-crash",
+     "value": 2226,
+     "tests": 27,
+     "unsafe": 65
+    },
+    {
+     "name": "rustty-simd",
+     "value": 1666,
+     "tests": 42,
+     "unsafe": 14
+    },
+    {
+     "name": "rustty-global",
+     "value": 1123,
+     "tests": 25,
+     "unsafe": 15
+    },
+    {
+     "name": "rustty-render-types",
+     "value": 798,
+     "tests": 12,
+     "unsafe": 12
+    },
+    {
+     "name": "rustty-build-config",
+     "value": 615,
+     "tests": 5,
+     "unsafe": 0
+    },
+    {
+     "name": "rustty-version",
+     "value": 439,
+     "tests": 6,
+     "unsafe": 0
+    },
+    {
+     "name": "rustty-util",
+     "value": 416,
+     "tests": 6,
+     "unsafe": 1
+    },
+    {
+     "name": "rustty-helpgen",
+     "value": 153,
+     "tests": 6,
+     "unsafe": 0
+    },
+    {
+     "name": "rustty-identity",
+     "value": 105,
+     "tests": 2,
+     "unsafe": 0
+    }
+   ]
+  },
+  {
+   "name": "VT engine",
+   "value": 174265,
+   "children": [
+    {
+     "name": "rustty-vt",
+     "value": 174265,
+     "tests": 3474,
+     "unsafe": 7979
+    }
+   ]
+  },
+  {
+   "name": "C ABI / embedding",
+   "value": 46009,
+   "children": [
+    {
+     "name": "rustty-vt-c",
+     "value": 41533,
+     "tests": 606,
+     "unsafe": 5303
+    },
+    {
+     "name": "rustty-apprt-c",
+     "value": 3938,
+     "tests": 53,
+     "unsafe": 357
+    },
+    {
+     "name": "rustty-wasm",
+     "value": 275,
+     "tests": 1,
+     "unsafe": 16
+    },
+    {
+     "name": "rustty-web-canvas",
+     "value": 263,
+     "tests": 1,
+     "unsafe": 26
+    }
+   ]
+  },
+  {
+   "name": "Font",
+   "value": 36697,
+   "children": [
+    {
+     "name": "rustty-font-shaper",
+     "value": 20930,
+     "tests": 202,
+     "unsafe": 837
+    },
+    {
+     "name": "rustty-font",
+     "value": 15767,
+     "tests": 90,
+     "unsafe": 38
+    }
+   ]
+  },
+  {
+   "name": "Input / config",
+   "value": 33103,
+   "children": [
+    {
+     "name": "rustty-config",
+     "value": 19636,
+     "tests": 274,
+     "unsafe": 93
+    },
+    {
+     "name": "rustty-input",
+     "value": 8645,
+     "tests": 124,
+     "unsafe": 26
+    },
+    {
+     "name": "rustty-args",
+     "value": 3738,
+     "tests": 81,
+     "unsafe": 1
+    },
+    {
+     "name": "rustty-terminfo",
+     "value": 772,
+     "tests": 8,
+     "unsafe": 0
+    },
+    {
+     "name": "rustty-cfg-fmt",
+     "value": 312,
+     "tests": 9,
+     "unsafe": 0
+    }
+   ]
+  },
+  {
+   "name": "Rendering",
+   "value": 33537,
+   "children": [
+    {
+     "name": "rustty-renderer",
+     "value": 26451,
+     "tests": 242,
+     "unsafe": 948
+    },
+    {
+     "name": "rustty-inspector",
+     "value": 7086,
+     "tests": 23,
+     "unsafe": 1155
+    }
+   ]
+  },
+  {
+   "name": "Runtime (termio/core/apprt)",
+   "value": 59778,
+   "children": [
+    {
+     "name": "rustty-apprt",
+     "value": 30399,
+     "tests": 277,
+     "unsafe": 536
+    },
+    {
+     "name": "rustty-termio",
+     "value": 13942,
+     "tests": 138,
+     "unsafe": 539
+    },
+    {
+     "name": "rustty-core",
+     "value": 13206,
+     "tests": 91,
+     "unsafe": 969
+    },
+    {
+     "name": "rustty-apprt-api",
+     "value": 2231,
+     "tests": 28,
+     "unsafe": 25
+    }
+   ]
+  },
+  {
+   "name": "CLI / binary / tools",
+   "value": 30524,
+   "children": [
+    {
+     "name": "rustty-cli",
+     "value": 11474,
+     "tests": 133,
+     "unsafe": 56
+    },
+    {
+     "name": "xtask",
+     "value": 7157,
+     "tests": 128,
+     "unsafe": 0
+    },
+    {
+     "name": "rustty-bench",
+     "value": 5620,
+     "tests": 53,
+     "unsafe": 197
+    },
+    {
+     "name": "rustty-synthetic",
+     "value": 2792,
+     "tests": 27,
+     "unsafe": 4
+    },
+    {
+     "name": "rustty-extra",
+     "value": 2485,
+     "tests": 39,
+     "unsafe": 0
+    },
+    {
+     "name": "rustty",
+     "value": 996,
+     "tests": 26,
+     "unsafe": 4
+    }
+   ]
+  },
+  {
+   "name": "Ported Zig dependencies",
+   "value": 58102,
+   "children": [
+    {
+     "name": "rustty-xev",
+     "value": 30372,
+     "tests": 204,
+     "unsafe": 2032
+    },
+    {
+     "name": "rustty-vaxis",
+     "value": 13862,
+     "tests": 174,
+     "unsafe": 220
+    },
+    {
+     "name": "rustty-z2d",
+     "value": 9907,
+     "tests": 105,
+     "unsafe": 0
+    },
+    {
+     "name": "rustty-zf",
+     "value": 1423,
+     "tests": 12,
+     "unsafe": 20
+    },
+    {
+     "name": "rustty-wuffs",
+     "value": 1096,
+     "tests": 24,
+     "unsafe": 52
+    },
+    {
+     "name": "rustty-oniguruma",
+     "value": 780,
+     "tests": 2,
+     "unsafe": 13
+    },
+    {
+     "name": "rustty-zigimg",
+     "value": 662,
+     "tests": 28,
+     "unsafe": 5
+    }
+   ]
+  },
+  {
+   "name": "FFI -sys bindings",
+   "value": 4100,
+   "children": [
+    {
+     "name": "dcimgui-sys",
+     "value": 610,
+     "tests": 12,
+     "unsafe": 7
+    },
+    {
+     "name": "highway-sys",
+     "value": 535,
+     "tests": 19,
+     "unsafe": 26
+    },
+    {
+     "name": "zlib-sys",
+     "value": 425,
+     "tests": 11,
+     "unsafe": 25
+    },
+    {
+     "name": "fontconfig-sys",
+     "value": 382,
+     "tests": 4,
+     "unsafe": 3
+    },
+    {
+     "name": "sentry-sys",
+     "value": 297,
+     "tests": 4,
+     "unsafe": 2
+    },
+    {
+     "name": "libxml2-sys",
+     "value": 260,
+     "tests": 1,
+     "unsafe": 2
+    },
+    {
+     "name": "oniguruma-sys",
+     "value": 211,
+     "tests": 1,
+     "unsafe": 1
+    },
+    {
+     "name": "glslang-sys",
+     "value": 198,
+     "tests": 1,
+     "unsafe": 1
+    },
+    {
+     "name": "freetype-sys",
+     "value": 190,
+     "tests": 1,
+     "unsafe": 1
+    },
+    {
+     "name": "wuffs-sys",
+     "value": 190,
+     "tests": 3,
+     "unsafe": 9
+    },
+    {
+     "name": "spirv-cross-sys",
+     "value": 173,
+     "tests": 1,
+     "unsafe": 1
+    },
+    {
+     "name": "harfbuzz-sys",
+     "value": 171,
+     "tests": 1,
+     "unsafe": 1
+    },
+    {
+     "name": "breakpad-sys",
+     "value": 140,
+     "tests": 1,
+     "unsafe": 0
+    },
+    {
+     "name": "gettext-sys",
+     "value": 137,
+     "tests": 2,
+     "unsafe": 7
+    },
+    {
+     "name": "libpng-sys",
+     "value": 111,
+     "tests": 2,
+     "unsafe": 3
+    },
+    {
+     "name": "simdutf-sys",
+     "value": 70,
+     "tests": 2,
+     "unsafe": 2
+    }
+   ]
+  }
+ ],
+ "note": "value = Rust code lines (tokei, excl. comments/blanks/vendor) at 1d22ba80d"
+}

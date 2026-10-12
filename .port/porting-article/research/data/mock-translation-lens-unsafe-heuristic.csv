@@ -1,0 +1,7 @@
+category,same_line_unsafe_blocks_non_test
+raw-pointer deref / arithmetic,3454
+"other (multi-line block, call of unsafe fn, ...)",3213
+FFI / foreign call,1177
+slice from raw parts,109
+intrusive link (field address),73
+container_of / provenance,1

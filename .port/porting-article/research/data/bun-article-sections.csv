@@ -1,0 +1,40 @@
+order,level,heading,anchor,covers,words_incl_code_est
+0,1,Rewriting Bun in Rust (intro),,"Disclosure (Anthropic acquisition, pre-release model); Bun origin as esbuild Go->Zig port; scope list; 22M monthly downloads; 13-item list of v1.3.14 memory-safety bugs (UAF, double-free, leaks, race)",566
+1,3,What we were already doing,what-we-were-already-doing,"Existing safety net: patched Zig for ASan, ASan on every commit, ReleaseSafe on Windows, 24/7 Fuzzilli, leak tests",66
+2,2,Just be really smart and don't make mistakes?,just-be-really-smart-and-don-t-make-mistakes,"GC + manual memory mix as root cause; defer vs destructor vs Drop table; arenas/refcount/attention; style guides (TigerStyle, Google C++) fail at enforcement; SharedPtr Zig code sample",596
+3,2,What about C/C++?,what-about-c-c,"20% of Bun is C++; embedded libs (JSC, uWS, lshpack/lsquic, BoringSSL, SQLite); C++ still relies on style guides",101
+4,2,Why Rust?,why-rust,"UAF/double-free/forgot-to-free become compile errors; 535,496 Zig LOC; mechanical port + same language-independent TS test suite; homegrown smart pointers rejected",268
+5,2,"Claude, rewrite Bun in Rust.",claude-rewrite-bun-in-rust,"Two big questions: all-at-once vs incremental (all-at-once); transpile-looking port, refactor to idiomatic after v1.4",192
+6,2,Loops that write & review code,loops-that-write-review-code,Engineering as task/review/apply loops (pseudocode); ~50 dynamic workflows over 11 days; list of workflow kinds; fix the process not the code,270
+7,3,Adversarial review,adversarial-review,Reviewer in separate context exhaustively looks for reasons code is wrong,24
+8,4,Split context windows,split-context-windows,1 implementer + >=2 adversarial reviewers; implementer never reviews; interactive 3-bug replay widget,533
+9,2,What does this look like?,what-does-this-look-like,De-risk before spending,18
+10,3,Prep work,prep-work,~3h dialogue -> PORTING.md; lifetime-analysis workflow prompt (verbatim) -> LIFETIMES.tsv with 2 adversarial reviewers; joint adversarial review of both docs,168
+11,3,Trial run,trial-run,"3 of 1,448 files first: 1 implementer, 2 reviewers, 1 fixer",59
+12,3,False starts,false-starts,git stash/reset races between agents; rule: no stash/reset/cargo/slow commands; 4 worktree shards x 16 Claudes,152
+13,3,Finally writing the code,finally-writing-the-code,"Peak ~1,300 LOC/min; every line double-reviewed; none of it worked yet; commits-per-hour heatmap; EC2 IOPS stall note",108
+14,3,Compiler errors as a work queue,compiler-errors-as-a-work-queue,"~100 crates; cyclic-dependency classify+refactor workflows; ~16,000 errors; per-crate cargo check -> fix -> 2 review -> apply; phase-D replay widget",461
+15,4,Another false start,another-false-start,Agents stubbed functions and wrote long justification comments; reviewer rule rejecting paragraph-long justifications,72
+16,3,Smoke tests,smoke-tests,bun --version link errors and panics; per-subcommand stacktrace loop,92
+17,3,Get the test suite passing locally,get-the-test-suite-passing-locally,~100 random test files per round sharded by folder over 4 worktrees; implementer/2 reviewers/fixer,47
+18,4,Even more false starts,even-more-false-starts,"Heavy tests (leaks, next dev HMR, socket exhaustion, GB disk IO, 10k processes) need systemd-run cgroup isolation; disk-full crashes",114
+19,3,Get the test suite passing in CI,get-the-test-suite-passing-in-ci,972 -> 23 failing files in 2 days; Linux green 1.5 days later; Buildkite race-to-green widget; cleanup/dedup/unsafe workflows,200
+20,3,Merging the Rust rewrite,merging-the-rust-rewrite,"100% suite green on all platforms, manual check tests not skipped; merge != release",74
+21,3,Stats,stats,"4 workflows x 16 Claudes = 64; git-log replay widget (+1,009,272 landed)",100
+22,4,0 tests skipped or deleted,0-tests-skipped-or-deleted,"Per-platform expect()/tests/files table; 6,778 commits; token counts and ~$165k; 3 engineer-years counterfactual",182
+23,3,The work continues,the-work-continues,"11 security-review rounds; 24/7 coverage-guided fuzzing of every parser (100B execs, ~15 PRs); unsafe ~4% of code, 78% single-line blocks",188
+24,3,Porting mistakes,porting-mistakes,"19 known regressions, all fixed; mostly syntactically identical / semantically different code",52
+25,4,Side effect inside debug_assert!,side-effect-inside-debug-assert,Zig assert evaluates arg in release; Rust debug_assert! erases it (#30678),113
+26,4,Slices of odd length,slices-of-odd-length,reinterpretSlice truncates odd byte; bytemuck::cast_slice panics (#31188),57
+27,4,Bounds checks,bounds-checks,"ReleaseFast had no bounds checks; placeholder const 64 vs count/4=2048 lowered ceiling 8.4M -> 270,272 and exposed ported off-by-one (#31503)",126
+28,4,comptime format strings,comptime-format-strings,comptime fmt marker rewriting became runtime and ate OSC 8 ST terminator; needs macro (#30693),123
+29,2,Bun is better in Rust,bun-is-better-in-rust,v1.4.0 fixes 128 bugs reproducible in v1.3.14,22
+30,3,Reduced memory usage,reduced-memory-usage,Drop vs defer code samples,150
+31,4,We fixed every instrumentable memory leak,we-fixed-every-instrumentable-memory-leak,"LSan tracks all native allocs; Bun.build x2000 table (6,745 MB -> 609 MB)",169
+32,3,Smaller binary size,smaller-binary-size,"-3.8/-5.5/-6.8 MB (Win/mac/Linux) from port (comptime bloat); + ICF, ICU trimming -> ~20%; size table; embedded tweet",141
+33,3,Reduced stack space usage,reduced-stack-space-usage,"llvm.lifetime.start/end stack-slot reuse; TOML depth-25,000 test output that changed behaviour",201
+34,3,2% - 5% faster,2-5-faster,Cross-language LTO; oha HTTP throughput table and hyperfine app table on EC2 Xeon 8488C,154
+35,2,Production,production,Prisma Compute beta quote; Claude Code v2.1.181 uses Rust Bun; startup p50 517 -> 464 ms image,105
+36,2,Shipping,shipping,"v1.3.14 last Zig, v1.4.0 first Rust; canary command",39
+37,2,Maintainability,maintainability,Side-by-side Zig vs Rust canMergeSymbols showing comptime bool -> const generic and verbatim comments; how PR was reviewed,253
+38,2,What's next,what-s-next,"Borrow checker, Miri in CI for growing chunk, LSan, fuzzing; 11 days vs team-year",113

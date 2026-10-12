@@ -1,0 +1,12 @@
+experiment,target_bench,measured_effect,why,date,provenance
+fat/thin LTO + cgu=1 + panic=abort,terminal-parser,+65% (322 -> 531 ms); osc/clone -16%,per-byte parser path over-inlined; register pressure (hypothesis),2026-07-16,PERF_LOG.md LTO finding
+color-list prealloc (SegmentedList inline),osc-parser,0 osc gain; terminal-stream canary -3.3% when removed,no win; reverted 408ddaa,2026-07-16,PERF_LOG.md
+by-value InlineVec Action payloads,terminal-parser,+25..60%,droppy OscDispatch variant forces full 192-216 B array materialization per byte,2026-07-16,PERF_LOG.md Round 2
+csel mask restructure in copy_with_managed_reset,screen-clone.clone,54.4 -> 54.9 ms,LLVM re-fuses masks; constants die across call,2026-07-16,PERF_LOG.md Round 3
+style value-memoization in render,screen-clone.render,+42% (22.64 vs 15.94 ms),SROA splits cached 21 B Style into ~7 GPRs; 15 scalar stores per hit,2026-07-16,PERF_LOG.md Round 4
+plain-run memcpy + outlined per-cell handler,screen-clone.clone,+28% (52.5 -> 67 ms),per-cell outlined call + scan overhead swamped savings,2026-07-16,PERF_LOG.md Round 5
+branchless UTF-8 DFA,decode family,-94% noop lane (DCE) but +12..22% real lanes,serializes loop-carried state chain,2026-07-16,PERF_LOG.md Round 5
+"OSC per-byte loop variants x4 (hot-word, repr(C), state-first, cold-alloc-arm)",osc-parser,all worse,M4 store-forward renaming floor (NONE-SAFE),2026-07-16,PERF_LOG.md Round 5
+hot assert! -> debug_assert!,terminal-resize.rows,"neutral on cols, reproducibly worse on rows",ReleaseFast assert keeps the unreachable hint; debug_assert gives neither check nor hint,2026-08-28,perf-new7/DIAGNOSIS.md #9
+transposed 16x256 DFA table,decode family,+5..13%,512 B -> 4 KB table footprint beat shorter chain,2026-08-28,perf-new7/RESULTS.md wave 2
+grapheme Value packed back to u8,grapheme-break.table,+7%,aligned 2-byte pair load beats unpack ALU,2026-08-28,perf-new7/RESULTS.md wave 2

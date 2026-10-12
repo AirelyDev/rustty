@@ -1,0 +1,5 @@
+session,tool,machine,project,first_ts,last_ts,prompts,reason,decision
+1662fcc7-74d5-40b1-9ba6-991a522c3d1e,claude,mac,~/projects,2026-06-21T04:42:35Z,2026-06-21T07:33:57Z,10,port-decision,include
+bc21787e-66b8-4123-8c4d-fc49a34e76db,claude,mac,~/projects,2026-06-21T06:05:33Z,2026-06-21T06:06:22Z,3,other,exclude
+3afc661c-69f6-438e-b09c-9f602d70d2da,claude,mac,~/projects/rusty,2026-06-21T07:37:35Z,2026-06-21T07:37:35Z,1,naming,include
+c1cd2cfc-e70d-4a7a-9036-f8ff095916f5,claude,mac,~/projects/ghostty,2026-06-24T00:32:45Z,2026-06-24T00:44:03Z,2,ghostty-checkout,include

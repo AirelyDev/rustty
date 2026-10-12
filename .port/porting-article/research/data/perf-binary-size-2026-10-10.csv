@@ -1,0 +1,4 @@
+artifact,ghostty_bytes,rustty_counterpart,rustty_bytes,ratio,note,provenance
+ghostty-bench (ReleaseFast),4110400,rustty-bench (release-fast),2991728,0.728,-27.2%,"MEASURED by G8 --strict at 246f70287 (.port/phase-8/final/perf/g8-strict.txt); oracle bytes from BASELINE.json re-based at 949584651"
+ghostty-gen (ReleaseFast),464728,rustty-gen (release-fast),505296,1.087,+8.7%,"MEASURED by G8 --strict at 246f70287 (.port/phase-8/final/perf/g8-strict.txt)"
+libghostty-vt.0.1.0.dylib,1964784,librustty_vt_c.dylib (release),2107024,1.072,+7.2%,"MEASURED by G8 --strict at 246f70287 (.port/phase-8/final/perf/g8-strict.txt)"

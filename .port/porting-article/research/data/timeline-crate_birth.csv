@@ -1,0 +1,62 @@
+crate,first_commit,first_date,first_subject,exists_at_head,first_date_rust_loc_ge_1000,kind
+dcimgui-sys,15c1a9bd7,2026-06-21,,yes,,sys
+fontconfig-sys,15c1a9bd7,2026-06-21,,yes,,sys
+freetype-sys,15c1a9bd7,2026-06-21,,yes,,sys
+gettext-sys,f7eba28e9,2026-06-21,,yes,,sys
+glslang-sys,15c1a9bd7,2026-06-21,,yes,,sys
+harfbuzz-sys,15c1a9bd7,2026-06-21,,yes,,sys
+highway-sys,15c1a9bd7,2026-06-21,,yes,,sys
+libpng-sys,15c1a9bd7,2026-06-21,,yes,,sys
+oniguruma-sys,15c1a9bd7,2026-06-21,,yes,,sys
+rustty,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-07-17,crate
+rustty-apprt,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-07-02,crate
+rustty-apprt-api,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-07-01,crate
+rustty-args,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-06-25,crate
+rustty-bench,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-07-09,crate
+rustty-build-config,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-09-11,crate
+rustty-cfg-fmt,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,,crate
+rustty-cli,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-07-02,crate
+rustty-config,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-06-25,crate
+rustty-core,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-07-02,crate
+rustty-crash,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-07-01,crate
+rustty-datastruct,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-06-21,crate
+rustty-font,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-06-25,crate
+rustty-global,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-07-30,crate
+rustty-identity,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,,crate
+rustty-input,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-06-25,crate
+rustty-inspector,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-07-14,crate
+rustty-lib,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-06-21,crate
+rustty-os,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-06-21,crate
+rustty-render-types,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-06-22,crate
+rustty-renderer,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-07-01,crate
+rustty-simd,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-06-21,crate
+rustty-synthetic,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-07-09,crate
+rustty-terminfo,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-08-17,crate
+rustty-termio,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-07-01,crate
+rustty-unicode,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-06-21,crate
+rustty-util,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,,crate
+rustty-vt,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-06-21,crate
+rustty-vt-c,15c1a9bd7,2026-06-21,rustty: phase-1 workspace scaffold + phase-0 artifacts,yes,2026-06-25,crate
+sentry-sys,15c1a9bd7,2026-06-21,,yes,,sys
+simdutf-sys,15c1a9bd7,2026-06-21,,yes,,sys
+spirv-cross-sys,15c1a9bd7,2026-06-21,,yes,,sys
+wuffs-sys,15c1a9bd7,2026-06-21,,yes,,sys
+zlib-sys,15c1a9bd7,2026-06-21,,yes,,sys
+rustty-zigstd,8b55b12ba,2026-06-22,rustty: add rustty-zigstd infra crate (skeleton),yes,2026-06-22,crate
+rustty-font-shaper,89d921595,2026-06-30,rustty: font-shaper F3 scaffold + face backend selector,yes,2026-06-30,crate
+rustty-z2d,0467b4db9,2026-06-30,rustty: port z2d subset (2D vector rasterizer) -> rustty-z2d,yes,2026-06-30,crate
+rustty-oniguruma,61ced867b,2026-07-01,rustty: rustty-oniguruma safe wrapper (oni::* API) + tests,yes,2026-07-01,crate
+rustty-apprt-c,7e311ab24,2026-07-02,rustty: embedded E0 — apprt-c crate scaffold + none/browser backends + rustty_init,yes,2026-07-02,crate
+rustty-xev,b305daaa9,2026-07-02,rustty: core C0 — xev crate; zigstd Mutex; apprt-api growth methods; mailbox Timeout/Size; type-Core decision,yes,2026-07-03,crate
+rustty-helpgen,656ceed78,2026-07-03,rustty: help_strings doc-table generator + un-defer explain_config + --docs/+help,yes,,crate
+rustty-wuffs,498aeac27,2026-07-08,rustty: renderer background-image pipeline — wuffs PNG/JPEG decode + rustty-wuffs crate,yes,2026-07-15,crate
+rustty-extra,b6217aa36,2026-07-09,rustty: sub-project #3 — port src/extra/** (shell-completion + editor-syntax generators; byte-exact),yes,2026-07-09,crate
+rustty-vaxis,2e8e10e50,2026-07-09,rustty: TUI-CLI / vaxis chunk 1a — port the vaxis value types into rustty-vaxis (Miri-clean),yes,2026-07-09,crate
+rustty-zf,56d139636,2026-07-09,rustty: TUI-CLI groundwork — port the zf fuzzy finder into rustty-zf (rank bit-faithful; Miri-clean),yes,2026-07-09,crate
+README.md,648d1afeb,2026-07-15,,yes,,sys
+rustty-wasm,992f91f30,2026-07-15,rustty: WASM/web target — headless C-ABI module + wasm32 os proof (completeness-fill: wasm),yes,,crate
+rustty-web-canvas,6c432f314,2026-07-15,rustty: web_canvas font backend + true browser-freestanding wasm,yes,,crate
+libxml2-sys,af0d065d9,2026-07-17,,yes,,sys
+rustty-zigimg,b4907ad6f,2026-07-29,rustty-zigimg: crate skeleton + decode (wuffs png/jpeg) + rgb24/rgba32 convert + PNG encoder over vendored zlib (WS12 T6,yes,2026-07-30,crate
+breakpad-sys,8120dd10d,2026-08-11,,yes,,sys
+rustty-version,9582c0f36,2026-09-23,parity T-B fix round: the git-derived version is its own leaf crate; UD150 fixed under R13; N110,yes,,crate

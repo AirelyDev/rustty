@@ -1,0 +1,206 @@
+id,klass,live,upstream_project,method_r1,method_r2,method_r2_detail,confidence,basis,source
+UD1,crash,True,ghostty,line-by-line port review,review/reading,parity audit (side-by-side file audit),high,S51-F7,hand pass r2
+UD2,crash,True,ghostty,line-by-line port review,review/reading,adversarial reviewer of a task,medium,found by task 20 fixing UD1; port panicked in glib-rs child_value,hand pass r2
+UD3,crash,True,ghostty,line-by-line port review,review/reading,parity audit (side-by-side file audit),high,S60-F1/F6; trigger measured on Linux VM,hand pass r2
+UD4,crash,True,ghostty,line-by-line port review,review/reading,parity audit (side-by-side file audit),high,S50-F1,hand pass r2
+UD5,latent,False,ghostty,line-by-line port review,review/reading,parity audit (side-by-side file audit),high,S59-F3; port panicked on () body,hand pass r2
+UD6,crash,True,ghostty,line-by-line port review,review/reading,defect sweep (R13 inventory / port-note sweep),high,N39 found by R13 inventory code sweep,hand pass r2
+UD7,crash,True,ghostty,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD8,crash,True,ghostty,cross-platform bring-up (Windows/Linux VM),cross-platform bring-up,,as round 1 (keyword heuristic),cross-platform bring-up (Windows/Linux VM),round-1 heuristic
+UD9,crash,True,ghostty,line-by-line port review,review/reading,defect sweep (R13 inventory / port-note sweep),high,N43 R13 inventory,hand pass r2
+UD10,crash,True,ghostty,cross-platform bring-up (Windows/Linux VM),cross-platform bring-up,,as round 1 (keyword heuristic),cross-platform bring-up (Windows/Linux VM),round-1 heuristic
+UD11,crash,True,ghostty,line-by-line port review,review/reading,adversarial reviewer of a task,high,N44 found by R13-A reviewer,hand pass r2
+UD12,intent-breaking,True,ghostty,line-by-line port review,review/reading,"while translating (session logs, records, port notes)",medium,"tmux control-mode design, confirmed from tmux source by R13-A coordinator",hand pass r2
+UD13,ub,True,GStreamer,line-by-line port review,cross-platform bring-up,Linux GTK/GStreamer test run,medium,phase-3 U1; race measured on Fedora 44 aarch64,hand pass r2
+UD14,test-weakness,False,ghostty,reference test review (test port),test port,,as round 1 (keyword heuristic),reference test review (test port),round-1 heuristic
+UD15,test-weakness,False,ghostty,reference test review (test port),test port,,as round 1 (keyword heuristic),reference test review (test port),round-1 heuristic
+UD16,test-weakness,False,ghostty,reference test review (test port),test port,,as round 1 (keyword heuristic),reference test review (test port),round-1 heuristic
+UD17,test-weakness,False,ghostty,reference test review (test port),test port,,as round 1 (keyword heuristic),reference test review (test port),round-1 heuristic
+UD18,test-weakness,False,ghostty,reference test review (test port),test port,,as round 1 (keyword heuristic),reference test review (test port),round-1 heuristic
+UD19,latent,False,ghostty,line-by-line port review,review/reading,"while translating (session logs, records, port notes)",medium,phase-2 DEFERRALS entry; Linux end-to-end confirmed by task L-1,hand pass r2
+UD20,latent,False,ghostty,code reading (port review),review/reading,code reading (entry says found by reading),as round 1 (keyword heuristic),code reading (port review),round-1 heuristic
+UD21,latent,False,ghostty,line-by-line port review,review/reading,parity audit (side-by-side file audit),high,S79-F1; inventory M65,hand pass r2
+UD22,latent,False,ghostty,line-by-line port review,review/reading,parity audit (side-by-side file audit),high,S68-F3,hand pass r2
+UD23,latent,False,ghostty,line-by-line port review,review/reading,parity audit (side-by-side file audit),high,S69-F4,hand pass r2
+UD24,latent,False,ghostty,line-by-line port review,review/reading,defect sweep (R13 inventory / port-note sweep),high,inventory M71; ported verbatim with note,hand pass r2
+UD25,latent,False,ghostty,line-by-line port review,review/reading,defect sweep (R13 inventory / port-note sweep),high,inventory M72,hand pass r2
+UD26,latent,False,ghostty,line-by-line port review,review/reading,defect sweep (R13 inventory / port-note sweep),high,inventory M73,hand pass r2
+UD27,latent,False,ghostty,code reading (port review),review/reading,code reading (entry says found by reading),as round 1 (keyword heuristic),code reading (port review),round-1 heuristic
+UD28,latent,False,ghostty,line-by-line port review,review/reading,parity audit (side-by-side file audit),high,S155-F3,hand pass r2
+UD29,latent,False,ghostty,compiler/build (porting an unbuilt path),compiling previously-unanalysed code,,as round 1 (keyword heuristic),compiler/build (porting an unbuilt path),round-1 heuristic
+UD30,latent,False,ghostty,line-by-line port review,review/reading,defect sweep (R13 inventory / port-note sweep),high,inventory M53,hand pass r2
+UD31,latent,False,ghostty,line-by-line port review,review/reading,defect sweep (R13 inventory / port-note sweep),high,inventory M54,hand pass r2
+UD32,latent,False,ghostty,line-by-line port review,review/reading,defect sweep (R13 inventory / port-note sweep),high,inventory M55,hand pass r2
+UD33,latent,False,ghostty,line-by-line port review,review/reading,parity audit (side-by-side file audit),medium,"N22; S109-F1, S149-F3",hand pass r2
+UD34,latent,False,ghostty,compiler/build (porting an unbuilt path),compiling previously-unanalysed code,,as round 1 (keyword heuristic),compiler/build (porting an unbuilt path),round-1 heuristic
+UD35,latent,False,ghostty,compiler/build (porting an unbuilt path),compiling previously-unanalysed code,,as round 1 (keyword heuristic),compiler/build (porting an unbuilt path),round-1 heuristic
+UD36,latent,False,ghostty,compiler/build (porting an unbuilt path),compiling previously-unanalysed code,,as round 1 (keyword heuristic),compiler/build (porting an unbuilt path),round-1 heuristic
+UD37,latent,False,ghostty,compiler/build (porting an unbuilt path),compiling previously-unanalysed code,,as round 1 (keyword heuristic),compiler/build (porting an unbuilt path),round-1 heuristic
+UD38,latent,False,ghostty,compiler/build (porting an unbuilt path),compiling previously-unanalysed code,,as round 1 (keyword heuristic),compiler/build (porting an unbuilt path),round-1 heuristic
+UD39,latent,False,ghostty,compiler/build (porting an unbuilt path),compiling previously-unanalysed code,,as round 1 (keyword heuristic),compiler/build (porting an unbuilt path),round-1 heuristic
+UD40,latent,False,ghostty,compiler/build (porting an unbuilt path),compiling previously-unanalysed code,,as round 1 (keyword heuristic),compiler/build (porting an unbuilt path),round-1 heuristic
+UD41,latent,False,ghostty,compiler/build (porting an unbuilt path),compiling previously-unanalysed code,,as round 1 (keyword heuristic),compiler/build (porting an unbuilt path),round-1 heuristic
+UD42,latent,False,ghostty,line-by-line port review,review/reading,"while translating (session logs, records, port notes)",high,phase-3 NON_PORTS E28 (doc typo),hand pass r2
+UD43,latent,False,ghostty,line-by-line port review,review/reading,defect sweep (R13 inventory / port-note sweep),high,inventory M70 (typos),hand pass r2
+UD44,latent,False,ghostty,code reading (port review),review/reading,code reading (entry says found by reading),as round 1 (keyword heuristic),code reading (port review),round-1 heuristic
+UD45,latent,False,ghostty,line-by-line port review,build-system port,,high,libxml2 build.zig ported to build.rs; session sF10,hand pass r2
+UD46,test-weakness,False,libxev,reference test review (test port),test port,,as round 1 (keyword heuristic),reference test review (test port),round-1 heuristic
+UD47,test-weakness,False,libxev,reference test review (test port),test port,,as round 1 (keyword heuristic),reference test review (test port),round-1 heuristic
+UD48,latent,False,libvaxis,line-by-line port review,review/reading,defect sweep (R13 inventory / port-note sweep),high,inventory M77,hand pass r2
+UD49,latent,False,libvaxis,compiler/build (porting an unbuilt path),compiling previously-unanalysed code,,as round 1 (keyword heuristic),compiler/build (porting an unbuilt path),round-1 heuristic
+UD50,latent,False,libxev,line-by-line port review,review/reading,defect sweep (R13 inventory / port-note sweep),high,inventory M79,hand pass r2
+UD51,latent,False,libxev,line-by-line port review,review/reading,defect sweep (R13 inventory / port-note sweep),high,inventory M80,hand pass r2
+UD52,latent,False,libxev,line-by-line port review,review/reading,defect sweep (R13 inventory / port-note sweep),high,inventory M81,hand pass r2
+UD53,latent,False,libxev,line-by-line port review,review/reading,defect sweep (R13 inventory / port-note sweep),high,inventory M82,hand pass r2
+UD54,latent,False,libxev,line-by-line port review,review/reading,defect sweep (R13 inventory / port-note sweep),high,inventory M83,hand pass r2
+UD55,latent,False,google-highway,compiler/build (porting an unbuilt path),compiling previously-unanalysed code,,as round 1 (keyword heuristic),compiler/build (porting an unbuilt path),round-1 heuristic
+UD56,crash,True,gtk,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD57,crash,True,ghostty,line-by-line port review,review/reading,parity audit (side-by-side file audit),high,N46 found by parity audit S116-F1,hand pass r2
+UD58,crash,True,ghostty,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD59,crash,True,ghostty,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD60,crash,True,ghostty,line-by-line port review,review/reading,defect sweep (R13 inventory / port-note sweep),high,N48 found by R13 inventory code sweep,hand pass r2
+UD61,crash,True,ghostty,line-by-line port review,review/reading,defect sweep (R13 inventory / port-note sweep),high,N49 R13 inventory M20; reproduced on macOS,hand pass r2
+UD62,crash,True,ghostty,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD63,crash,True,ghostty,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD64,crash,True,ghostty,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD65,crash,True,ghostty,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD66,latent,False,ghostty,line-by-line port review,review/reading,defect sweep (R13 inventory / port-note sweep),high,N54 R13-G snapshot sweep,hand pass r2
+UD67,crash,True,ghostty,line-by-line port review,review/reading,defect sweep (R13 inventory / port-note sweep),high,N55 R13 inventory code sweep; trigger measured,hand pass r2
+UD68,leak,True,ghostty,line-by-line port review,review/reading,"while translating (session logs, records, port notes)",high,N56 records F14,hand pass r2
+UD69,leak,True,ghostty,code reading (port review),review/reading,code reading (entry says found by reading),as round 1 (keyword heuristic),code reading (port review),round-1 heuristic
+UD70,crash,True,ghostty,code reading (port review),review/reading,code reading (entry says found by reading),as round 1 (keyword heuristic),code reading (port review),round-1 heuristic
+UD71,crash,True,ghostty,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD72,crash,True,libvaxis,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD73,crash,True,ghostty,code reading (port review),review/reading,code reading (entry says found by reading),as round 1 (keyword heuristic),code reading (port review),round-1 heuristic
+UD74,deadlock/hang,True,libvaxis,line-by-line port review,review/reading,"while translating (session logs, records, port notes)",high,N61 records F11,hand pass r2
+UD75,crash,True,ghostty,fault injection (allocation failure),fault injection (allocation/C-API failure),,as round 1 (keyword heuristic),fault injection (allocation failure),round-1 heuristic
+UD76,crash,True,ghostty,code reading (port review),review/reading,code reading (entry says found by reading),as round 1 (keyword heuristic),code reading (port review),round-1 heuristic
+UD80,crash,True,ghostty,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD90,crash,True,ghostty,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD91,crash,True,ghostty,line-by-line port review,review/reading,defect sweep (R13 inventory / port-note sweep),high,inventory M9,hand pass r2
+UD92,ub,True,ghostty,line-by-line port review,"checked arithmetic, casts and bounds",many-item pointer with no length becomes a bounds-checked slice,medium,S92-F2; inventory M10,hand pass r2
+UD93,deadlock/hang,True,ghostty,line-by-line port review,live testing of the port,hang in the port tests (macOS login wedged),medium,"phase-2 DEFERRALS ""killPid bounded wait""; inventory M13",hand pass r2
+UD94,crash,True,ghostty,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD95,crash,True,ghostty,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD96,crash,True,ghostty,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD97,crash,True,ghostty,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD98,crash,True,ghostty,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD99,crash,True,ghostty,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD100,crash,True,ghostty,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD101,deadlock/hang,True,ghostty,code reading (port review),review/reading,code reading (entry says found by reading),as round 1 (keyword heuristic),code reading (port review),round-1 heuristic
+UD102,deadlock/hang,True,ghostty,line-by-line port review,live testing of the port,same hang family as UD93,medium,phase-3 assessment E §5.3; inventory M33,hand pass r2
+UD103,ub,True,ghostty,code reading (port review),review/reading,code reading (entry says found by reading),as round 1 (keyword heuristic),code reading (port review),round-1 heuristic
+UD104,ub,True,ghostty,code reading (port review),review/reading,code reading (entry says found by reading),as round 1 (keyword heuristic),code reading (port review),round-1 heuristic
+UD105,ub,True,ghostty,line-by-line port review,review/reading,parity audit (side-by-side file audit),high,S60-F2/F3; inventory M36,hand pass r2
+UD106,latent,False,ghostty,compiler/build (porting an unbuilt path),compiling previously-unanalysed code,,as round 1 (keyword heuristic),compiler/build (porting an unbuilt path),round-1 heuristic
+UD107,ub,True,libvaxis,code reading (port review),review/reading,code reading (entry says found by reading),as round 1 (keyword heuristic),code reading (port review),round-1 heuristic
+UD108,ub,True,libvaxis,line-by-line port review,type/borrow checker,"Send/Sync: a plain bool shared across threads does not compile, so the port uses AtomicBool",high,inventory M40,hand pass r2
+UD109,test-weakness,False,ghostty,reference test review (test port),test port,,as round 1 (keyword heuristic),reference test review (test port),round-1 heuristic
+UD110,leak,True,ghostty,line-by-line port review,review/reading,parity audit (side-by-side file audit),high,"S85-F6, S90-F3",hand pass r2
+UD111,leak,True,ghostty,fault injection (allocation failure),fault injection (allocation/C-API failure),,as round 1 (keyword heuristic),fault injection (allocation failure),round-1 heuristic
+UD112,leak,True,ghostty,line-by-line port review,review/reading,defect sweep (R13 inventory / port-note sweep),medium,R13-G part C (C3); Box + ? drops what the reference leaks,hand pass r2
+UD113,ub,True,ghostty,line-by-line port review,type/borrow checker,enum validity: a C int cannot become a Rust enum unchecked (from_c_int doctrine),high,N71 session log B6,hand pass r2
+UD114,crash,True,ghostty,code reading (port review),review/reading,code reading (entry says found by reading),as round 1 (keyword heuristic),code reading (port review),round-1 heuristic
+UD115,crash,True,ghostty,line-by-line port review,live testing of the port,the teardown assertion fired in a port test after a failed surface init,high,N75 found by task R13-D2 when the UD104 test freed its app,hand pass r2
+UD131,crash,True,ghostty,withheld (private disclosure),withheld,,as round 1 (keyword heuristic),withheld (private disclosure),round-1 heuristic
+UD140,intent-breaking,True,ghostty,line-by-line port review,review/reading,parity audit (side-by-side file audit),high,S189-F2; review-T-A,hand pass r2
+UD141,intent-breaking,True,ghostty,line-by-line port review,review/reading,parity audit (side-by-side file audit),high,"S170-F1, S186-F1; N100 batch T-A",hand pass r2
+UD150,latent,False,ghostty,line-by-line port review,review/reading,parity audit (side-by-side file audit),high,S64-F1/S63-F2; review-T-B,hand pass r2
+UD160,crash,True,zig,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD170,crash,True,ghostty,line-by-line port review,type/borrow checker,UTF-8 &str at the GLib boundary forced a conversion choice; parity audit S59-F1 then flagged it,medium,port first used from_utf8_lossy,hand pass r2
+UD171,ub,True,ghostty,line-by-line port review,type/borrow checker,UTF-8 &str at the GLib boundary; parity audit S59-F5,medium,negative control uses from_utf8_lossy,hand pass r2
+UD172,ub,True,ghostty,line-by-line port review,type/borrow checker,UTF-8 &str at the GTK boundary; parity audit S56-F3,medium,port previews from_utf8_lossy,hand pass r2
+UD173,latent,False,ghostty,line-by-line port review,review/reading,parity audit (side-by-side file audit),high,S49-F3,hand pass r2
+UD174,latent,False,ghostty,line-by-line port review,review/reading,parity audit (side-by-side file audit),high,"S49-F4, S50-F3",hand pass r2
+UD180,latent,False,ghostty,line-by-line port review,review/reading,parity audit (side-by-side file audit),high,S76-F1,hand pass r2
+UD181,latent,False,ghostty,code reading (port review),review/reading,code reading (entry says found by reading),as round 1 (keyword heuristic),code reading (port review),round-1 heuristic
+UD182,latent,False,ghostty,line-by-line port review,review/reading,adversarial reviewer of a task,high,S79-F3/F4; review-T-E blocking item 1; measured with a probe,hand pass r2
+UD190,crash,True,ghostty,cross-platform bring-up (Windows/Linux VM),cross-platform bring-up,,as round 1 (keyword heuristic),cross-platform bring-up (Windows/Linux VM),round-1 heuristic
+UD200,deadlock/hang,True,ghostty,cross-platform bring-up (Windows/Linux VM),cross-platform bring-up,,as round 1 (keyword heuristic),cross-platform bring-up (Windows/Linux VM),round-1 heuristic
+UD201,crash,True,zig,cross-platform bring-up (Windows/Linux VM),cross-platform bring-up,,as round 1 (keyword heuristic),cross-platform bring-up (Windows/Linux VM),round-1 heuristic
+UD202,crash,True,ghostty,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD203,intent-breaking,True,ghostty,code reading (port review),review/reading,code reading (entry says found by reading),as round 1 (keyword heuristic),code reading (port review),round-1 heuristic
+UD204,intent-breaking,True,ghostty,line-by-line port review,review/reading,parity audit (side-by-side file audit),high,S213-F2; measured on zig 0.16.0,hand pass r2
+UD205,intent-breaking,True,ghostty,line-by-line port review,review/reading,parity audit (side-by-side file audit),high,S214-F1; measured,hand pass r2
+UD206,latent,False,ghostty,compiler/build (porting an unbuilt path),compiling previously-unanalysed code,,as round 1 (keyword heuristic),compiler/build (porting an unbuilt path),round-1 heuristic
+UD210,intent-breaking,True,ghostty,line-by-line port review,review/reading,adversarial reviewer of a task,high,S111-F11; review-T-H blocking item 1,hand pass r2
+UD211,intent-breaking,True,ghostty,line-by-line port review,review/reading,parity audit (side-by-side file audit),high,S111-F1,hand pass r2
+UD230,intent-breaking,True,zig,line-by-line port review,review/reading,parity audit (side-by-side file audit),high,S112-F9 kept faithfully; N206 raised it,hand pass r2
+UD245,latent,False,libvaxis,cross-platform bring-up (Windows/Linux VM),cross-platform bring-up,,as round 1 (keyword heuristic),cross-platform bring-up (Windows/Linux VM),round-1 heuristic
+UD246,deadlock/hang,True,libvaxis,line-by-line port review,live testing of the port,the boo_pty_e2e KAT hung and used the hang as its negative control,high,no parity row,hand pass r2
+UD247,leak,True,ghostty,line-by-line port review,review/reading,defect sweep (R13 inventory / port-note sweep),high,tail-s6 sweep of PORT NOTEs,hand pass r2
+UD248,latent,False,ghostty,line-by-line port review,review/reading,defect sweep (R13 inventory / port-note sweep),high,tail-s6 sweep of PORT NOTEs,hand pass r2
+UD249,latent,False,libvaxis,line-by-line port review,review/reading,defect sweep (R13 inventory / port-note sweep),high,tail-s6 sweep of PORT NOTEs,hand pass r2
+UD250,latent,False,ghostty,code reading (port review),review/reading,code reading (entry says found by reading),as round 1 (keyword heuristic),code reading (port review),round-1 heuristic
+UD251,leak,True,ghostty,code reading (port review),review/reading,code reading (entry says found by reading),as round 1 (keyword heuristic),code reading (port review),round-1 heuristic
+UD252,crash,True,libvaxis,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD260,crash,True,libvaxis,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD261,intent-breaking,True,libvaxis,line-by-line port review,review/reading,"while translating (session logs, records, port notes)",medium,N240 libvaxis 0.6.0 bump port (tail-s10b),hand pass r2
+UD262,crash,True,libvaxis,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD263,crash,True,libvaxis,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD264,crash,True,libvaxis,line-by-line port review,review/reading,"while translating (session logs, records, port notes)",medium,N240 libvaxis 0.6.0 bump port,hand pass r2
+UD265,intent-breaking,True,libvaxis,line-by-line port review,review/reading,"while translating (session logs, records, port notes)",medium,N240 libvaxis 0.6.0 bump port,hand pass r2
+UD266,intent-breaking,True,ghostty,code reading (port review),review/reading,code reading (entry says found by reading),as round 1 (keyword heuristic),code reading (port review),round-1 heuristic
+UD267,latent,False,libvaxis,line-by-line port review,review/reading,adversarial reviewer of a task,high,"N240, found by the S-10b review",hand pass r2
+UD270,latent,False,ghostty,cross-platform bring-up (Windows/Linux VM),cross-platform bring-up,,as round 1 (keyword heuristic),cross-platform bring-up (Windows/Linux VM),round-1 heuristic
+UD271,latent,False,ghostty,cross-platform bring-up (Windows/Linux VM),cross-platform bring-up,,as round 1 (keyword heuristic),cross-platform bring-up (Windows/Linux VM),round-1 heuristic
+UD272,latent,False,ghostty,cross-platform bring-up (Windows/Linux VM),cross-platform bring-up,,as round 1 (keyword heuristic),cross-platform bring-up (Windows/Linux VM),round-1 heuristic
+UD273,latent,False,ghostty,line-by-line port review,review/reading,adversarial reviewer of a task,high,first found by the S-12 reviewer,hand pass r2
+UD275,latent,False,libxev,line-by-line port review,cross-platform bring-up,FreeBSD target of the kqueue backend,medium,N255 FreeBSD ledger row,hand pass r2
+UD276,test-weakness,False,ghostty,reference test review (test port),test port,,as round 1 (keyword heuristic),reference test review (test port),round-1 heuristic
+UD280,intent-breaking,True,ghostty,line-by-line port review,compiling previously-unanalysed code,"non-default font backend (coretext_freetype) made live by N266, then measured",medium,N288,hand pass r2
+UD281,test-weakness,False,ghostty,reference test review (test port),test port,,as round 1 (keyword heuristic),reference test review (test port),round-1 heuristic
+UD290,crash,True,ghostty,line-by-line port review,cross-platform bring-up,Linux lane: the io_thread test binary crashed,high,found by task L-1 (Linux lane),hand pass r2
+UD291,intent-breaking,True,ghostty,line-by-line port review,cross-platform bring-up,Linux lane comparison against the reference,high,found by task L-1,hand pass r2
+UD295,ub,True,ghostty,line-by-line port review,cross-platform bring-up,Linux GTK headed test on the VM,high,found by task L-2 running gtk_parity_callbacks,hand pass r2
+UD300,latent,False,ghostty,line-by-line port review,review/reading,"while translating (session logs, records, port notes)",medium,N310 (task S-1c restored reference text),hand pass r2
+UD301,latent,False,ghostty,line-by-line port review,review/reading,"while translating (session logs, records, port notes)",medium,N313,hand pass r2
+UD305,deadlock/hang,True,ghostty,fault injection (allocation failure),fault injection (allocation/C-API failure),,as round 1 (keyword heuristic),fault injection (allocation failure),round-1 heuristic
+UD310,leak,True,ghostty,line-by-line port review,fault injection (allocation/C-API failure),failing allocator,high,found by task S7-7 (S174-F3),hand pass r2
+UD311,latent,False,ghostty,line-by-line port review,fault injection (allocation/C-API failure),allocator-failure sweep while porting SegmentedList,medium,found by task S7-7 porting the file,hand pass r2
+UD312,crash,True,ghostty,line-by-line port review,fault injection (allocation/C-API failure),C-API failure sweep,high,found by task S7-7 C-API failure sweep,hand pass r2
+UD313,leak,True,ghostty,line-by-line port review,fault injection (allocation/C-API failure),review of the C-API failure sweep,medium,found by the S7-7 review (F4),hand pass r2
+UD314,leak,True,ghostty,line-by-line port review,fault injection (allocation/C-API failure),C-API failure routing,medium,found by task S7-8,hand pass r2
+UD315,intent-breaking,True,ghostty,fault injection (allocation failure),fault injection (allocation/C-API failure),,as round 1 (keyword heuristic),fault injection (allocation failure),round-1 heuristic
+UD320,leak,True,ghostty,line-by-line port review,review/reading,parity audit (side-by-side file audit),high,S112-F5 (Flatpak),hand pass r2
+UD321,intent-breaking,True,ghostty,code reading (port review),review/reading,code reading (entry says found by reading),as round 1 (keyword heuristic),code reading (port review),round-1 heuristic
+UD325,crash,True,ghostty,cross-platform bring-up (Windows/Linux VM),cross-platform bring-up,,as round 1 (keyword heuristic),cross-platform bring-up (Windows/Linux VM),round-1 heuristic
+UD326,deadlock/hang,True,ghostty,cross-platform bring-up (Windows/Linux VM),cross-platform bring-up,,as round 1 (keyword heuristic),cross-platform bring-up (Windows/Linux VM),round-1 heuristic
+UD330,test-weakness,False,zf,reference test review (test port),test port,,as round 1 (keyword heuristic),reference test review (test port),round-1 heuristic
+UD331,intent-breaking,True,ghostty,cross-platform bring-up (Windows/Linux VM),cross-platform bring-up,,as round 1 (keyword heuristic),cross-platform bring-up (Windows/Linux VM),round-1 heuristic
+UD340,intent-breaking,True,ghostty,cross-platform bring-up (Windows/Linux VM),cross-platform bring-up,,as round 1 (keyword heuristic),cross-platform bring-up (Windows/Linux VM),round-1 heuristic
+UD341,intent-breaking,True,ghostty,cross-platform bring-up (Windows/Linux VM),cross-platform bring-up,,as round 1 (keyword heuristic),cross-platform bring-up (Windows/Linux VM),round-1 heuristic
+UD342,intent-breaking,True,ghostty,cross-platform bring-up (Windows/Linux VM),cross-platform bring-up,,as round 1 (keyword heuristic),cross-platform bring-up (Windows/Linux VM),round-1 heuristic
+UD343,latent,False,ghostty,compiler/build (porting an unbuilt path),compiling previously-unanalysed code,,as round 1 (keyword heuristic),compiler/build (porting an unbuilt path),round-1 heuristic
+UD344,intent-breaking,True,ghostty,cross-platform bring-up (Windows/Linux VM),cross-platform bring-up,,as round 1 (keyword heuristic),cross-platform bring-up (Windows/Linux VM),round-1 heuristic
+UD345,intent-breaking,True,ghostty,line-by-line port review,build-system port,"packaging parity (.envrc, nix)",high,parity tail P-1,hand pass r2
+UD346,intent-breaking,True,ghostty,line-by-line port review,cross-platform bring-up,Windows file I/O review,medium,found by review W-4 (Windows workstream),hand pass r2
+UD350,leak,True,ghostty,sanitizer gate,sanitizer,,as round 1 (keyword heuristic),sanitizer gate,round-1 heuristic
+UD351,crash,True,ghostty,withheld (private disclosure),withheld,,as round 1 (keyword heuristic),withheld (private disclosure),round-1 heuristic
+UD352,ub,True,ghostty,code reading (port review),review/reading,code reading (entry says found by reading),as round 1 (keyword heuristic),code reading (port review),round-1 heuristic
+UD353,leak,True,ghostty,fault injection (allocation failure),fault injection (allocation/C-API failure),,as round 1 (keyword heuristic),fault injection (allocation failure),round-1 heuristic
+UD354,intent-breaking,True,ghostty,line-by-line port review,cross-platform bring-up,Linux GTK/OpenGL measured on the VM,high,"R2 §6 Q9, measure-first decision M5",hand pass r2
+UD355,ub,True,ghostty,line-by-line port review,review/reading,"while translating (session logs, records, port notes)",high,found while porting exportDmabufQuery (P7-W7 T1),hand pass r2
+UD356,intent-breaking,True,ghostty,line-by-line port review,cross-platform bring-up,Linux GTK measured on the VM,high,"R2 §5.5, measure-first decision M2",hand pass r2
+UD357,intent-breaking,True,ghostty,line-by-line port review,cross-platform bring-up,Linux GTK fractional scaling measured on the VM,high,"R2 §4, measure-first decision M3",hand pass r2
+UD358,intent-breaking,True,ghostty,compiler/build (porting an unbuilt path),compiling previously-unanalysed code,,as round 1 (keyword heuristic),compiler/build (porting an unbuilt path),round-1 heuristic
+UD359,intent-breaking,True,ghostty,compiler/build (porting an unbuilt path),compiling previously-unanalysed code,,as round 1 (keyword heuristic),compiler/build (porting an unbuilt path),round-1 heuristic
+UD360,intent-breaking,True,ghostty,line-by-line port review,build-system port,fontconfig version defines in build.rs,high,DECISIONS B14,hand pass r2
+UD361,crash,True,ghostty,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD362,deadlock/hang,True,ghostty,code reading (port review),review/reading,code reading (entry says found by reading),as round 1 (keyword heuristic),code reading (port review),round-1 heuristic
+UD363,ub,True,ghostty,code reading (port review),review/reading,code reading (entry says found by reading),as round 1 (keyword heuristic),code reading (port review),round-1 heuristic
+UD364,crash,True,ghostty,fault injection (allocation failure),fault injection (allocation/C-API failure),,as round 1 (keyword heuristic),fault injection (allocation failure),round-1 heuristic
+UD365,ub,True,ghostty,code reading (port review),review/reading,code reading (entry says found by reading),as round 1 (keyword heuristic),code reading (port review),round-1 heuristic
+UD366,ub,True,ghostty,code reading (port review),review/reading,code reading (entry says found by reading),as round 1 (keyword heuristic),code reading (port review),round-1 heuristic
+UD367,ub,True,ghostty,code reading (port review),review/reading,code reading (entry says found by reading),as round 1 (keyword heuristic),code reading (port review),round-1 heuristic
+UD368,ub,True,ghostty,code reading (port review),review/reading,code reading (entry says found by reading),as round 1 (keyword heuristic),code reading (port review),round-1 heuristic
+UD369,crash,True,ghostty,fault injection (allocation failure),fault injection (allocation/C-API failure),,as round 1 (keyword heuristic),fault injection (allocation failure),round-1 heuristic
+UD370,crash,True,ghostty,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD371,crash,True,ghostty,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD372,crash,True,ghostty,checked arithmetic/casts (Zig->Rust translation),"checked arithmetic, casts and bounds",,as round 1 (keyword heuristic),checked arithmetic/casts (Zig->Rust translation),round-1 heuristic
+UD373,intent-breaking,True,ghostty,line-by-line port review,review/reading,parity re-audit after a pin advance,high,P7-W12 T2 re-audit (ruling 63),hand pass r2
+UD374,intent-breaking,True,ghostty,line-by-line port review,review/reading,parity re-audit after a pin advance,high,P7-W12 T2 re-audit (ruling 67),hand pass r2
+UD375,intent-breaking,True,ghostty,line-by-line port review,build-system port,CMake install for libvt,high,found while fixing N488,hand pass r2
+UD376,leak,True,ghostty,sanitizer gate,sanitizer,,as round 1 (keyword heuristic),sanitizer gate,round-1 heuristic
+UD377,ub,True,google-highway,sanitizer gate,sanitizer,,as round 1 (keyword heuristic),sanitizer gate,round-1 heuristic
+UD378,intent-breaking,True,ghostty,line-by-line port review,review/reading,security review,high,controller security review of a commit,hand pass r2

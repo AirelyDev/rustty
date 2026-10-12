@@ -1,0 +1,16 @@
+start,end,days,prompts_rustty,prompts_other_projects,top_other_projects,limit_mentions,note
+2026-06-27,2026-06-29,3,0,20,bgco 20,0,"between ""approaching my token limit"" (06-26 09:30) and ""continue, token limit is reset"" (06-30 18:38)"
+2026-07-05,2026-07-06,2,0,0,,0,"after ""I am out of token usage"" (07-04 08:41); resumed 07-07 15:14"
+2026-07-13,2026-07-13,1,10,0,,3,"rate limit day: /rate-limit-options + /usage-credits x2; plan-writing only, no commits"
+2026-07-20,2026-07-21,2,1,7,[redacted] 7,0,VM GTK work paused (VM crash 07-22 on resume); no limit language
+2026-07-24,2026-07-27,4,0,22,electron-rs 18; ~ 4,0,"explicit pause 07-23 14:53 (""pause here ... resume when I say so""); other project (electron-rs) prompts mention running out of usage on 07-28"
+2026-08-01,2026-08-09,9,3,152,~/Documents/TestApp 105; [redacted] 16; liquid-glass 16; bgco 8,0,Codex app audit 07-31..08-02 wrote only untracked .port/codex files (Codex rate-limit window hit 90-99%); Rustty CI killed 08-01; author on other projects; resumed 08-10 by handing Codex findings to Claude
+2026-08-12,2026-08-16,5,8,165,~/Documents/TestApp 111; spaces 54,0,Codex-findings remediation merged 08-12; VM disk cleanup only; other projects
+2026-08-19,2026-08-24,6,1,112,spaces 112,0,"upstream-sync workflow paused 08-18; next Rustty prompt 08-25 ""interrupted when I ran our of usage credits"""
+2026-08-27,2026-08-27,1,0,0,,0,single idle day
+2026-08-29,2026-08-31,3,2,23,bgco 14; [redacted] 8; x-ideas 1,0,local GitHub Actions run 08-28/29; other projects
+2026-09-02,2026-09-07,6,4,364,gpui/cube 323; spaces 29; tauri/cube 7; ~ 5,1,"parity audit workflow interrupted 09-01 by ""session limits expiring""; resumed 09-07 with same message; author started gpui/cube app 09-05"
+2026-09-12,2026-09-16,5,1,115,gpui/cube 109; domain-search 6,2,"09-11 ""Pause ... I want to focus tokens in something else""; cube app; 09-15 cube prompt ""limit is reset"""
+2026-09-18,2026-09-21,4,1,332,gpui/cube 251; bgco 72; gpui/cube-terminal-m1 9,0,cube app embeds rustty as its terminal (09-17..19 prompts in gpui/cube)
+2026-09-25,2026-09-25,1,0,52,bgco 52,0,"09-24 08:33 ""Pause the work for now, we're nearing limits""; resumed 09-26"
+2026-10-03,2026-10-05,3,0,0,,0,"10-02 last status; 10-06 ""Resume the work as we previously hit the session limit""; zero prompts in any project 10-03..05"

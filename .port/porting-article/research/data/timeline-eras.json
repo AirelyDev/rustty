@@ -1,0 +1,285 @@
+{
+ "note": "Gantt eras. start/end are calendar dates (author date, -0700). commits_classified = commits assigned by the subject/date classifier in timeline-commit_era_assignment.csv (null where the era is not separable by subject). Eras overlap.",
+ "eras": [
+  {
+   "id": "phase-0",
+   "label": "Phase 0: reference baseline + oracle harness",
+   "start": "2026-06-21",
+   "end": "2026-06-21",
+   "group": "foundation",
+   "commits_classified": null,
+   "key_commits": [
+    "15c1a9bd7"
+   ],
+   "evidence": ".port/phase-0/REPORT.md (zig build test green, 3234-test contract, 28 benchmarks)"
+  },
+  {
+   "id": "phase-1",
+   "label": "Phase 1: workspace scaffold + parity gates",
+   "start": "2026-06-21",
+   "end": "2026-06-21",
+   "group": "foundation",
+   "commits_classified": 6,
+   "key_commits": [
+    "15c1a9bd7",
+    "5540e9bae",
+    "d9fd637ce"
+   ],
+   "evidence": ".port/phase-1/REPORT.md (43 members, 29 crates, G7 acyclic)"
+  },
+  {
+   "id": "phase-2-vt",
+   "label": "Phase 2a: vt crown jewel (leaves-first, struct-first)",
+   "start": "2026-06-21",
+   "end": "2026-06-26",
+   "group": "port",
+   "key_commits": [
+    "dc1083ff6",
+    "97b2e30da",
+    "e9e325358"
+   ],
+   "evidence": "vt #[test] 0->2032 between 2026-06-21 and 2026-06-25 (timeline-tests_by_week.csv)"
+  },
+  {
+   "id": "phase-2-upper",
+   "label": "Phase 2b: config/font/termio/core/cli/embedded/renderer",
+   "start": "2026-06-26",
+   "end": "2026-07-08",
+   "group": "port",
+   "key_commits": [
+    "f74d82e90",
+    "7e311ab24",
+    "f046d41a6"
+   ],
+   "evidence": "commit subjects C*/E*/GPU R-d chunks"
+  },
+  {
+   "id": "macos-windowing-app",
+   "label": "macOS windowing + Swift app milestone",
+   "start": "2026-07-08",
+   "end": "2026-07-12",
+   "group": "platform",
+   "commits_classified": 37,
+   "key_commits": [
+    "74c57204f",
+    "1395249e5",
+    "d1b4df097"
+   ],
+   "evidence": "FIRST PIXELS 74c57204f; RUNNABLE terminal d1b4df097"
+  },
+  {
+   "id": "realignment",
+   "label": "Bun learnings + realignment (R7-R12, LIFETIMES, first full Miri sweep)",
+   "start": "2026-07-10",
+   "end": "2026-07-12",
+   "group": "strategy",
+   "key_commits": [
+    "2c03357ce",
+    "ccd14200e",
+    "8f6d781dc",
+    "3277f2f78"
+   ],
+   "evidence": ".port/phase-2/BUN_PORT_LEARNINGS.md, .port/PORT_RULES.md, .port/audits/GHOSTTY_LIFETIMES.tsv"
+  },
+  {
+   "id": "rebrand-inspector",
+   "label": "Rustty rebrand + inspector port",
+   "start": "2026-07-13",
+   "end": "2026-07-16",
+   "group": "platform",
+   "commits_classified": 63,
+   "key_commits": [
+    "558107b33",
+    "ae70b8214"
+   ],
+   "evidence": "docs/superpowers/plans/2026-07-13-full-rustty-rebrand.md"
+  },
+  {
+   "id": "perf-round-1",
+   "label": "Perf head-to-head vs Zig (14/14 wins)",
+   "start": "2026-07-15",
+   "end": "2026-07-16",
+   "group": "perf",
+   "commits_classified": 37,
+   "key_commits": [
+    "349e5d101"
+   ],
+   "evidence": ".port/phase-2/PERF_LOG.md, PERF_COMPARISON.md"
+  },
+  {
+   "id": "linux-gtk-xev",
+   "label": "Linux: xev epoll/io_uring + OpenGL + GTK apprt",
+   "start": "2026-07-16",
+   "end": "2026-07-22",
+   "group": "platform",
+   "commits_classified": 151,
+   "key_commits": [
+    "3dad6d7a2",
+    "9bc62e574"
+   ],
+   "evidence": "docs/superpowers/plans/2026-07-16-linux-gtk-port-plan.md"
+  },
+  {
+   "id": "completion-program",
+   "label": "Completion program WS1-WS20 (no-deferrals)",
+   "start": "2026-07-23",
+   "end": "2026-07-30",
+   "group": "port",
+   "commits_classified": 322,
+   "key_commits": [
+    "b914feff3",
+    "c94051557",
+    "507dcced2"
+   ],
+   "evidence": "docs/superpowers/plans/2026-07-23-rustty-completion-ROADMAP.md"
+  },
+  {
+   "id": "phase-3",
+   "label": "Phase 3 upstream resync (4749c4e93->6ad1fe7d8)",
+   "start": "2026-07-29",
+   "end": "2026-07-31",
+   "group": "resync",
+   "commits_classified": 224,
+   "key_commits": [
+    "328460511",
+    "0efe06a1c",
+    "18da9ba5b"
+   ],
+   "evidence": ".port/phase-3/README.md"
+  },
+  {
+   "id": "codex-vet",
+   "label": "Codex line-audit vetting (147 groups, 140 remediated)",
+   "start": "2026-08-10",
+   "end": "2026-08-11",
+   "group": "audit",
+   "commits_classified": 2,
+   "key_commits": [
+    "d34cc1549",
+    "8120dd10d"
+   ],
+   "evidence": ".port/codex-vet/README.md; one squashed commit 532 files +87,270/-5,513"
+  },
+  {
+   "id": "phase-4",
+   "label": "Phase 4 upstream resync (6ad1fe7d8->12967b68f)",
+   "start": "2026-08-17",
+   "end": "2026-08-25",
+   "group": "resync",
+   "commits_classified": 13,
+   "key_commits": [
+    "c8e76c6eb",
+    "27c784ab2",
+    "d63dd9fc7"
+   ],
+   "evidence": ".port/phase-4/README.md; squashed wave commits"
+  },
+  {
+   "id": "phase-5",
+   "label": "Phase 5 upstream resync (12967b68f->683d8db64)",
+   "start": "2026-08-25",
+   "end": "2026-08-25",
+   "group": "resync",
+   "commits_classified": 10,
+   "key_commits": [
+    "cc8c65309",
+    "29da15fe9"
+   ],
+   "evidence": ".port/phase-5/README.md"
+  },
+  {
+   "id": "gap-close",
+   "label": "Gap close + build-system gaps (Nix, flatpak, xcframework)",
+   "start": "2026-08-26",
+   "end": "2026-08-26",
+   "group": "audit",
+   "commits_classified": 57,
+   "key_commits": [
+    "7e1f0989d",
+    "bb4eb315e"
+   ],
+   "evidence": ".port/gap-close/README.md"
+  },
+  {
+   "id": "perf-wave-2",
+   "label": "Perf wave 2 (comptime/inline restoration)",
+   "start": "2026-08-28",
+   "end": "2026-09-01",
+   "group": "perf",
+   "commits_classified": null,
+   "key_commits": [
+    "1d50073f6",
+    "2a84648ea",
+    "4348771dc"
+   ],
+   "evidence": "commit subjects"
+  },
+  {
+   "id": "phase-6",
+   "label": "Phase 6 upstream resync (88f57ee66->20abdb50a)",
+   "start": "2026-09-01",
+   "end": "2026-09-08",
+   "group": "resync",
+   "commits_classified": 35,
+   "key_commits": [
+    "a964e142c",
+    "7419838b3",
+    "d328db1f7"
+   ],
+   "evidence": ".port/phase-6/README.md"
+  },
+  {
+   "id": "parity-closure",
+   "label": "Functional-parity audit + closure (497 findings)",
+   "start": "2026-09-08",
+   "end": "2026-09-28",
+   "group": "audit",
+   "commits_classified": 1038,
+   "key_commits": [
+    "079cc21e7"
+   ],
+   "evidence": ".port/parity-closure/README.md (404 closed / 93 waived / 0 open)"
+  },
+  {
+   "id": "phase-7",
+   "label": "Phase 7 resync + memory-safety lanes (Miri-nextest, ASan/LSan/MSan/TSan)",
+   "start": "2026-09-28",
+   "end": "2026-10-07",
+   "group": "resync",
+   "commits_classified": 327,
+   "key_commits": [
+    "9076dfefd",
+    "2a24cf6c5",
+    "401b95b0e"
+   ],
+   "evidence": ".port/phase-7/README.md; docs/superpowers/specs/2026-10-01-memory-safety-lanes-design.md"
+  },
+  {
+   "id": "phase-8",
+   "label": "Phase 8 upstream resync (12752b2ac->a60e9e2a5)",
+   "start": "2026-10-07",
+   "end": "2026-10-08",
+   "group": "resync",
+   "commits_classified": 81,
+   "key_commits": [
+    "5e969a4bb",
+    "3b6e760f2",
+    "1d22ba80d"
+   ],
+   "evidence": ".port/phase-8/README.md"
+  },
+  {
+   "id": "ferris-icon",
+   "label": "Ferris icon rebrand",
+   "start": "2026-10-08",
+   "end": "2026-10-08",
+   "group": "platform",
+   "commits_classified": 15,
+   "key_commits": [
+    "432f73e8e",
+    "c17ca9c01"
+   ],
+   "evidence": "commit subjects icons:*"
+  }
+ ]
+}

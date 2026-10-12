@@ -1,0 +1,187 @@
+{
+ "era_stats": [
+  {
+   "era": "A",
+   "label": "Greenfield sprint",
+   "start": "2026-06-20",
+   "end": "2026-07-09",
+   "commits": 452,
+   "no_prior_prompt": 41,
+   "prompts": 116,
+   "commits_per_prompt": 3.9,
+   "median_lag_h": 2.15,
+   "hist": [
+    72,
+    42,
+    82,
+    74,
+    101,
+    40,
+    0
+   ],
+   "share_gt1h": 0.657
+  },
+  {
+   "era": "B",
+   "label": "Bun ideas, macOS app, perf",
+   "start": "2026-07-10",
+   "end": "2026-07-17",
+   "commits": 327,
+   "no_prior_prompt": 0,
+   "prompts": 206,
+   "commits_per_prompt": 1.59,
+   "median_lag_h": 1.16,
+   "hist": [
+    109,
+    45,
+    56,
+    41,
+    24,
+    44,
+    8
+   ],
+   "share_gt1h": 0.529
+  },
+  {
+   "era": "C",
+   "label": "Linux VM GTK bring-up",
+   "start": "2026-07-18",
+   "end": "2026-07-23",
+   "commits": 125,
+   "no_prior_prompt": 0,
+   "prompts": 179,
+   "commits_per_prompt": 0.7,
+   "median_lag_h": 0.2,
+   "hist": [
+    89,
+    12,
+    13,
+    9,
+    0,
+    0,
+    2
+   ],
+   "share_gt1h": 0.192
+  },
+  {
+   "era": "D",
+   "label": "Completion, Codex audit, first resyncs",
+   "start": "2026-07-24",
+   "end": "2026-08-31",
+   "commits": 488,
+   "no_prior_prompt": 0,
+   "prompts": 163,
+   "commits_per_prompt": 2.99,
+   "median_lag_h": 0.57,
+   "hist": [
+    223,
+    136,
+    72,
+    32,
+    24,
+    0,
+    1
+   ],
+   "share_gt1h": 0.264
+  },
+  {
+   "era": "E",
+   "label": "Parity closure, never port a bug",
+   "start": "2026-09-01",
+   "end": "2026-09-28",
+   "commits": 1042,
+   "no_prior_prompt": 0,
+   "prompts": 115,
+   "commits_per_prompt": 9.06,
+   "median_lag_h": 1.68,
+   "hist": [
+    246,
+    151,
+    167,
+    159,
+    175,
+    140,
+    4
+   ],
+   "share_gt1h": 0.619
+  },
+  {
+   "era": "F",
+   "label": "Verification matrix, phase 8",
+   "start": "2026-09-29",
+   "end": "2026-10-08",
+   "commits": 284,
+   "no_prior_prompt": 0,
+   "prompts": 119,
+   "commits_per_prompt": 2.39,
+   "median_lag_h": 1.1,
+   "hist": [
+    77,
+    56,
+    63,
+    64,
+    14,
+    10,
+    0
+   ],
+   "share_gt1h": 0.532
+  }
+ ],
+ "runs": [
+  {
+   "commits": 180,
+   "from_": "2026-09-23 19:00",
+   "to": "2026-09-24 06:33"
+  },
+  {
+   "commits": 149,
+   "from_": "2026-09-23 08:54",
+   "to": "2026-09-23 19:00"
+  },
+  {
+   "commits": 92,
+   "from_": "2026-09-10 08:30",
+   "to": "2026-09-10 22:56"
+  },
+  {
+   "commits": 77,
+   "from_": "2026-07-16 20:41",
+   "to": "2026-07-18 02:16"
+  },
+  {
+   "commits": 74,
+   "from_": "2026-09-26 11:22",
+   "to": "2026-09-27 07:50"
+  },
+  {
+   "commits": 69,
+   "from_": "2026-09-22 20:13",
+   "to": "2026-09-23 08:54"
+  }
+ ],
+ "origin": [
+  [
+   "2026-06-20",
+   21,
+   3
+  ],
+  [
+   "2026-06-20",
+   22,
+   3
+  ],
+  [
+   "2026-06-20",
+   23,
+   5
+  ],
+  [
+   "2026-06-21",
+   0,
+   2
+  ]
+ ],
+ "n_commits": 2718,
+ "no_prior_prompt": 41,
+ "rustty_cost_total": 11032.06
+}

@@ -1,0 +1,75 @@
+subsystem,class,count
+CLI (+actions/TUIs),crash,2
+CLI (+actions/TUIs),intent-breaking,5
+CLI (+actions/TUIs),latent,4
+CLI (+actions/TUIs),test-weakness,1
+GTK app runtime,crash,10
+GTK app runtime,deadlock/hang,1
+GTK app runtime,intent-breaking,4
+GTK app runtime,latent,10
+GTK app runtime,leak,1
+GTK app runtime,test-weakness,1
+GTK app runtime,ub,5
+SIMD,intent-breaking,1
+build system,intent-breaking,6
+build system,latent,4
+config,crash,1
+config,test-weakness,1
+crash reporting,latent,2
+dep:gstreamer,ub,1
+dep:highway,latent,1
+dep:highway,ub,1
+dep:libvaxis,crash,6
+dep:libvaxis,deadlock/hang,2
+dep:libvaxis,intent-breaking,2
+dep:libvaxis,latent,5
+dep:libvaxis,ub,2
+dep:libxev,latent,6
+dep:libxev,test-weakness,2
+dep:zig,crash,2
+dep:zig,intent-breaking,1
+embedded apprt / C embed API,crash,1
+embedded apprt / C embed API,leak,3
+font,crash,5
+font,intent-breaking,2
+font,latent,6
+font,leak,3
+font,test-weakness,3
+font,ub,1
+input/keybinds,crash,1
+input/keybinds,ub,1
+libghostty-vt C API,crash,4
+libghostty-vt C API,deadlock/hang,1
+libghostty-vt C API,intent-breaking,2
+libghostty-vt C API,leak,1
+libghostty-vt C API,ub,1
+libghostty-vt render state,crash,1
+libghostty-vt render state,intent-breaking,1
+macOS app,crash,1
+os helpers,crash,1
+os helpers,deadlock/hang,1
+os helpers,intent-breaking,4
+os helpers,latent,1
+other src/,latent,3
+renderer,crash,7
+renderer,deadlock/hang,1
+renderer,intent-breaking,1
+renderer,latent,7
+renderer,leak,3
+renderer,ub,3
+surface/core,crash,1
+surface/core,ub,2
+termio/pty,crash,3
+termio/pty,deadlock/hang,3
+termio/pty,intent-breaking,2
+termio/pty,latent,3
+termio/pty,leak,1
+termio/pty,ub,2
+vt (terminal core),crash,8
+vt (terminal core),intent-breaking,2
+vt (terminal core),latent,3
+vt (terminal core),leak,2
+vt (terminal core),test-weakness,3
+vt/tmux,crash,6
+vt/tmux,intent-breaking,1
+vt/tmux,latent,4

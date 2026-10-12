@@ -1,0 +1,46 @@
+table,row,series,value,unit
+memory_bun_build,500,v1.3.14,1914,MB
+memory_bun_build,500,v1.4.0,526,MB
+memory_bun_build,1000,v1.3.14,3506,MB
+memory_bun_build,1000,v1.4.0,586,MB
+memory_bun_build,1500,v1.3.14,5097,MB
+memory_bun_build,1500,v1.4.0,608,MB
+memory_bun_build,2000,v1.3.14,6745,MB
+memory_bun_build,2000,v1.4.0,609,MB
+http_throughput,Bun.serve,v1.3.14,169.6,k req/s
+http_throughput,Bun.serve,v1.4.0,177.7,k req/s
+http_throughput,Bun.serve,delta,4.8,%
+http_throughput,node:http,v1.3.14,103.8,k req/s
+http_throughput,node:http,v1.4.0,108.5,k req/s
+http_throughput,node:http,delta,4.5,%
+http_throughput,Elysia,v1.3.14,158.9,k req/s
+http_throughput,Elysia,v1.4.0,163.3,k req/s
+http_throughput,Elysia,delta,2.8,%
+http_throughput,express,v1.3.14,64.5,k req/s
+http_throughput,express,v1.4.0,66.6,k req/s
+http_throughput,express,delta,3.2,%
+http_throughput,fastify,v1.3.14,91.5,k req/s
+http_throughput,fastify,v1.4.0,95.9,k req/s
+http_throughput,fastify,delta,4.8,%
+app_walltime,next build,v1.3.14,13.62,s
+app_walltime,next build,v1.4.0,13.03,s
+app_walltime,next build,delta,4.5,%
+app_walltime,vite build (tsc + vite),v1.3.14,1.69,s
+app_walltime,vite build (tsc + vite),v1.4.0,1.65,s
+app_walltime,vite build (tsc + vite),delta,2.2,%
+app_walltime,tsc -b --force,v1.3.14,0.94,s
+app_walltime,tsc -b --force,v1.4.0,0.89,s
+app_walltime,tsc -b --force,delta,4.7,%
+binary_size,Windows,v1.3.14,94,MB
+binary_size,Windows,v1.4.0 canary,76,MB
+binary_size,Linux,v1.3.14,88,MB
+binary_size,Linux,v1.4.0 canary,70,MB
+test_suite,Debian 13 x64,expect_calls,1386826,count
+test_suite,Debian 13 x64,tests,60624,count
+test_suite,Debian 13 x64,files,4174,count
+test_suite,macOS 14 arm64,expect_calls,1259953,count
+test_suite,macOS 14 arm64,tests,58850,count
+test_suite,macOS 14 arm64,files,4175,count
+test_suite,Windows 2019 x64,expect_calls,1007544,count
+test_suite,Windows 2019 x64,tests,57337,count
+test_suite,Windows 2019 x64,files,4173,count

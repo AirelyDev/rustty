@@ -1,0 +1,264 @@
+/*
+ * /porting table of contents: numbered entries in a mono gutter, grouped
+ * under card-style labels, on a rail that fills up to the current entry.
+ */
+
+/* Shared list. Rail colours: unread, read (reading progress), current. */
+.list {
+  --rail-unread: var(--gray-2);
+  --rail-read: var(--gray-4);
+  --rail-active: #d97934;
+}
+
+/* One group: label plus its entries. */
+.group + .group .groupLabel {
+  padding-top: 18px;
+}
+
+/* Group label, in the InstrumentCard label style. */
+.groupLabel {
+  border-left: 2px solid var(--rail-unread);
+  padding: 0 0 6px 12px;
+  color: #858a84;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+.groupLabel[data-state="read"] {
+  border-left-color: var(--rail-read);
+}
+
+.items {
+  list-style: none;
+}
+
+/* Entry row; vertical padding (not margin) keeps the rail continuous. */
+.item {
+  border-left: 2px solid var(--rail-unread);
+  padding: 5px 0 5px 12px;
+}
+
+.item[data-state="read"] {
+  border-left-color: var(--rail-read);
+}
+
+.item[data-state="active"] {
+  border-left-color: var(--rail-active);
+}
+
+/* Number gutter plus hanging title lines. */
+.item a {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  align-items: baseline;
+  color: var(--gray-5);
+  text-decoration: none;
+  border-radius: 2px;
+}
+
+.num {
+  color: var(--gray-4);
+  font: 500 12px/1 var(--jetbrains-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.title {
+  font-size: 14px;
+  line-height: 1.35;
+  overflow-wrap: break-word;
+}
+
+.item a:hover {
+  color: var(--gray-8);
+}
+
+.item a:hover .title {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+  text-decoration-color: var(--gray-3);
+}
+
+.item a:focus-visible {
+  outline: 2px solid #d97934;
+  outline-offset: 1px;
+}
+
+.item[data-state="active"] a {
+  color: var(--gray-9);
+  font-weight: 500;
+}
+
+.item[data-state="active"] .num {
+  color: #d97934;
+}
+
+/* Desktop sidecar: scrolls on its own when taller than the viewport. */
+.side {
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--gray-3) transparent;
+  padding: 4px 5px 4px 2px;
+}
+
+/* Phone/tablet bar under the site header (hidden where the sidecar shows). */
+.bar {
+  --toc-bar-height: 44px;
+  position: sticky;
+  top: var(--header-height);
+  /*
+   * Above widget layers (5) and chart tooltips (20) so nothing escaping its
+   * stacking context covers it. The site header is z-index 1 but never
+   * overlaps: the bar sits below it, and hides while the mobile menu is open.
+   */
+  z-index: 30;
+  height: var(--toc-bar-height);
+  background: var(--gray-0);
+  border-bottom: 1px solid var(--gray-2);
+}
+
+@media (min-width: 1277px) {
+  .bar {
+    display: none;
+  }
+}
+
+@media print {
+  .bar {
+    display: none;
+  }
+}
+
+/* The site's mobile menu is open: it would sit under the bar. */
+:global(body.noScroll) .bar {
+  display: none;
+}
+
+/* Aligned with the prose column (same max width and gutter as the page). */
+.barInner {
+  position: relative;
+  height: 100%;
+  max-width: calc(736px + 48px);
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+@media (max-width: 560px) {
+  .barInner {
+    padding: 0 16px;
+  }
+}
+
+.barButton {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--gray-8);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.barButton:focus-visible {
+  outline: 2px solid #d97934;
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+
+.barNum {
+  flex: none;
+  color: #d97934;
+  font: 500 12px/1 var(--jetbrains-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.barSep {
+  flex: none;
+  color: var(--gray-4);
+}
+
+.barTitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chevron {
+  flex: none;
+  color: var(--gray-5);
+  transition: transform 0.15s ease;
+}
+
+.chevron[data-open="true"] {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chevron {
+    transition: none;
+  }
+}
+
+/* Disclosed list, overlaying the article below the bar. */
+.panel {
+  position: absolute;
+  top: calc(100% + 1px);
+  left: 8px;
+  right: 8px;
+  max-height: calc(
+    100dvh - var(--header-height) - var(--toc-bar-height) - 24px
+  );
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px 16px 12px 14px;
+  background: var(--gray-1);
+  border: 1px solid var(--gray-2);
+  border-radius: 0 0 6px 6px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+.panel[hidden] {
+  display: none;
+}
+
+@media (max-width: 560px) {
+  .panel {
+    left: 0;
+    right: 0;
+  }
+}
+
+.panel .title {
+  font-size: 15px;
+}
+
+.panel .item {
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

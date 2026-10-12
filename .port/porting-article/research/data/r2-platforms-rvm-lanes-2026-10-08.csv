@@ -1,0 +1,16 @@
+lane,command,start_utc,secs,rc,result_note
+fulllinux,cargo test --workspace --no-fail-fast --features rustty/gtk,rustty/x11,rustty/wayland,2026-10-08T15:02:09Z,431,0,"6,748 passed, 0 failed (sum of test result lines)"
+gtkfeat,bash .port/tools/gates/check_gtk_feature_lane.sh,2026-10-08T15:09:20Z,301,0,"G-GTKFEAT GREEN; 232 GTK-gated tests; clippy clean"
+rel,bash .port/tools/gates/check_release_lane.sh,2026-10-08T15:14:21Z,321,0,GREEN
+examples,bash .port/tools/gates/check_examples.sh,2026-10-08T15:19:42Z,40,0,GREEN
+esctest,bash .port/tools/gates/check_esctest.sh,2026-10-08T15:21:07Z,178,3,"BLOCKED: oracle Zig build could not fetch packages"
+esctest2,bash .port/tools/gates/check_esctest.sh,2026-10-08T15:25:24Z,81,0,"GREEN: Rustty and Ghostty identical (264 pass, 42 known bugs, 261 fail on both)"
+egl,app_init_without_an_egl_driver... (env-gated),2026-10-08T15:24:05Z,44,0,"filter matched 0 tests (egl2 re-run with full path)"
+asan,sanitizers.sh --gate asan,2026-10-08T15:27:18Z,1221,0,GREEN
+lsan,sanitizers.sh --gate lsan,2026-10-08T15:47:45Z,1206,0,GREEN
+msan,sanitizers.sh --gate msan,2026-10-08T16:08:00Z,3103,1,"RED: use-of-uninitialized-value inside uninstrumented libEGL from a test new at this pin (provisional N620: gate scope)"
+hwasan,sanitizers.sh --gate hwasan,2026-10-08T17:00:11Z,1194,1,"10,182 tests passed; archive check found host-built uninstrumented libz.a (provisional N621)"
+tsan,sanitizers.sh --gate tsan,2026-10-08T17:21:07Z,1154,1,"RED in rustty-core: onig init race, Mesa-internal races (provisional N622, not established)"
+lsangtk,sanitizers.sh --gate lsan-gtk,2026-10-08T17:41:01Z,64,0,GREEN
+sanself,sanitizers.sh --self-test,2026-10-08T17:42:16Z,200,0,GREEN
+cish,bash .port/tools/ci.sh,2026-10-08T17:45:40Z,,,still running at time of capture

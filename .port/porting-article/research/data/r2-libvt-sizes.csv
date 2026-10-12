@@ -1,0 +1,11 @@
+artifact,bytes,build,rev,provenance,source
+librustty_vt_c.dylib (release; macOS arm64),2108032,cargo build -p rustty-vt-c --release (fresh tmp target),HEAD 1d22ba80d (pin a60e9e2a5),MEASURED,stat of the built file; __TEXT 1654784 / __text 1290996 (size -m)
+rustty_vt_c.wasm (wasm32-unknown-unknown; raw before the growable-table patch),1385595,cargo rustc -p rustty-vt-c --target wasm32-unknown-unknown --release -- -C link-arg=--export-table -C link-arg=-zstack-size=131072,HEAD 1d22ba80d,MEASURED,stat of the built file
+librustty_vt_c.a (release static; unpruned Rust staticlib),26633672,same native build,HEAD 1d22ba80d,MEASURED,not like-for-like with libghostty-vt.a (BASELINE.json drops the static lib for that reason)
+librustty_vt_c.dylib at the size re-base,2071760,cargo build -p rustty-vt-c --release,P7-W22 2026-10-07,DOCUMENTED,.port/phase-0/baseline/BASELINE.json binary_sizes_bytes
+libghostty-vt.0.1.0.dylib (ReleaseFast) oracle,1924784,zig build -Demit-lib-vt=true -Doptimize=ReleaseFast,12752b2ac,DOCUMENTED,.port/phase-0/baseline/BASELINE.json
+libghostty-vt.a (ReleaseFast) oracle,10901856,same,12752b2ac,DOCUMENTED,.port/phase-0/baseline/BASELINE.json binary_sizes_dropped
+librustty_vt_c.dylib before the N512 size work,2498112,,P7-W22,DOCUMENTED,BASELINE.json gap_attribution
+rustty_vt_c.wasm (wasm32-wasip1 with C deps; July),~1020000,.port/tools/build-wasm.sh --release,July 2026,DOCUMENTED,.port/phase-2/DEFERRALS.md (~1.02 MB; 157 exports)
+rustty_wasm.wasm (main wasm),992196,.port/tools/build-main-wasm.sh --release,parity closure,DOCUMENTED,.port/parity-closure/DECISION-logging.md
+ghostty-vt.wasm oracle,,not built (would write into the read-only Ghostty checkout),,GAP,

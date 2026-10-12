@@ -1,0 +1,12 @@
+class,zig_construct,port_spelling_that_lost,fix,example,worst_gap_before,provenance
+comptime param flattened to runtime enum,comptime width / comptime emit: Format,runtime enum param; dynamic-length copy_from_slice = libc memcpy per cell,const-generic param + runtime match at the inline-else site,"snapshot encode, formatter",3.9x (snapshot encode),perf-new7/DIAGNOSIS.md
+missing cross-crate #[inline] (LTO banned),single-CU Zig build inlines freely,"out-of-line Wyhash update/finalize, Page accessors, Style::hash",#[inline] on hot pub fns; const hash lengths,hyperlink-map,"6.1x (churn, floor-corrected)",perf-new7/DIAGNOSIS.md
+comptime constant recomputed at runtime,PagePool.item_size comptime,std_size() re-running ~90-line Page::layout per resize,OnceLock cache,terminal-resize,+34% (rows),perf-new7/DIAGNOSIS.md
+undefined buffer zeroed in hot loop,var buf: [N]u8 = undefined,[0; N] inside loop (4 KiB/row; 512 B x2 per style boundary),"hoist to caller, zero once","snapshot encode, formatter",36% of encode time,perf-new7/DIAGNOSIS.md
+#[inline] hint lost to cost model,pub inline fn (hard),#[inline] on 254-instr Page::layout,#[inline(always)],terminal-resize.rows,+27% -> -1%,perf-new7/RESULTS.md
+scalar early-exit scan loops,branchless @Vector bitmask reduce,per-lane break blocks vectorization,bitmask accumulate + trailing_zeros,terminal-stream,5.3x on scan micro,memory comptime-flattening-perf-hazard
+black_box mis-port of doNotOptimizeAway,register constraint,stack spill + memory clobber per call,asm register sink,unicode bench family,-,perf-new7/RESULTS.md wave 2
+unbuffered DataFile reads,buffered reader,16384 syscalls per 64 MiB,256 KiB BufReader (256 syscalls),bench harness,-,perf-new7/RESULTS.md wave 2
+enum drop glue on per-byte return,union(enum) Action has no destructor,[Option<Action>;3] with droppy variant forces materialization + drop_in_place,box the droppy payloads; Action 16 B,terminal-parser,~53% of parse loop,PERF_LOG.md Round 2
+by-value large args,Zig passes big params by const ref,24-28 B Style marshalled to stack per call,raw-pointer internal entry points,screen-clone.clone,documented floor until r5,PERF_LOG.md Round 3/5
+bench build-config mismatch,ghostty-bench builds simd=true,rustty-bench ran scalar fallback,bench-scoped simd feature,terminal-stream,~24% at r5 (8.2% by WS10),"PERF_LOG.md Round 5, WS10 Fence 2"

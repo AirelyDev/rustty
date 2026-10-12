@@ -1,0 +1,17 @@
+component,path,kind,client_or_server,reuse_for_article
+AnimatedTerminal,src/components/animated-terminal/index.tsx,frame-clip terminal player (honours prefers-reduced-motion),client,replay-style terminal figures (e.g. test-run or bench output scrolling)
+playback state machine,src/components/animated-terminal/playback.ts,pure clip/frame scheduler,shared,drive "replay" buttons for animated charts
+Terminal,src/components/terminal/index.tsx,static terminal window chrome (macos/adwaita),client,frame code or CLI output figures
+Mermaid,src/components/mermaid/index.tsx,lazy mermaid@11.12.3 renderer (dark; forces white strokes),client,crate dependency graph / phase timeline diagrams (monochrome only)
+CodeBlock,src/components/codeblock/index.tsx,highlighted code (rehype-highlight atom-one-dark),server,Zig vs Rust side-by-side snippets
+Callout/Note/Tip/Important/Warning/Caution,src/components/callout/index.tsx,GFM-alert callouts,server,methodology / caveat boxes
+CardLinks,src/components/card-links/index.tsx,grid of link cards,server,related-reading / appendix links
+ButtonLink,src/components/link/index.tsx,brand|neutral button link small|medium|large,server,home-page entry link
+ButtonLinks,src/components/button-links/index.tsx,multi-column button links (MDX),server,CTA rows inside article
+JumplinkHeader,src/components/jumplink-header/index.tsx,anchored heading + useInView -> zustand store,client,section headings feeding Sidecar TOC
+Sidecar,src/components/sidecar/index.tsx,"On this page" sticky TOC from page headers,client,article table of contents (matches Bun post TOC)
+SectionWrapper,src/components/section-wrapper/index.tsx,section + GridContainer,server,article page shell
+GridContainer,src/components/grid-container/index.tsx,max-width container (Standard 1300px),server,chart width container
+VTSequence,src/components/vt-sequence/index.tsx,VT escape sequence pill,server,inline references to VT sequences in bug stories
+Blockquote,src/components/blockquote/index.tsx,styled blockquote,server,quoting plan/prompt excerpts
+Video,src/components/video/index.tsx,video embed,server,screen recordings of the app

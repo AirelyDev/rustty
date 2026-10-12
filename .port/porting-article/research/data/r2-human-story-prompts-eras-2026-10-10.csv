@@ -1,0 +1,8 @@
+era,start,end,calendar_days,prompts_rustty,prompts_mac,prompts_rvm,active_prompt_days,prompts_per_active_day,typed_prompts,median_chars_typed,p90_chars_typed,share_typed_le_20_chars,share_typed_gt_200_chars,slash_cmds,top_slash,commits_non_merge,commits_per_prompt,limit_mentions,other_project_prompts,rustty_share_of_all_prompts
+E0 origin (other dir),2026-06-20,2026-06-21,2,13,13,0,2,6.5,10,40.0,172.7,0.2,0.1,3,/effort 1; /clear 1; /resume 1,34,2.62,0,81,0.138
+A greenfield workflow sprint,2026-06-22,2026-07-09,18,116,116,0,13,8.9,85,54.0,150.0,0.18,0.07,35,/effort 11; /resume 8; /model 6; /btw 4; /clear 2; /workflows 1,418,3.6,5,171,0.404
+"B Bun realignment, macOS app, rebrand, perf",2026-07-10,2026-07-17,8,206,206,0,7,29.4,181,64.0,199.0,0.09,0.1,27,/clear 5; /model 3; /effort 3; /compact 3; /btw 2; /resume 2,327,1.59,3,42,0.831
+C Linux VM GTK bring-up,2026-07-18,2026-07-23,6,179,24,155,5,35.8,151,51.0,188.0,0.21,0.09,29,/resume 17; /model 7; /effort 3; /goal 1; /compact 1,125,0.7,0,97,0.649
+"D completion roadmap, Codex audit, first upstream syncs",2026-07-24,2026-08-31,39,163,153,10,16,10.2,136,63.5,215.0,0.15,0.11,35,/model 9; /resume 6; /goal 5; /clear 5; /compact 4; /btw 3,488,2.99,6,597,0.214
+"E parity closure, never-port-a-bug, orchestrator",2026-09-01,2026-09-28,28,115,115,0,14,8.2,91,68.0,185.0,0.11,0.08,38,/btw 14; /resume 11; /model 9; /effort 3; /login 1,1042,9.06,5,1176,0.089
+"F verification matrix, phase 8, article",2026-09-29,2026-10-10,12,184,184,0,9,20.4,153,54.0,208.0,0.24,0.12,42,/resume 14; /btw 11; /model 10; /remote-control 2; /reload-plugins 1; /quit 1,355,1.93,2,202,0.477

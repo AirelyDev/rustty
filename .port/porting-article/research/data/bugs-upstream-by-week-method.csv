@@ -1,0 +1,25 @@
+week_start,method,count
+2026-09-07,checked arithmetic/casts (Zig->Rust translation),8
+2026-09-07,code reading (port review),3
+2026-09-07,compiler/build (porting an unbuilt path),11
+2026-09-07,cross-platform bring-up (Windows/Linux VM),2
+2026-09-07,line-by-line port review,35
+2026-09-07,reference test review (test port),7
+2026-09-21,checked arithmetic/casts (Zig->Rust translation),17
+2026-09-21,code reading (port review),15
+2026-09-21,compiler/build (porting an unbuilt path),3
+2026-09-21,cross-platform bring-up (Windows/Linux VM),14
+2026-09-21,fault injection (allocation failure),4
+2026-09-21,line-by-line port review,52
+2026-09-21,reference test review (test port),4
+2026-09-21,sanitizer gate,1
+2026-09-21,withheld (private disclosure),1
+2026-09-28,checked arithmetic/casts (Zig->Rust translation),4
+2026-09-28,code reading (port review),7
+2026-09-28,compiler/build (porting an unbuilt path),2
+2026-09-28,fault injection (allocation failure),3
+2026-09-28,line-by-line port review,8
+2026-09-28,sanitizer gate,1
+2026-09-28,withheld (private disclosure),1
+2026-10-05,line-by-line port review,1
+2026-10-05,sanitizer gate,1

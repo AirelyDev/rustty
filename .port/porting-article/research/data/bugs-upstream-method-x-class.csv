@@ -1,0 +1,28 @@
+method,class,count
+checked arithmetic/casts (Zig->Rust translation),crash,29
+code reading (port review),crash,4
+code reading (port review),deadlock/hang,2
+code reading (port review),intent-breaking,3
+code reading (port review),latent,5
+code reading (port review),leak,2
+code reading (port review),ub,9
+compiler/build (porting an unbuilt path),intent-breaking,2
+compiler/build (porting an unbuilt path),latent,14
+cross-platform bring-up (Windows/Linux VM),crash,5
+cross-platform bring-up (Windows/Linux VM),deadlock/hang,2
+cross-platform bring-up (Windows/Linux VM),intent-breaking,5
+cross-platform bring-up (Windows/Linux VM),latent,4
+fault injection (allocation failure),crash,3
+fault injection (allocation failure),deadlock/hang,1
+fault injection (allocation failure),intent-breaking,1
+fault injection (allocation failure),leak,2
+line-by-line port review,crash,17
+line-by-line port review,deadlock/hang,4
+line-by-line port review,intent-breaking,22
+line-by-line port review,latent,36
+line-by-line port review,leak,8
+line-by-line port review,ub,9
+reference test review (test port),test-weakness,11
+sanitizer gate,leak,2
+sanitizer gate,ub,1
+withheld (private disclosure),crash,2

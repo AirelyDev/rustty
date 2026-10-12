@@ -1,0 +1,12 @@
+tree,component,language,code_loc,provenance,evidence
+ghostty,src/ (application + libghostty-vt),Zig,249453,MEASURED,tokei ../ghostty/src -t Zig (599 files)
+ghostty,pkg/ C-library wrappers,Zig,11021,MEASURED,tokei ../ghostty/pkg (Zig only)
+ghostty,ported Zig deps (libxev+libvaxis+z2d+zf),Zig,51921,MEASURED,tokei zig-pkg/<dep>/src (17239+14206+19812+664)
+ghostty,macOS app,Swift,26742,MEASURED,tokei ../ghostty/macos -t Swift (197 files)
+ghostty,public C headers,C Header,15212,MEASURED,find ../ghostty/include -name '*.h' | xargs wc -l (lines not code)
+rustty,crates/ (45 crates) + xtask,Rust,507628,MEASURED,tokei per crate (excl vendor) - see codebase-crates.csv
+rustty,crates-sys/ wrappers+build.rs (16 crates),Rust,4100,MEASURED,tokei crates-sys/*/src + build.rs
+rustty,crates-sys vendored C/C++ (same libraries Ghostty fetches as packages),C/C++,1058459,MEASURED,tokei crates-sys/*/vendor (C/C++/headers)
+rustty,macOS app (reused from Ghostty and renamed),Swift,26843,MEASURED,tokei macos -t Swift (198 files)
+rustty,public C headers,C Header,19752,MEASURED,find include -name '*.h' | xargs wc -l (lines not code)
+rustty,port verification tooling (.port/tools: gates + harnesses),Python+Shell+JS+PS,33072,MEASURED,tokei .port/tools

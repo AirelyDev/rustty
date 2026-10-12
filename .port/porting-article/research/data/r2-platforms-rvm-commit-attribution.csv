@@ -1,0 +1,791 @@
+hash,date,rvm_transcript_hash,rvm_active_within_15min,linux_paths,subject
+49cee875a,2026-07-15T14:01:56-07:00,False,False,False,cabi: drop the vendored include/ghostty.h — verify against the pinned oracle checkout
+3f8f069a7,2026-07-15T14:09:41-07:00,False,False,False,cabi: fix stale include/ghostty.h references after dropping the vendored copy
+a17e27348,2026-07-15T14:20:11-07:00,False,False,False,examples(phase B): port c-vt-build-info (byte-identical) + parity harness
+01c180f1e,2026-07-15T14:25:25-07:00,False,False,False,examples(phase B): port all 20 ghostty c-vt/cpp-vt runtime examples — 21/21 byte-identical
+eb7cd113c,2026-07-15T14:25:40-07:00,False,False,False,examples(phase B): add example/c-vt (bare) — byte-identical (glob miss in prior commit)
+6de1ba49b,2026-07-15T14:28:13-07:00,False,False,False,"examples: fix README build refs — build.zig/Zig -> build.sh/clang, ghostty-vt -> rustty-vt"
+40727a2cb,2026-07-15T16:27:32-07:00,False,False,False,fix(cabi): TriggerC by-value return was 20B vs header 12B → sret crash
+e01d22d42,2026-07-15T16:32:33-07:00,False,False,False,ci(abi): register orphaned vt struct-layout gate (A5); document class audit
+c05310665,2026-07-15T16:48:32-07:00,False,False,False,feat(abi): A4 field-offset cross-check closes the embedding-layout residual
+648d1afeb,2026-07-15T19:34:07-07:00,False,False,False,"rustty: top-level project files port — Batch 1 (docs, dotfiles, governance)"
+0f3311f22,2026-07-15T20:12:36-07:00,False,False,False,rustty: top-level project files port — Batch 2 (C-API build tooling)
+0b3c3cda9,2026-07-15T20:23:55-07:00,False,False,True,rustty: top-level project files port — Batch 3 (dist packaging assets)
+8cf48cd67,2026-07-15T20:38:12-07:00,False,False,False,rustty: Batch 4 (Nix flake) design spec — deferred to a Linux environment
+6e03f71c0,2026-07-15T20:54:21-07:00,False,False,False,"rustty: top-level project files port — Batch 5 (.github, dot-dirs, xtask dist, assets)"
+90970e490,2026-07-15T21:04:50-07:00,False,False,False,"rustty: HACKING.md — document build methods, artifacts, and release paths"
+e020db2e4,2026-07-15T21:50:39-07:00,False,False,False,rustty: top-level project files port — Batch 6 (full i18n)
+0c0ad5359,2026-07-15T21:59:43-07:00,False,False,False,rustty: po/he.po — translator contact email -> [redacted]
+2de5ba82b,2026-07-15T22:01:01-07:00,False,False,False,rustty: po/he.po — drop the ported translator name (use maintainer identity)
+cad8e20da,2026-07-15T22:03:38-07:00,False,False,False,rustty: po/he.po — restore the original translator attribution
+d03769127,2026-07-15T23:57:30-07:00,False,False,False,rustty: rustty-bench + rustty-synthetic — runnable benchmark/generator binaries
+10cc61434,2026-07-15T23:57:43-07:00,False,False,False,rustty: phase-2 — Rust-vs-Zig benchmark head-to-head + synthetic CLI parity design
+9e028ec0f,2026-07-16T01:18:25-07:00,False,False,False,rustty: perf — fix-profile-lto: TIER-0 build-profile parity for release-fast
+f2b7dcd52,2026-07-16T01:24:13-07:00,False,False,False,rustty: perf — fix-inline-idioms: restore every dropped Zig inline hint
+79dce2e5b,2026-07-16T01:28:50-07:00,False,False,False,rustty: perf — fix-utf8-dfa: elide per-byte TRANSITIONS bounds/overflow checks
+eb3235987,2026-07-16T01:31:38-07:00,False,False,False,rustty: perf — fix-bench-assert-tier: port std.debug.assert at its correct tier
+08299e036,2026-07-16T01:41:38-07:00,False,False,False,rustty: perf — fix-pin-keys-collect: drop the per-chunk tracked-pin key Vec
+cdb9a26e6,2026-07-16T01:46:32-07:00,False,False,False,rustty: perf — fix-remap-hasher: pointer-identity hasher for TrackedPinsRemap
+9789788e2,2026-07-16T01:51:52-07:00,False,False,False,rustty: perf — fix-render-soa: restore MultiArrayList SoA + raw-column memcpy in RenderState
+11ca4255e,2026-07-16T01:55:29-07:00,False,False,False,rustty: perf — fix-osc-fixed-capture: restore the zero-alloc fixed-writer-over-self.buffer OSC capture
+67962f13d,2026-07-16T02:02:23-07:00,False,False,False,"rustty: perf — fix-color-list-prealloc: restore SegmentedList(Request,2) inline prealloc"
+82defe5f4,2026-07-16T02:08:47-07:00,False,False,False,rustty: perf — fix-lut-bounds: remove the 3 chained bounds checks in the 3-stage unicode lookup
+2bb5c4278,2026-07-16T02:14:42-07:00,False,False,False,rustty: perf — fix-parser-destage: restore the reference arm structure in Parser::next
+d211a84a6,2026-07-16T02:15:55-07:00,False,False,False,rustty: perf — merge fix-render-soa branch
+9e1837b01,2026-07-16T03:20:59-07:00,False,False,False,rustty: perf — release-fast profile: revert LTO/cgu/panic to overflow-checks-only (measured optimum)
+408ddaa32,2026-07-16T03:20:59-07:00,False,False,False,"Revert ""rustty: perf — fix-color-list-prealloc: restore SegmentedList(Request,2) inline prealloc"""
+1e9660360,2026-07-16T03:23:30-07:00,False,False,False,"rustty: phase-2 — perf-opt attribution log, fix plan, raw bench data"
+b6f5e4f2f,2026-07-16T04:37:13-07:00,False,False,False,perf(vt): render update — stop re-zeroing the style/grapheme SoA columns per rebuild (fix-render-undefined-cols)
+e1f482912,2026-07-16T05:00:15-07:00,False,False,False,rustty: perf — r2-action-arrayvec: drop-glue-free per-byte Action return (boxed dispatch payloads + InlineVec + state ho
+ab20827fd,2026-07-16T05:09:47-07:00,False,False,False,rustty: perf — r2-clone: inline packed Style::eql + coalesced cell copy in clone_partial_row_from
+9e386ab44,2026-07-16T05:20:32-07:00,False,False,False,rustty: perf — r2-osc-win: fall-through success store in the OSC fixed-capture writeByte
+ada047519,2026-07-16T05:21:52-07:00,False,False,False,"rustty: alloc-bench suite — alloc-bench feature seam, equal-scope standalone bench, arena resize seam (fix 12), std_size"
+8fb3dd239,2026-07-16T05:22:59-07:00,False,False,False,rustty: perf — merge alloc-bench suite branch
+3f9f91c40,2026-07-16T05:33:12-07:00,False,False,False,rustty: inspector — pre-existing lint/fmt drift cleanup (unblock round-2 gates)
+efb739c71,2026-07-16T06:07:33Z,False,False,False,build(deps): bump actions/cache from 4 to 6
+5b77667ca,2026-07-16T06:07:37Z,False,False,False,build(deps): bump actions/checkout from 4 to 7
+1abae33eb,2026-07-16T07:03:35-07:00,False,False,False,rustty: perf — r3-clone: outline cold grapheme/hyperlink arms of clone_partial_row_from
+e6f27dc00,2026-07-16T07:10:18-07:00,False,False,False,rustty: perf — r3-render: hoist mutable style/grapheme column borrows in update()
+10f2091fe,2026-07-16T07:23:54-07:00,False,False,False,rustty: vt — parity fix: same-page clone must not skip style/kitty for hyperlinked cells
+e320dcba5,2026-07-16T07:38:42-07:00,False,False,False,rustty: phase-2 — rounds 2-3 official results: 13 wins / 1 parity / 0 losses vs Zig
+a26a4b130,2026-07-16T09:07:45-07:00,False,False,False,rustty: perf — r4-render-win: hoist style-set base + zip the managed cell walk
+be0280164,2026-07-16T09:19:13-07:00,False,False,False,rustty: perf — r5-parser-fastpath: state-equal fast path in Parser::next
+3e91f908b,2026-07-16T09:19:50-07:00,False,False,False,"rustty: phase-2 — r4 final gate record: workspace green, SHIP-RF stashed, -7.0% confirmation sweep"
+52116f37f,2026-07-16T09:36:26-07:00,False,False,False,rustty: perf — r5-stream-simd: restore the reference bench binary's SIMD build config
+6ca101519,2026-07-16T09:36:26-07:00,False,False,False,rustty: perf — r5-print-outline: outline cold print arms (grapheme/zero-width/wide)
+ca714e0c8,2026-07-16T09:41:05-07:00,False,False,False,rustty: perf — r5-utf8-dfa-pad: panic-free 512-entry DFA pad + per-arm state stores in UTF8Decoder::next
+d812712d4,2026-07-16T09:41:23-07:00,False,False,False,rustty: phase-2 — r5 lane B (decode family) spot-timing raw data
+745b3c9e3,2026-07-16T10:00:32-07:00,False,False,False,rustty: perf — r5-clone-style-run: batch same-style runs + by-pointer set adds in the clone chain
+43cf4b507,2026-07-16T10:02:29-07:00,False,False,False,rustty: perf — merge A — parser + stream lane (round 5)
+3e300c875,2026-07-16T10:03:18-07:00,False,False,False,rustty: perf — merge B — decode family lane (round 5)
+a3a2b2325,2026-07-16T10:04:41-07:00,False,False,False,rustty: perf — merge D — clone chain lane (round 5)
+349e5d101,2026-07-16T10:41:04-07:00,False,False,False,"rustty: phase-2 — rounds 4-5 official: 14/14 WINS vs Zig, suite -21.7%"
+85d19023a,2026-07-16T20:59:14-07:00,False,False,False,rustty: linux-port — fix never-compiled -sys build breaks on aarch64 glibc / GCC 16
+f32352ab1,2026-07-16T22:22:46-07:00,False,False,True,rustty: linux-port — GTK roadmap + detailed L1 (xev epoll/io_uring/Dynamic) plan
+542840852,2026-07-16T23:35:43-07:00,False,False,True,rustty-xev: linux backend enum + gated module skeleton (L1 LT1)
+2bbbb38cf,2026-07-16T23:44:39-07:00,False,False,True,"L1 plan: STRUCTURE CORRECTION — self-contained Linux backends (macOS watcher files untouched, R5)"
+0aa7470a8,2026-07-16T23:50:50-07:00,False,False,True,rustty-xev: linux timerfd + eventfd primitives + shared ABI enums (L1 LT2)
+1f250a897,2026-07-16T23:55:37-07:00,False,False,True,L1 plan: Task 3 scope — epoll loop uses linux/ primitives + twinned enums; absorb epoll:timerfd test
+1d0e5b480,2026-07-17T00:12:13-07:00,False,False,True,rustty-xev: epoll Loop core + timers/cancellation (L1 LT3)
+50a6ab2d8,2026-07-17T00:19:03-07:00,False,False,True,L1 plan: Task 4 scope — socket/process/stream inside epoll.rs + linux/net.rs; carry T3 notes
+89be5045c,2026-07-17T00:39:30-07:00,False,False,True,rustty-xev: epoll socket/process/stream arms + live KATs (L1 LT4)
+13daa3ae6,2026-07-17T01:05:35-07:00,False,False,True,rustty-xev: io_uring ring binding + Loop core (L1 LT5)
+4be0384d1,2026-07-17T01:07:30-07:00,False,False,True,L1 plan: Task 6 scope — io_uring watchers inside io_uring.rs; reuse hand-declared ABI
+8d7633295,2026-07-17T01:10:42-07:00,False,False,True,"rustty: linux-port — detailed TDD plans for tiers L3 (fontconfig), L4 (OpenGL), L5 (GTK)"
+48def4c00,2026-07-17T01:10:42-07:00,False,False,False,rustty: L0 — gate apprt-c's macOS-only deps so the workspace resolves on Linux
+63cdf10ce,2026-07-17T01:15:12-07:00,False,False,True,L4 plan: empirical host GL finding — surfaceless exposes no GL config; use GBM/renderD128 or EGL_NO_CONFIG_KHR; ceiling 
+981b57b80,2026-07-17T01:23:15-07:00,False,False,False,"rustty-font-shaper: fix Linux hard compile errors (Options alias, discovery::Error, typed Fontconfig stub) (L3 Task 1)"
+8126dfef8,2026-07-17T01:30:20-07:00,False,False,True,rustty-apprt: gtk module skeleton + gtk4-rs deps behind the linux/gtk gate (L5.0 T1)
+31eb3dccb,2026-07-17T01:36:18-07:00,False,False,False,rustty-renderer: fix Linux hard compile error (ungate metal-free overlay) (L5 blocker)
+cce70c8af,2026-07-17T01:44:46-07:00,False,False,True,rustty-xev: io_uring timers/sockets/watcher arms + KATs (L1 LT6)
+4e71e1efb,2026-07-17T01:46:40-07:00,False,False,True,rustty-apprt/gtk: correct the AD-3 rationale; ratify the v4_14 ceiling deferral (L5.0 T1 review)
+e935ad71a,2026-07-17T02:02:10-07:00,False,False,True,rustty-renderer: headless EGL context + gl loader (L4 T1)
+4428e3041,2026-07-17T02:15:10-07:00,False,False,True,rustty-apprt/gtk: state the AD-3 rule correctly; reconcile window.zig:1799 (L5.0 T1 re-review)
+51cea8587,2026-07-17T02:23:48-07:00,False,False,True,rustty-renderer: fix EGL config selection + narrow the test's skip arm (L4 T1 review)
+04e278965,2026-07-17T02:28:57-07:00,False,False,True,rustty-xev: hand-authored Dynamic io_uring/epoll selector (L1 LT7)
+b9cdd41c0,2026-07-17T04:57:45-07:00,False,False,True,rustty-xev: pin dynamic.rs's Send/Copy story with Step-3 trait-bound tripwires
+b60017e52,2026-07-17T05:18:03-07:00,False,False,True,rustty-renderer: opengl::gl buffer/vertex_array/errors/draw leaves (L4 T2)
+31e670bfd,2026-07-17T05:29:37-07:00,False,False,True,rustty-xev: per-target Dynamic re-export + gate wiring (L1 LT8)
+7082446e3,2026-07-17T05:46:24-07:00,False,False,True,rustty-renderer: opengl::gl shader/program leaves (L4 T3)
+7ec3a3fe7,2026-07-17T06:04:50-07:00,False,False,True,rustty-termio: live shell on Linux over the xev Dynamic loop (L1 LT9)
+5af512357,2026-07-17T06:09:15-07:00,False,False,True,rustty-renderer: opengl::gl texture/sampler/framebuffer/renderbuffer leaves (L4 T4)
+87116ecad,2026-07-17T06:22:52-07:00,False,False,True,rustty-xev: un-defer Timer::cancel on Linux (L1)
+f4b668883,2026-07-17T06:22:59-07:00,False,False,True,L4 plan: RESOLVE the host-GL question — supersede the controller's half-wrong probe note
+d4a1d86b4,2026-07-17T06:56:00-07:00,False,False,True,rustty-apprt/gtk: pinned gtk>=4.14/adw>=1.5 baseline; version-conditional branches deleted (L5.0 T2)
+af0d065d9,2026-07-17T07:59:47-07:00,False,False,False,libxml2-sys: vendor libxml2 2.11.5 (cc + bindgen + KAT) — L3 T2
+0623aef7b,2026-07-17T10:10:38-07:00,False,False,True,"rustty: vendor fontconfig-sys (fontconfig 2.14.2, cc+bindgen+KAT, deps freetype-sys+libxml2-sys) — R3 (L3 Task 3)"
+2e4f9c3b8,2026-07-17T10:23:37-07:00,False,False,True,rustty-apprt/gtk: subclass-idiom bridge + weak_ref + ext helpers (L5.0 T3)
+8344e7794,2026-07-17T10:24:06-07:00,False,False,False,"rustty-font-shaper: fc.rs — Fontconfig FFI wrapper (port of pkg/fontconfig/*.zig, 11 tests) (L3 Task 4)"
+612ab4898,2026-07-17T10:33:56-07:00,False,False,True,"rustty-apprt/gtk: port ext::list_find (listFind, ext.zig:34 — live @ application.zig:2717) (L5.0 T3 review fix)"
+baa047e9d,2026-07-17T10:55:20-07:00,False,False,True,rustty-apprt/gtk: vendor 19 .blp + 4 .css + icons verbatim; build_info + gresource manifest (L5.0 T4)
+a36cd203d,2026-07-17T10:56:48-07:00,False,False,False,rustty-font-shaper: Descriptor::to_fc_pattern (toFcPattern) (L3 Task 5)
+817793458,2026-07-17T10:59:11-07:00,False,False,True,rustty-renderer: opengl buffer/texture/sampler leaves (L4 T5)
+e35e57470,2026-07-17T11:12:31-07:00,False,False,False,rustty-font-shaper: real Fontconfig discoverer + DiscoverIterator (L3 Task 6)
+2bf9d4693,2026-07-17T11:17:50-07:00,False,False,True,rustty-apprt/gtk: build.rs asset pipeline (blueprint -> gresource -> cc) (L5.0 T5)
+0ebbc4190,2026-07-17T11:18:23-07:00,False,False,True,rustty-renderer: opengl target/pipeline/render_pass/frame + golden readback (L4 T6)
+b81d530f5,2026-07-17T11:33:42-07:00,False,False,False,rustty-font-shaper: DeferredFace Fontconfig payload + load/name/family_name arms (L3 Task 7)
+b659b514b,2026-07-17T11:38:11-07:00,False,False,True,rustty-apprt/gtk: Config GObject subclass (L5.1 T6)
+30d5e9953,2026-07-17T11:44:34-07:00,False,False,True,rustty-renderer: verbatim GLSL assets + opengl gpu_abi/shaders (L4 T7)
+4883cc9f5,2026-07-17T11:54:11-07:00,False,False,True,rustty-apprt/gtk: Application subclass skeleton + default()/allocator() (L5.1 T7)
+e61b4377b,2026-07-17T12:00:14-07:00,False,False,True,rustty-renderer: OpenGL graphics-API impl (L4 T8)
+e50be5f91,2026-07-17T12:20:54-07:00,False,False,True,rustty-apprt/gtk: Application::new/deinit + noop winproto union (L5.1 T8)
+ce1226bbb,2026-07-17T12:26:18-07:00,False,False,True,rustty-renderer: linux_impl Renderer/SwapChain skeleton + init/deinit (L4 T9)
+5ddd39f62,2026-07-17T12:45:17-07:00,False,False,True,rustty-renderer: linux_impl rebuild_cells + update_frame uniforms (L4 T10)
+3daf6dd51,2026-07-17T12:56:56-07:00,False,False,True,rustty-apprt/gtk: Application startup/activate/dispose/finalize + startup helpers (L5.1 T9)
+1556c8070,2026-07-17T13:14:06-07:00,False,False,True,rustty-renderer: linux_impl draw_frame + OpenGL offscreen golden (L4 T11)
+38c206fd9,2026-07-17T13:19:38-07:00,False,False,True,rustty-apprt/gtk: hand-rolled run loop + MainContext::wakeup bridge + quit timer (L5.1 T10)
+ab12a246d,2026-07-17T13:38:09-07:00,False,False,True,rustty-apprt/gtk: App shim + apprt_api::App impl + MUST_DRAW_FROM_APP_THREAD trait const (L5.1 T11)
+d22aa03db,2026-07-17T13:59:35-07:00,False,False,False,rustty: wire the GUI launch leaf to the GTK apprt for Runtime::Gtk (L5.1 T12)
+dfd10775e,2026-07-17T14:48:46-07:00,False,False,True,rustty-apprt/gtk: Surface subclass + surface.blp template + init + gsettings (L5.2 T13)
+c507361cf,2026-07-17T15:10:45-07:00,False,False,True,"rustty-apprt/gtk: Surface dispose/finalize — template double-free workaround, deleteSurface ordering, source-id RAII (L5"
+9fa769ce3,2026-07-17T15:34:35-07:00,False,False,True,rustty-renderer: port display_realized/display_unrealized to linux OpenGL renderer (L5 prereq)
+be3f203cd,2026-07-17T16:15:07-07:00,False,False,True,rustty-apprt/gtk: GLArea lifecycle + lazy core_surface + apprt Surface shim (L5.2 T15+T17)
+9580454b1,2026-07-17T16:32:13-07:00,False,False,True,rustty-apprt/gtk: fix GLArea swapped-callback arg order + add resize/render drivers (L5.2 T15 review)
+19b23aef0,2026-07-17T16:57:20-07:00,False,False,True,"rustty-apprt/gtk: the app-thread render contract, end to end (L5.2 T16)"
+0bb7aaca1,2026-07-17T17:29:07-07:00,False,False,True,"rustty-apprt/gtk: input pipeline — key.rs, keyEvent/IM, mouse, scroll, focus (L5.2 T18)"
+f4e46ba1a,2026-07-17T17:57:43-07:00,False,False,True,rustty-apprt/gtk: bind rt_app + core-app thunks in App::run (L5.2 T19 prereq)
+5c801a295,2026-07-17T18:18:21-07:00,False,False,True,rustty-core: L4 swap — wire the real OpenGL Renderer into the renderer seam (first light)
+3dad6d7a2,2026-07-17T19:30:31-07:00,False,False,False,rustty-apprt/gtk: FIRST LIGHT — AdwApplicationWindow + GLArea renders a live terminal frame (L5.2 T19)
+3dd6cfeb2,2026-07-17T20:15:06-07:00,False,False,True,rustty-apprt/gtk: surface teardown SOUNDNESS — AtomicPtr core_surface + join-before-clear
+269845ec9,2026-07-17T20:49:15-07:00,False,False,True,rustty-renderer/gtk: GL-ATTACH — draw into GDK's GLArea context (first light on screen)
+f3bb00b5c,2026-07-17T21:33:15-07:00,False,False,False,rustty-termio: fix Subprocess argv double-free — free C-string storage in deinit
+6fe5259bf,2026-07-17T21:35:43-07:00,False,False,True,rustty-apprt/gtk: finalize frees the CoreSurface box WITHOUT Drop glue (double-free fix)
+16974ce71,2026-07-17T21:39:13-07:00,False,False,True,rustty-apprt/gtk: Window class (AdwApplicationWindow) (L5.3 T20)
+11766c1de,2026-07-17T21:52:01-07:00,False,False,True,"rustty-apprt/gtk: About dialog sources rustty identity, drops ghostty.org leak (L5.3 T20 fix)"
+8cef0162f,2026-07-17T22:35:27-07:00,False,False,True,rustty-apprt/gtk: Tab + SurfaceScrolledWindow + SplitTree/Split (L5.3 T21)
+7cb541e55,2026-07-17T23:05:36-07:00,False,False,True,rustty-apprt/gtk: the full performAction switch + Action namespace (L5.3 T22)
+d14252176,2026-07-17T23:16:43-07:00,False,False,True,rustty-apprt/gtk: fix new_window/new_tab panic — defer T21 tab leaf (L5.3 T22 fix)
+9bc62e574,2026-07-18T02:00:44-07:00,False,False,True,rustty-apprt/gtk: wire Window<->Tab<->Surface — a live terminal in the window (L5.3)
+8d38349c8,2026-07-18T02:13:18-07:00,False,False,True,docs: handoff plan — finish GTK on Linux + validate under real 3D acceleration
+2d1489c29,2026-07-18T09:45:18-07:00,True,True,False,rustty-apprt/gtk: gtk_glyph_dump validation harness — GPU-accurate GLArea screenshot
+5ce0d0269,2026-07-18T11:50:10-07:00,True,True,True,rustty-apprt/gtk: fix terminal swallowing all input — placeholder overlays must start hidden
+486793623,2026-07-18T12:02:57-07:00,True,True,True,rustty-apprt/gtk: fix crash-on-interaction — context_menu_closed + child_exited_close
+733e2e1ee,2026-07-18T13:26:57-07:00,False,True,True,rustty-apprt/gtk: T23 CloseConfirmationDialog — fixes close window/tab/split aborts
+abb3c51a3,2026-07-18T13:34:41-07:00,True,True,True,rustty-apprt/gtk: menu accelerators — implement syncActionAccelerators (shortcuts in menus)
+a984c8003,2026-07-18T14:54:36-07:00,False,True,True,"rustty-apprt/gtk: T23 TitleDialog + wire context-menu ""Change Tab Title"" — fixes crash + dead menu"
+449d20187,2026-07-18T18:20:00-07:00,True,True,True,rustty-apprt/gtk: implement set_title + pwd actions — window title tracks the surface
+c10e6ff5d,2026-07-18T18:35:53-07:00,False,True,True,rustty-apprt/gtk: clipboard copy/paste (Phase A) — set_clipboard + clipboard_request
+e105ea921,2026-07-18T19:00:41-07:00,False,True,True,rustty-apprt/gtk: clipboard confirmation dialog (Phase B) — ClipboardConfirmationDialog
+af5a9078f,2026-07-18T23:25:59-07:00,False,True,True,"rustty-apprt/gtk: close the audited GTK parity gaps — dead actions, drop crash, T24 overlays, T25 palette, T26 shortcuts"
+195f5dc93,2026-07-18T23:39:05-07:00,True,True,True,rustty-apprt/gtk: L6 IPC — +new-window / +toggle-quick-terminal D-Bus IPC (and open the window)
+42749b5e3,2026-07-18T23:41:48-07:00,False,True,False,docs: Linux/GTK manual test plan — full parity checklist vs ghostty
+317f5f477,2026-07-18T23:54:04-07:00,True,True,True,rustty-apprt/gtk: wire notify-on-next-command-finish toggle (final-audit finding)
+01c275487,2026-07-18T23:55:23-07:00,True,True,False,docs(.port): track the Linux/GTK tail deferrals — winproto arms + dcimgui inspector + ipc argv
+f74d60127,2026-07-19T02:17:42-07:00,False,True,True,"rustty-apprt/gtk: Wayland winproto arm (T27/T28) — feature ""wayland"", runtime-verified"
+aae953677,2026-07-19T02:32:00-07:00,False,True,True,"rustty-apprt/gtk: X11 winproto arm (L6) — feature ""x11"", runtime-verified under XWayland"
+4006e602a,2026-07-19T02:33:03-07:00,True,True,False,docs: winproto arms implemented — update test plan + ledger; only dcimgui inspector remains
+4b653d5ac,2026-07-19T04:31:24-07:00,False,True,True,docs: GTK inspector (Dear ImGui over OpenGL) design spec
+d6fe88287,2026-07-19T04:34:52-07:00,False,True,True,docs: GTK inspector implementation plan (Dear ImGui over OpenGL)
+657f223d1,2026-07-19T04:40:43-07:00,True,True,True,inspector(gtk): vendor + compile imgui_impl_opengl3 into dcimgui-sys (Task 1)
+f7806500e,2026-07-19T04:41:49-07:00,True,True,False,inspector(gtk): dcimgui-sys ImGui_ImplOpenGL3 FFI surface (Task 2)
+2b023c672,2026-07-19T04:45:03-07:00,False,True,False,inspector(gtk): fill Key::imgui_key + enable imgui in the gtk build (Task 3)
+3c06c21b6,2026-07-19T05:01:10-07:00,False,True,True,inspector(gtk): ImguiWidget — ImGui-over-GLArea host (Task 4)
+6c8c92d99,2026-07-19T05:11:50-07:00,True,True,True,inspector(gtk): InspectorWidget subclass wiring the shared inspector (Task 5)
+0e8070220,2026-07-19T05:16:52-07:00,True,True,True,inspector(gtk): InspectorWindow host + auto-close teardown (Task 6)
+cfca14fa0,2026-07-19T05:22:31-07:00,True,True,True,inspector(gtk): wire toggle/control/redraw inspector actions (Task 7)
+631742691,2026-07-19T05:37:40-07:00,True,True,False,inspector(gtk): gtk_inspector_dump KAT — framebuffer + live-input assert (Task 8)
+6587b098d,2026-07-19T06:05:04-07:00,False,True,False,inspector(gtk): fix gtk_inspector_dump teardown deadlock
+69c8ba58b,2026-07-19T06:14:52-07:00,False,True,False,docs: GTK inspector implemented — close the last Linux/GTK deferral
+79ee684d3,2026-07-19T06:52:57-07:00,True,True,True,gtk: +new-window -e/--command/--working-directory/--title argv override (ghostty parity)
+702ea7483,2026-07-19T06:58:48-07:00,False,True,False,docs: GTK quick-terminal (wlr-layer-shell) implementation plan
+aab27332e,2026-07-19T07:07:36-07:00,False,True,False,docs: rewrite GTK quick-terminal plan (v2) to match ghostty's real structure
+abe38f1c6,2026-07-19T07:10:04-07:00,False,True,True,gtk/winproto(wayland): pump the registry wl queue via a GSource so set_urgent completes (ghostty parity)
+41ac905b5,2026-07-19T07:22:56-07:00,True,True,False,font: non-macOS Fontconfig discovery (ghostty parity)
+396900c9c,2026-07-19T07:23:10-07:00,False,True,False,docs: quick-terminal plan v3 — apply adversarial fidelity review (MINOR_FIXES)
+4dce0d06a,2026-07-19T07:28:34-07:00,False,True,True,gtk/winproto(wayland): document set_urgent stale-token guard divergence
+712247085,2026-07-19T07:33:02-07:00,True,True,False,gtk/winproto(wayland): add gtk4-layer-shell dependency (Task 1)
+981d41139,2026-07-19T07:37:55-07:00,True,True,True,gtk/winproto(wayland): un-stub supports/init_quick_terminal + resolve monitor (Task 2)
+3724fea99,2026-07-19T07:43:45-07:00,True,True,True,gtk/winproto(wayland): sync_quick_terminal — layer/anchor/margin + KDE slide (Task 3)
+5fbafe871,2026-07-19T07:46:21-07:00,True,True,True,gtk/winproto(wayland): quick-terminal sizing via enter_monitor (Task 4)
+a62f11f87,2026-07-19T07:49:57-07:00,True,True,True,gtk: implement toggle_quick_terminal + get_quick_terminal_window (Task 5)
+8e024f3f7,2026-07-19T08:18:09-07:00,False,True,True,gtk: wire toggle_quick_terminal / quit / open_config GAction handlers
+22f1900b5,2026-07-19T09:20:44-07:00,False,True,False,docs: GTK quick terminal implemented + working — update ledger
+d90beb6d4,2026-07-19T09:47:16-07:00,False,True,True,gtk: port estimateInitialSize — window-width/height now honored (full ghostty alignment)
+64091119c,2026-07-19T09:48:13-07:00,False,True,False,docs: estimateInitialSize resolved — window-width/height honored
+1410d06df,2026-07-19T10:04:25-07:00,False,True,False,docs: D-Bus IPC quick-terminal path confirmed working (no asymmetry)
+d12a3859c,2026-07-19T10:26:35-07:00,True,True,True,gtk: wire present_surface GAction (thunk to core findSurfaceByID + present_surface mailbox)
+171cf4c8d,2026-07-19T10:28:25-07:00,True,True,True,"gtk: surface prompt_title dialog (reuse TitleDialog/Target::Surface, wire both seams)"
+88800793b,2026-07-19T10:33:44-07:00,True,True,True,gtk: color-scheme propagation + ghostty-mirrored opt-in v4_20 prefers-color-scheme
+eb655baad,2026-07-19T10:56:14-07:00,False,True,True,docs: plan for rustty-xev libxev completion (File/TCP/UDP/ThreadPool on Linux)
+89dde0f38,2026-07-19T12:07:20-07:00,True,True,True,xev: port ThreadPool (lock-free work-stealing pool) + mirihar Miri proof (Task 1)
+0a2f08f8e,2026-07-19T12:23:11-07:00,True,True,True,xev(thread_pool): add multi-worker quiesce-then-join reproducer (Task 1 review)
+e6885c02c,2026-07-19T12:49:55-07:00,True,True,True,xev(thread_pool): fix futex_wake clamp (root cause) + ledgered Event shutdown-wake deviation (Task 1 D1)
+99f02ece9,2026-07-19T13:13:05-07:00,True,True,True,xev: wire epoll Loop thread_pool + retype linux Options (Task 2)
+3c9f75ba2,2026-07-19T13:15:28-07:00,False,True,True,docs: plan amendment — per-backend watcher instantiation (post-Task 2 discovery)
+633841941,2026-07-19T13:21:03-07:00,True,True,True,xev: restore assert(st.ok) in epoll_close_on_thread_pool (Task 2 review)
+fd7084323,2026-07-19T13:44:01-07:00,True,True,True,xev: port TCP watcher (Task 3)
+999dd54d5,2026-07-19T14:15:07-07:00,True,True,True,xev: epoll SendMsg/RecvMsg + UDP watcher (Task 4)
+ac87a723d,2026-07-19T14:48:08-07:00,True,True,True,xev: port File watcher + epoll ThreadPool integration (Task 5)
+5a75a0bec,2026-07-19T15:06:09-07:00,True,True,True,xev: File/TCP/UDP/ThreadPool complete on Linux — libxev surface parity (Task 6)
+445b50b8d,2026-07-19T15:16:50-07:00,True,True,True,xev: Task 6 review fixes — oracle-faithful TCP close sequencing + macOS deferral wording
+9de16be19,2026-07-19T15:34:30-07:00,True,True,True,"xev: final whole-branch review fixes (wakeup aliasing, fidelity notes, port registry)"
+e0c9ff81a,2026-07-19T15:54:48-07:00,False,True,True,gtk: runtime KAT for the opt-in gtk-v4_20 prefers-color-scheme push
+9597128d9,2026-07-19T15:58:17-07:00,False,True,True,gtk: fix stale IPC test — no-instance perform_ipc must fail with IPCFailed
+6e6f4d1ae,2026-07-19T16:04:46-07:00,False,True,False,port: VERIFICATION_DEBT.md — recipes for environment-gated checks
+23af48edc,2026-07-21T02:34:23Z,False,False,False,build(deps): bump actions/setup-python from 5 to 7
+0abe9ec89,2026-07-22T21:48:29-07:00,False,True,True,gtk/winproto(wayland): queue-pending GSource — set_urgent token done now dispatches (last GTK deferral)
+a1c674b2d,2026-07-22T21:48:48-07:00,False,True,False,port: VERIFICATION_DEBT V4 — mutter-session set_urgent KAT (crash-correlation avoidance)
+cddffa093,2026-07-22T22:48:47-07:00,True,True,True,gtk: port loadRuntimeCss — implement the empty runtime-CSS placeholder-leaf
+c6771f0cc,2026-07-22T23:02:42-07:00,False,True,True,gtk: implement load_custom_css placeholder-leaf (faithful to loadCustomCss)
+9b3897b0e,2026-07-22T23:24:03-07:00,False,True,True,gtk: implement on_notify_vadjustment placeholder-leaf (faithful to surface.zig:2441-2465 propVAdjustment)
+59c5a85f2,2026-07-22T23:24:39-07:00,False,True,True,gtk: implement collect_jump_commands placeholder-leaf (faithful to command_palette.zig:225-243 collectJumpCommands)
+1e866b43f,2026-07-22T23:25:05-07:00,False,True,True,gtk: implement on_notify_config placeholder-leaf (faithful to surface.zig:2258-2308 propConfig)
+4ce169bc9,2026-07-22T23:25:51-07:00,False,True,True,gtk: implement get_title placeholder-leaf (faithful to Surface.zig:44-46 getTitle)
+302185de8,2026-07-22T23:26:46-07:00,False,True,True,gtk: implement on_notify_error idle_rechild half (faithful to surface.zig:2310-2348 propError/onIdleRechild)
+fbfd95c47,2026-07-22T23:39:28-07:00,False,True,True,gtk: fix RefCell double-borrow abort in on_notify_vadjustment
+e47728fcb,2026-07-23T08:37:51-07:00,False,False,True,fix(macos): restore cross-platform build after the Linux/xev merges
+b914feff3,2026-07-23T09:22:43-07:00,False,False,False,docs: rustty completion program — roadmap + WS1-WS5 detailed plans (no-deferrals pass)
+aa1ffb13e,2026-07-23T11:01:21-07:00,False,False,False,xtask: oracle-parity KAT for the vendored shell-integration tree (WS1 T1)
+5910ce5f2,2026-07-23T11:01:32-07:00,False,False,False,rustty-apprt-c: live-surface quicklook abort-free regression KAT (WS2-A)
+759421317,2026-07-23T11:01:59-07:00,False,False,False,resources: vendor iTerm2-Color-Schemes MIT attribution for the themes corpus (WS1 T2)
+bde1c035e,2026-07-23T11:02:19-07:00,False,False,False,rustty-apprt-c: cross-DPI contentsScale re-stamp KAT + size helpers (WS2-B)
+7be84247b,2026-07-23T11:02:21-07:00,False,False,False,rustty-vt: wuffs decode_png default hook — non-lib PNG parity (WS3-A)
+6a5f46df7,2026-07-23T11:02:46-07:00,False,False,False,rustty-apprt-c: B4 resize-tracking KAT; B2 present-propagation verified (WS2-D)
+55f1a1cf9,2026-07-23T11:03:17-07:00,False,False,False,xtask: delete the share/{APP} DEFERRALS.md placeholder emission — resources are real now (WS1 T3)
+36a820618,2026-07-23T11:03:36-07:00,False,False,False,rustty-core: enable rustty-vt/wuffs for the app tier; strike DEFERRALS decode_png entry (WS3-A)
+6e1658c12,2026-07-23T11:04:16-07:00,False,False,False,rustty-build-config: capture RUSTC_VERSION via build.rs (WS3-B toolchain line)
+6e0728477,2026-07-23T11:04:19-07:00,False,False,False,rustty-os/core: autoreleasepool shim wired into renderer drainMailbox (WS2-C)
+3fbfc1ca2,2026-07-23T11:05:01-07:00,False,False,True,rustty-xev: cross-platform backend() accessor for xev.backend reads (WS3-B)
+e8be69a58,2026-07-23T11:05:26-07:00,False,False,False,port-ledgers: strike WS2 rows in MACOS_APP_GAPS (A/B/C/D resolved+verified)
+358bf3ed7,2026-07-23T11:06:26-07:00,False,False,False,ledger: strike shell-integration + themes resource deferrals as RESOLVED (WS1 T6)
+a8e1e267a,2026-07-23T11:06:37-07:00,False,False,False,"rustty-cli: +version real renderer/libxev/toolchain lines (WS3-B, ADV-FIX 1 retired)"
+5e411384c,2026-07-23T11:08:37-07:00,False,False,False,rustty-apprt/embedded: platform_host_view helper + iOS/non-darwin KATs; truthful §2.6/§2.9 ledger (WS3-C)
+950f42e9f,2026-07-23T11:11:39-07:00,False,False,False,macos: verify 13.0 deployment-target stamping end-to-end; strike MILESTONE entry (WS3-D)
+1f2068f6a,2026-07-23T11:11:46-07:00,False,False,False,chore: update Cargo.lock for rustty-vt/wuffs + rustty-cli/rustty-xev deps (WS3)
+8294ef724,2026-07-23T11:21:01-07:00,False,False,False,merge: WS2 macOS guards & plumbing
+57a63d029,2026-07-23T11:21:07-07:00,False,False,False,merge: WS3 small parity fills
+56a3735d7,2026-07-23T12:57:29-07:00,False,False,False,port-ledger: close INTEGRATION_PARITY §2.9 — Linux both-platform gate green (WS3 host_view)
+4516c6981,2026-07-23T12:58:55-07:00,False,False,False,rustty-apprt: RUSTTY_LOG packed-struct logging config (WS4 T1)
+2221e1136,2026-07-23T12:59:46-07:00,False,False,False,rustty-os: pkg/macos os_log unified-logging binding (WS4 T2)
+18c8c0d2d,2026-07-23T13:00:32-07:00,False,False,False,rustty-core: shared logFn port (stderr + os_log sinks) (WS4 T3)
+c38e8d595,2026-07-23T13:01:03-07:00,False,False,False,vt-c: pass RGB color inputs by pointer — rustty_color_rgb_get ABI fix (WS5 T2)
+add1daf9e,2026-07-23T13:01:19-07:00,False,False,False,rustty-global: rlimit seam rebind + live restore (WS4 T4)
+2362df6a5,2026-07-23T13:01:55-07:00,False,False,False,rustty-apprt: initSignals SIGPIPE ignore (WS4 T5)
+4203d3523,2026-07-23T13:03:05-07:00,False,False,False,rustty-renderer: pub shadertoy::init (glslang) for state.init (WS4 T6)
+d9e69043c,2026-07-23T13:03:21-07:00,False,False,False,"vt: color parse trim+bare-hex, parse_palette_entry, ordered x11 entries (WS5 T3)"
+71ddc77cb,2026-07-23T13:05:38-07:00,False,False,False,config: delegate color/palette parsing to shared vt color helpers (WS5 T4)
+44d0b8fab,2026-07-23T13:07:29-07:00,False,False,False,vt-c: color utility module — parse/parse_x11/palette/luminance/contrast/x11 table (WS5 T5)
+744a7e4d5,2026-07-23T13:11:46-07:00,False,False,False,rustty-apprt: the full state.init body — BREAK #1 wired (WS4 T7)
+c575dd797,2026-07-23T13:11:49-07:00,False,False,False,vt-c: export the 10 color utility APIs + type registry + color.h/sgr.h (WS5 T6)
+863b69c97,2026-07-23T13:13:29-07:00,False,False,False,rustty: bin runs the full state.init + shared logFn (WS4 T8)
+943acb094,2026-07-23T13:14:47-07:00,False,False,False,rustty-apprt-c: argv store + detectArgs over stored argv (WS4 T9)
+16f87ce5d,2026-07-23T13:15:42-07:00,False,False,False,rustty-apprt-c: rustty_init runs the full state.init (WS4 T10)
+09ed79a30,2026-07-23T13:16:36-07:00,False,False,False,rustty-apprt-c: rustty_cli_try_action non-null run+exit arm (WS4 T11)
+e970d34ff,2026-07-23T13:20:53-07:00,False,False,False,rustty-apprt-c: WS4 end-to-end fixes — fmt/clippy on touched files (WS4 T12)
+cdef84354,2026-07-23T13:31:45-07:00,False,False,False,ledger: strike BREAK #1 + cli_try_action + parity 3.5-5 (WS4 T13)
+049bc9336,2026-07-23T13:44:43-07:00,False,False,False,merge: WS4 app bootstrap (BREAK #1 + cli_try_action)
+b5bb6c57f,2026-07-23T13:47:16-07:00,False,False,False,vt: WS5 T7-T10 — color-scheme report encoder + OSC/Kitty color queries
+9dbfa14d8,2026-07-23T13:52:26-07:00,False,False,False,unicode: codepoint_width — the print-path width table as a public API (WS5 T11)
+1ddb4aeed,2026-07-23T13:55:55-07:00,False,False,False,unicode+vt: grapheme width kernel shared by print path + grapheme_width API (WS5 T12)
+664db8c0d,2026-07-23T13:59:27-07:00,False,False,False,vt-c: unicode codepoint/grapheme width exports + unicode.h (WS5 T13)
+7dc06e360,2026-07-23T14:02:06-07:00,False,False,False,vt: ScrollViewport::Row absolute-row viewport scrolling (WS5 T14)
+935404b7a,2026-07-23T14:04:42-07:00,False,False,False,vt-c: RUSTTY_SCROLL_VIEWPORT_ROW absolute-row scrolling tag (WS5 T15)
+ab71b6946,2026-07-23T14:10:31-07:00,False,False,False,vt: protocol-neutral clipboard_write effect for OSC 52 (WS5 T16)
+7f4ce5f1f,2026-07-23T14:19:54-07:00,False,False,False,vt-c: clipboard_write option + trampoline + C types + terminal.h + effects example (WS5 T17)
+d50ecf6b9,2026-07-23T14:30:16-07:00,False,False,False,parity: mark BL-5 lib-vt C-API series ported (WS5 T20)
+86cce9dd4,2026-07-23T14:41:05-07:00,False,False,False,"fix(vt-c): WriteResult FFI return is open (repr(transparent) i32) — sound against out-of-range C returns, matches oracle"
+74226dd30,2026-07-23T14:41:44-07:00,False,False,False,merge: WS5 lib-vt C-API expansion (BL-5)
+19d8a1016,2026-07-28T20:02:29-07:00,False,False,False,"docs: Wave 2 plans — WS6 inspector, WS7 scrollback LZ4 (BL-1), WS8 upstream sweep, WS9 packaging"
+8f0134f64,2026-07-28T20:05:06-07:00,False,False,False,dcimgui-sys: offscreen Metal render KAT — prove ImGui_ImplMetal rasterizes (WS6 T1)
+79d796e2b,2026-07-28T20:06:44-07:00,False,False,False,vt/compress: LZ4 block codec scaffold + compressBound (WS7 A1)
+9af41cc22,2026-07-28T20:07:32-07:00,False,False,False,gettext-sys: vendor the full macOS libintl (catalog API + localename) (WS9 T1)
+c3112500d,2026-07-28T20:08:17-07:00,False,False,False,vt/compress: LZ4 block decoder with bounded wide copies (WS7 A2)
+f79712a1b,2026-07-28T20:08:22-07:00,False,False,False,"osc: port kitty drag-and-drop protocol OSC 72 parser (BL-7, WS8 T2-T3)"
+c945eaf7e,2026-07-28T20:08:25-07:00,False,False,False,"stream: dispatch OSC 72 kitty dnd as unimplemented, matching upstream scope (BL-7, WS8 T4)"
+f1f1381cb,2026-07-28T20:08:36-07:00,False,False,False,"os: drop the Homebrew -lintl link-search; libintl now comes from gettext-sys (WS9 T2, resolves WS4-M1)"
+21d33eee2,2026-07-28T20:09:13-07:00,False,False,False,vt/compress: LZ4 sequence emitters and length encoding (WS7 A3)
+12176cf30,2026-07-28T20:09:42-07:00,False,False,False,"terminal: add setString tripwire fail-point seam for OOM tests (BL-3, WS8 T5)"
+7ff149fd6,2026-07-28T20:12:19-07:00,False,False,False,vt/compress: LZ4 fast compressor with two-slot hash table (WS7 A4)
+000c0394b,2026-07-28T20:12:24-07:00,False,False,False,"screen: dupe hyperlink before ending prior + wrap implicit IDs (BL-3 cfce1cd56/04810273a, WS8 T6)"
+fcccc05aa,2026-07-28T20:12:30-07:00,False,False,False,inspector: restore 22 dropped reference comments in widgets/termio.rs — G3b GREEN (WS6 T2)
+6e7be3036,2026-07-28T20:13:13-07:00,False,False,False,"xtask: derive the xcframework archive set from cargo --message-format=json (WS9 T3, INTEGRATION_PARITY 2.4)"
+9db506edc,2026-07-28T20:13:46-07:00,False,False,False,"xtask: port LibtoolStep normalizeArchive (cp + ranlib per source archive) (WS9 T4, INTEGRATION_PARITY 2.5)"
+fb741275f,2026-07-28T20:18:13-07:00,False,False,False,apprt: fill Inspector::updateContentScale ImGuiStyle rescale + KATs (WS6 T3)
+9e848da26,2026-07-28T20:18:37-07:00,False,False,False,vt/compress: LZ4 differential property suite (RUSTTY_LZ4_SLOW) (WS7 A5)
+9bc5e9a82,2026-07-28T20:19:48-07:00,False,False,False,xtask+macos: explicit archive set + ranlib normalization; drop the Homebrew -lintl app link (WS9 T5)
+48895872b,2026-07-28T20:20:27-07:00,False,False,False,apprt/apprt-c: retire the Phase-3-leaf + crash-guard prose on the live inspector path (WS6 T4)
+3a8e158a6,2026-07-28T20:24:33-07:00,False,False,False,"terminal: reserve title/pwd terminator atomically + alias-safe memmove (BL-3 1d5b6f90e/a14a619ce/fdd255c78/dace6d1c6, WS"
+9d9ea8962,2026-07-28T20:25:14-07:00,False,False,False,"screen: preserve aliased selection pins in select() (BL-3 0c299000f, WS8 T8)"
+502a6b992,2026-07-28T20:25:15-07:00,False,False,False,gates: hermetic no-Homebrew-gettext acceptance gate for the self-contained xcframework (WS9 T6)
+da85b9900,2026-07-28T20:32:44-07:00,False,False,False,ledgers: strike INTEGRATION_PARITY 2.3/2.4/2.5 and the gettext deferral (WS9 T8)
+9611fa5b7,2026-07-28T20:33:34-07:00,False,False,False,"selection: clamp mirrored corners and contained rows to page width (BL-3 b6f34be44/a9f5b7eba, WS8 T9)"
+66ee6bb7d,2026-07-28T20:36:57-07:00,False,False,False,"screen: clamp cloned selections and line selection to page width (BL-3 607160657/fa8cae88b, WS8 T10)"
+fd3688be5,2026-07-28T20:38:21-07:00,False,False,False,"selection_gesture: bound drag geometry; pixelFromFloat is a Rust non-issue (BL-3 08e376f23, WS8 T11)"
+cda5ceada,2026-07-28T20:40:06-07:00,False,False,False,gates: assert on rustty.debug.dylib too — the Debug stub made the app-binary checks vacuous (WS9 T8)
+897df4744,2026-07-28T20:40:27-07:00,False,False,False,ledgers: strike the MILESTONE self-contained-lib item; note WS9 deployment-target re-verification (WS9 T8)
+0b7b44f1a,2026-07-28T20:45:21-07:00,False,False,False,"pagelist: decommit free-listed page memory back to the OS (BL-2 896aca499, WS8 T12)"
+d9c67e54a,2026-07-28T20:46:15-07:00,False,False,False,inspector: WS6 gate sweep fixups — fmt + KAT artifact leak (WS6 T6)
+7128c126e,2026-07-28T20:50:13-07:00,False,False,False,"pagelist: register madvise Miri exception + empirical footprint probe (BL-2, WS8 T13)"
+9e6fecab6,2026-07-28T20:50:18-07:00,False,False,False,ledgers: strike the stale macOS-inspector deferrals + crash-guard sentinel (WS6 T7)
+1b1610acc,2026-07-28T20:53:02-07:00,False,False,False,vt/compress: fence the LZ4 format diagram as text (WS7 A6)
+89bb17258,2026-07-28T20:54:34-07:00,False,False,False,"ws9 review: host-safety leftover recovery, non-vacuous archive assertions, robust link-directive parsing"
+df0cb7e5c,2026-07-28T20:55:14-07:00,False,False,False,"kitty/gfx: add generation stamps, delete transmit time (BL-6 bdc0b6c19, WS8 T14)"
+af29f55f5,2026-07-28T20:58:55-07:00,False,False,False,"renderer: key texture staleness on kitty generation stamps (BL-6 bdc0b6c19, WS8 T15)"
+0b92fdf77,2026-07-28T20:59:59-07:00,False,False,False,"WS6 review fixes: LOC/line-number accuracy, honest V1b wording, imgui.ini guard"
+8510c370f,2026-07-28T21:00:35-07:00,False,False,False,"merge: WS6 macOS inspector — HiDPI updateContentScale fill, Metal render KAT, ledger truth pass"
+5513a158c,2026-07-28T21:06:26-07:00,False,False,False,"vt-c: expose kitty graphics + image generation stamps (BL-6 bdc0b6c19, WS8 T16)"
+2609c20ab,2026-07-28T21:07:31-07:00,False,False,False,tabstops: expose resize tripwire so terminal tests can arm it; closes 91f0cf67d PARTIAL (WS8 T17)
+91acd9149,2026-07-28T21:14:06-07:00,False,False,False,parity: strike WS8 landed hashes (BL-2/BL-6/BL-7 + 12 BL-3 + 91f0cf67d) (WS8 T19)
+5feb078ff,2026-07-28T21:35:55-07:00,False,False,False,"review: WS8 fixes — F1-F6 (kitty delete invariant, libc rationale, fmt drift, clippy warnings, MIRI_EXCEPTIONS over-clai"
+002752b5c,2026-07-28T21:36:29-07:00,False,False,False,"merge: WS8 upstream small-fix sweep (BL-7 OSC72, BL-3 x12, BL-2 madvise, BL-6 generation stamps, tabstops closure)"
+7411848c5,2026-07-28T21:52:50-07:00,False,False,False,vt/compress: phase A gate — wasm32 build + Miri lane green (WS7 A6)
+509b1e37c,2026-07-28T22:00:52-07:00,False,False,False,"merge: WS9 self-contained xcframework — full libintl vendor, explicit archive set, ranlib normalization, hermetic gate"
+c43fa8926,2026-07-28T22:09:31-07:00,False,False,False,vt/compress: WS7 Phase A review fixes + miri-run.sh worktree bug
+53f13874f,2026-07-28T22:10:01-07:00,False,False,False,merge: WS7 Phase A — pure-Rust LZ4 block codec + differential suite + Miri harness
+a21f9653c,2026-07-28T22:13:08-07:00,False,False,False,"docs(roadmap): Wave 2 complete — WS6/WS7-A/WS8/WS9 merged, both platforms green"
+41a3edd62,2026-07-29T05:04:40Z,False,False,False,build(deps): bump serde_json from 1.0.150 to 1.0.151
+39cd6b839,2026-07-29T07:31:56-07:00,False,False,False,vt: generalize page memory reclamation via retained-mapping madvise (WS7 B1)
+e79711a28,2026-07-29T07:34:03-07:00,False,False,False,vt/page: shallow_copy for alias-preserving page metadata copies (WS7 B2)
+6ce35a055,2026-07-29T07:37:46-07:00,False,False,False,vt/compress: compressed page representation retaining its mapping (WS7 B3)
+ef7621a8d,2026-07-29T07:41:55-07:00,False,False,False,"docs: VM-track plans — WS15 GlobalShortcuts, WS16 X11 winproto, WS17 verification debt"
+70f05ed9f,2026-07-29T07:46:12-07:00,False,False,False,"vt/pagelist: track page ownership explicitly on nodes (WS7 B4, oracle 16e4b5e98)"
+c3f303c60,2026-07-29T07:52:27-07:00,False,False,False,"vt/pagelist: route page access through Node accessors (WS7 B5, no behavior change)"
+846bc1259,2026-07-29T07:53:58-07:00,False,False,False,gtk/global-shortcuts: record VM portal environment + ghostty 1.3.1 oracle traffic baseline (WS15 T1)
+dbb37b83d,2026-07-29T07:56:56-07:00,False,False,True,gtk/global-shortcuts: port the trigger->action map build + action description (WS15 T2)
+a3ee2ab22,2026-07-29T07:57:55-07:00,False,False,False,"vt/pagelist: two-state node storage with retained-mapping restore (WS7 B6, oracle 421fe8dab)"
+3ba27fbd3,2026-07-29T07:58:39-07:00,False,False,True,gtk/global-shortcuts: port generateToken + getRequestPath (WS15 T3)
+a1f052dee,2026-07-29T08:00:28-07:00,False,False,True,gtk/global-shortcuts: port the CreateSession/BindShortcuts payloads + response parsing (WS15 T4)
+a9218135c,2026-07-29T08:01:49-07:00,False,False,False,vt/pagelist: cold-history compression pass and compressPage primitive (WS7 B7)
+d4f17acf9,2026-07-29T08:02:54-07:00,False,False,True,gtk/global-shortcuts: real refresh/close + portal session state + activation dispatch (WS15 T5)
+651cf3750,2026-07-29T08:06:47-07:00,False,False,False,vt/pagelist: incremental scrollback compression with activity debounce (WS7 B8)
+74585c85e,2026-07-29T08:08:06-07:00,False,False,True,gtk/global-shortcuts: port the portal request/onResponse round-trip over gio::DBusConnection (WS15 T6)
+aa755b1f5,2026-07-29T08:09:01-07:00,False,False,False,vt/pagelist: metadata-only memory stats for compressed pages (WS7 B9)
+cd1b7855c,2026-07-29T08:12:29-07:00,False,False,True,gtk/application: dispatch global shortcut triggers through core performAllAction (WS15 T7)
+0622aa913,2026-07-29T08:13:44-07:00,False,False,False,gates: WS15 live GlobalShortcuts portal gate (WS15 T8)
+2690b7139,2026-07-29T08:16:40-07:00,False,False,False,verify: WS15 live GlobalShortcuts round-trip + activation on rvm GNOME 50 (WS15 T8)
+df65b3bc0,2026-07-29T08:16:42-07:00,False,False,False,"vt: phase B gate — compression integrated, macOS + wasm32 green (WS7 B10)"
+82306ff7f,2026-07-29T08:22:53-07:00,False,False,False,parity: strike the L6 GlobalShortcuts portal deferral — round-trip landed (WS15 T10)
+8b0f422ab,2026-07-29T08:36:24-07:00,False,False,False,"gate: WS15 both-platform green + G7 acyclic, RE-RUN after the VM hard crash (WS15 T9)"
+cef782b57,2026-07-29T08:53:39-07:00,False,False,True,fix(ws15): assert dispatch (not just signal delivery) in the live gate; split out the OpenURI deferral
+cd79de9ee,2026-07-29T08:57:14-07:00,False,False,False,"gate(ws15): count new windows from GtkApplication's D-Bus window export, not AT-SPI"
+e8a9f59b7,2026-07-29T09:01:06-07:00,False,False,False,"merge: WS15 GTK GlobalShortcuts — XDG portal round-trip + dispatch, global: keybinds now functional"
+15951c1c5,2026-07-29T09:13:52-07:00,False,False,False,"fix(vt,font-shaper): retarget 3 missed `(*node).data` sites (WS7 B5 residuals)"
+dc28c525f,2026-07-29T09:14:58-07:00,False,False,False,docs(ws7): Phase B/B5/B10 gate is `cargo check --workspace --all-targets`
+2d58bc3e0,2026-07-29T09:19:01-07:00,False,False,False,fix(inspector): PageList tab must not decompress the whole scrollback (WS7 I1)
+8581fde7f,2026-07-29T09:24:27-07:00,False,False,False,fix(vt/pagelist): keep the Node page accessors raw-derived (WS7 I2 + M3)
+7e7a1f145,2026-07-29T09:39:15-07:00,False,False,False,docs(roadmap): add WS18 release-lane repair — 12 pre-existing cargo test --release failures on main
+0413d2b52,2026-07-29T09:41:54-07:00,False,False,False,"fix(vt/pagelist): scroll activity placement + PreservedPage must_use + Limits note (WS7 M1, M2, I4)"
+a71d91543,2026-07-29T09:45:20-07:00,False,False,False,fix(libxml2-sys): link libiconv on Apple targets (test lane link failure)
+1fac10caa,2026-07-29T09:45:28-07:00,False,False,False,style(vt): rustfmt ONLY the lines this branch introduced (WS7 M4)
+071cc7148,2026-07-29T09:57:30-07:00,False,False,False,test(miri): standalone Phase-E-style harness for compressed scrollback (WS7 I2 + I3)
+5d636c35c,2026-07-29T09:59:46-07:00,False,False,False,test(miri): scenario selection + unbuffered progress in the pagelist harness
+87a3adaa0,2026-07-29T10:07:33-07:00,False,False,False,fix(bench): de-flake `Benchmark` test — spin until the monotonic clock advances
+2f4f24f1c,2026-07-29T10:07:33-07:00,False,False,False,test(release-lane): gate 19 failure-injection tests on debug_assertions
+ae86ef627,2026-07-29T10:10:15-07:00,False,False,False,gate(G-REL): enforce a green `cargo test --release` lane
+4d3f5df6e,2026-07-29T10:17:36-07:00,False,False,False,"docs(roadmap): record the WS18 outcome — 22 failures triaged, 0 release-only bugs"
+e0529d48c,2026-07-29T10:22:09-07:00,False,False,False,test(miri): counting global allocator makes the I3 leak check mechanised (WS7 I3)
+c5308d5e8,2026-07-29T10:41:20-07:00,False,False,False,docs(miri): record the WS7 Phase B harness results + one OPEN uninit finding
+eeec83f29,2026-07-29T10:43:00-07:00,False,False,False,"merge: WS18 release-lane repair — G-REL gate, 22 failures triaged, libxml2 link fix"
+c3a6d0d85,2026-07-29T10:54:19-07:00,False,False,False,docs+fix(vt): WS7 Phase B re-review corrections (merge-blocking)
+098fc63d4,2026-07-29T10:55:03-07:00,False,False,False,merge: WS7 Phase B — compressed scrollback page representation (BL-1)
+6af540d19,2026-07-29T12:12:00-07:00,False,False,False,"vt/pagelist: rename page serial floor as epoch (WS7 C1, oracle f6d9a582e)"
+f94716d6f,2026-07-29T12:20:38-07:00,False,False,False,vt/pagelist: renew page generations for shifted rows + nodeIsValid (WS7 C2)
+f87c24bdb,2026-07-29T12:22:41-07:00,False,False,False,test(termio): add repro + capture harnesses for the subprocess_drop_repro hang
+f3cd7c792,2026-07-29T12:25:27-07:00,False,False,False,fix(termio/test): drain the pty master across teardown in subprocess_drop_repro
+9874db879,2026-07-29T12:28:05-07:00,False,False,False,fix(termio): bound killPid's kill/waitpid wait [deliberate R1 divergence]
+03494398f,2026-07-29T12:30:27-07:00,False,False,False,vt/pagelist: invalidate split/partially-erased page refs; conservative serial floor (WS7 C3)
+e5a921749,2026-07-29T12:31:31-07:00,False,False,False,"vt/pagelist: reschedule compression after page replacement (WS7 C4, oracle d0a26d146)"
+b37b81b1b,2026-07-29T12:37:47-07:00,False,False,False,vt/search: read compressed history through preserved page snapshots (WS7 C5)
+7f3defe75,2026-07-29T14:06:45-07:00,False,False,False,"vt/search: reject destroyed, replaced and pruned result state (WS7 C6)"
+91522cfbb,2026-07-29T14:06:56-07:00,False,False,False,"fix(termio): review follow-ups — drop SIGKILL escalation, delete vacuous guard, record residuals"
+148e8b820,2026-07-29T14:08:33-07:00,False,False,False,merge: bound killPid's wait to cure the subprocess teardown hang [justified R1 divergence]
+85428b610,2026-07-29T14:14:46-07:00,False,False,False,"vt: generation-aware search fingerprints, reload and highlight flattening (WS7 C7)"
+174be525d,2026-07-29T14:16:09-07:00,False,False,False,vt/search: gate the shorter-page feed test to debug builds (WS7 C8)
+1583c73ac,2026-07-29T14:17:18-07:00,False,False,False,vt/search: form no reference into the Terminal in screen validation (WS7 C8)
+8ca4dfa9d,2026-07-29T14:31:16-07:00,False,False,False,vt/search: route the screen-removal test's mutations through its own raw alias (WS7 C8)
+0a4d49445,2026-07-29T14:33:52-07:00,False,False,False,vt: phase C gate — generation stamps + search integrity green (WS7 C8)
+384242c39,2026-07-29T15:40:20-07:00,False,False,False,bench: RED test — page-compression/scrollback-compression actions unregistered (WS7 D8)
+bf3a7a39c,2026-07-29T15:46:31-07:00,False,False,False,bench: page-compression and scrollback-compression actions (WS7 D8)
+f3a300abe,2026-07-29T15:48:34-07:00,False,False,True,"renderer: hand off state mutex to avoid starving frames (WS7 D4, oracle d34b54e9b)"
+1be99ffe9,2026-07-29T15:49:00-07:00,False,False,False,parity: mark d34b54e9b (renderer state mutex handoff) ported (WS7 D4)
+3d79b3ba2,2026-07-29T15:51:13-07:00,False,False,False,docs(.port): record the oracle sync point — pinned baseline 4749c4e93
+c7c76855d,2026-07-29T15:54:09-07:00,False,False,False,"perf: record WS7 D8 compression bench numbers — 35.15% page ratio, 1.02 GB/s compress, ~3.1-3.5 GB/s decompress (WS7 D8)"
+ba09cc1f9,2026-07-29T15:57:04-07:00,False,False,False,merge: WS7 D8 — page + scrollback compression benchmarks
+80d0e0c57,2026-07-29T15:58:08-07:00,False,False,False,merge: WS7 D4 — renderer state mutex handoff (oracle d34b54e9b)
+f333a779f,2026-07-29T16:30:59-07:00,False,False,False,review: WS7 Phase C fixes — I1/I2 + M1-M5 (gate/ledger hygiene)
+ab2c08c55,2026-07-29T16:33:54-07:00,False,False,False,merge: WS7 Phase C — generation stamps + search/render integrity under compression
+782e5740d,2026-07-29T17:19:00-07:00,False,False,False,vt/terminal: compression activity token and compress scheduling API (WS7 D1)
+fa2c67781,2026-07-29T17:19:00-07:00,False,False,False,rustty-apprt/gtk: repair the x11 winproto KAT header + run command (WS16 T1)
+a80a49eed,2026-07-29T17:19:41-07:00,False,False,False,wip(ws16): failing x11 XKB KAT (WS16 T2 step 1)
+13787e9ae,2026-07-29T17:19:45-07:00,False,False,False,merge: WS7 D1 — Terminal compression activity token + compress scheduling API
+d1bc2d223,2026-07-29T17:21:09-07:00,False,False,True,rustty-apprt/gtk: x11 winproto XKB extension init (x11.zig:71-101) (WS16 T2)
+a7fa3b79b,2026-07-29T17:23:16-07:00,False,False,False,rustty-apprt/gtk: split the x11 KATs one-per-binary (GTK is thread-pinned) (WS16 T2)
+e4fe97c84,2026-07-29T17:24:47-07:00,False,False,True,rustty-apprt/gtk: x11 winproto eventMods XKB peek (x11.zig:114-159) (WS16 T3)
+4360dea48,2026-07-29T17:28:34-07:00,False,False,False,rustty: pass through the gtk winproto wayland/x11 features to the binary (WS16 T5)
+77cce7aa7,2026-07-29T17:28:34-07:00,False,False,True,rustty-apprt/gtk: winproto addSubprocessEnv dispatch + WINDOWID (x11.zig:320-329) (WS16 T4)
+d9a317639,2026-07-29T17:29:27-07:00,False,False,False,inspector: clarify page compression memory in the pagelist widget (WS7 D6)
+b8c40f978,2026-07-29T17:30:27-07:00,False,False,False,merge: WS7 D6 — inspector page-compression memory view (oracle 70e788f06 + 6d5dda40d)
+da45e5d6d,2026-07-29T17:36:10-07:00,False,False,False,"vt-c: expose compression activity and scheduling through lib-vt (WS7 D5, oracle 172f15da3)"
+5c9a66bc1,2026-07-29T17:37:40-07:00,False,False,False,merge: WS7 D5 — expose compression through lib-vt C API (oracle 172f15da3)
+e1b58936c,2026-07-29T17:38:07-07:00,False,False,False,docs: WS13 i18n and man-pages plan
+39355ff48,2026-07-29T17:39:17-07:00,False,False,False,docs: WS13 i18n and man-pages plan
+9e15d1bde,2026-07-29T17:39:26-07:00,False,False,False,vt-pagelist: fix real Stacked-Borrows UB in decommit_pool_item zero test (WS7 Phase E)
+aa087ff01,2026-07-29T17:39:40-07:00,False,False,False,config: scrollback-compression option; raise scrollback-limit default to 50MB (WS7 D2)
+feb5eb3a2,2026-07-29T17:40:37-07:00,False,False,False,merge: WS7 D2 — scrollback-compression option + 50MB scrollback-limit default (oracle 0fb89f4ff)
+76bd5a940,2026-07-29T17:41:03-07:00,False,False,False,vt-ref-counted-set: stop de-initializing the page mapping fed to LZ4 (WS7 Phase E)
+f79a762c3,2026-07-29T17:41:18-07:00,False,False,False,"gates: wire the PageList compressed-page leak check into a real gate, G6b (WS7 Phase E)"
+db7491122,2026-07-29T17:45:16-07:00,False,False,False,docs: WS12 vaxis completion plan
+3082dc6eb,2026-07-29T17:45:18-07:00,False,False,False,rustty-apprt/gtk: clippy cleanups from the WS16 no-regression sweep (WS16 T7)
+c7c93f7ea,2026-07-29T17:46:43-07:00,False,False,False,docs: WS12 vaxis completion plan
+c600d7301,2026-07-29T17:52:40-07:00,False,False,False,parity: strike the stale x11 winproto deferral; ledger WS16 (WS16 T8)
+07b64dbef,2026-07-29T17:54:18-07:00,False,False,False,"merge: WS16 — GTK X11 winproto residual (XKB init, eventMods peek, WINDOWID) + live verification"
+d94fbe815,2026-07-29T18:05:30-07:00,False,False,False,"renderer: schedule idle scrollback compression, debounced by activity (WS7 D3)"
+b25878793,2026-07-29T18:07:14-07:00,False,False,False,"merge: WS7 D3 — idle scrollback compression scheduling, debounced by activity"
+8a94d4025,2026-07-29T18:48:25-07:00,False,False,False,"vt-pagelist: document the 10 Miri-intractable page-compression tests, per test (WS7 Phase E)"
+e0d5f23ab,2026-07-29T19:41:43-07:00,False,False,False,"port: Phase 3 upstream-resync artifacts — full pin..head diff (365 commits, 507 files, +37683/-11323)"
+bbecaf76f,2026-07-29T19:44:20-07:00,False,False,False,port-docs: truth-up DEFERRALS/MIRI_EXCEPTIONS for the 3 WS7 Phase E findings (WS7 Phase E)
+490ccf947,2026-07-29T19:46:08-07:00,False,False,False,Merge branch 'worktree-agent-ab51ab91227b8823a'
+6d37bab7c,2026-07-29T19:59:23-07:00,False,False,False,port: Phase 3 assessment — E OS/termio/platform
+c4288d424,2026-07-29T20:00:40-07:00,False,False,False,port: Phase 3 assessment — D terminal subsystems
+aad1ae6e2,2026-07-29T20:01:52-07:00,False,False,False,port: Phase 3 assessment — F UI tiers
+9ec5386d7,2026-07-29T20:02:05-07:00,False,False,False,port: Phase 3 assessment — A terminal core
+465ed6028,2026-07-29T20:03:54-07:00,False,False,False,port: Phase 3 assessment — B compression
+54e2515d6,2026-07-29T20:04:37-07:00,False,False,False,port: Phase 3 assessment — C C-API and headers
+fda6e7438,2026-07-29T20:10:08-07:00,False,False,False,merge: Phase 3 area assessment (agent-aa1270e5934ad3cf5)
+0eb2dd705,2026-07-29T20:10:08-07:00,False,False,False,merge: Phase 3 area assessment (agent-a8303c347e0998598)
+3bfc33652,2026-07-29T20:10:08-07:00,False,False,False,merge: Phase 3 area assessment (agent-a67d193f3d24206fc)
+af3937429,2026-07-29T20:10:08-07:00,False,False,False,merge: Phase 3 area assessment (agent-a90ecd694157d7828)
+09a061b14,2026-07-29T20:10:08-07:00,False,False,False,merge: Phase 3 area assessment (agent-ae5b8e3e4a8202da5)
+1098a8f91,2026-07-29T20:10:08-07:00,False,False,False,merge: Phase 3 area assessment (agent-a288a8d58c8621005)
+4143521ea,2026-07-29T20:14:20-07:00,False,False,False,port: Phase 3 assessment — G config/build/i18n
+947b9554f,2026-07-29T20:17:05-07:00,False,False,False,port: Phase 2 closure audit + WS19 closeout plan
+40696629f,2026-07-29T20:18:13-07:00,False,False,False,merge: Phase 2 closure audit + WS19 closeout plan (20 tasks)
+765c7ece5,2026-07-29T20:18:13-07:00,False,False,False,merge: Phase 3 area G assessment (config/build/i18n)
+86783cb4f,2026-07-29T20:25:43-07:00,False,False,False,"gates: G1b follows the worktree, not a hardcoded root; hash-pinned zig-dep restore; --no-fail-fast on the debug lane (WS"
+f3f18d2d9,2026-07-29T20:37:01-07:00,False,False,False,"port-docs: truth-up 11 wrong ledger rows, un-nest 2 mis-filed items, reclassify 2 permanent divergences, restate the bey"
+60c73b8f2,2026-07-29T20:40:20-07:00,False,False,False,docs: WS11 font glyph resize plan
+3a2522c6b,2026-07-29T20:41:31-07:00,False,False,False,docs: WS14 wasm and WebGL renderer plan
+30f2c6e4b,2026-07-29T20:42:19-07:00,False,False,False,docs: WS10 perf series plan
+7f7f60386,2026-07-29T20:44:37-07:00,False,False,False,vt-c: declare the wasm Opaque handle so include/rustty.h compiles standalone; A5 now compiles the FULL header family as 
+e908e1192,2026-07-29T20:46:13-07:00,False,False,False,docs: Phase 3 upstream-resync master plan
+ad3187923,2026-07-29T20:46:36-07:00,False,False,False,port-docs: O17 correction — stb_image_resize SHIPPED at 2e82776; reclassify to vacuous coverage (WS11); record the self-
+2d96a61cb,2026-07-29T20:47:30-07:00,False,False,False,merge: plan from agent-a240724292e2ec072
+f73aa1ef1,2026-07-29T20:47:30-07:00,False,False,False,merge: plan from agent-a60ec4205f8efb34a
+25345101c,2026-07-29T20:47:30-07:00,False,False,False,merge: plan from agent-a8c424bab540b0855
+e967b3caa,2026-07-29T20:47:31-07:00,False,False,False,merge: plan from agent-aff92a0a5572116e8
+e03d11d55,2026-07-29T20:49:24-07:00,False,False,False,rustty-apprt/gtk: split the wayland KATs one-per-binary (GTK is thread-pinned); add gate G-GTKINIT (WS19 T4)
+e3256c664,2026-07-29T20:58:25-07:00,False,False,False,"inspector/pagelist: inspect cells through page_preserving_state, never Node::page; whole-file guard in a sibling file (W"
+33bd57530,2026-07-29T21:09:39-07:00,False,False,True,"gates: repair ci.sh steps 1 and 2 — cargo fmt --check and clippy -D warnings were BOTH RED on main (WS19 T7, audit row N"
+f47c975db,2026-07-29T21:11:49-07:00,False,False,False,"termio/shell-integration: raw OsStr bytes for tmp paths, never lossy String (WS19 T15)"
+6061e27ef,2026-07-29T21:13:28-07:00,False,False,False,example: always rebuild librustty_vt_c instead of accepting a stale release dylib (all 23) (WS19 T16)
+dafa97115,2026-07-29T21:16:10-07:00,False,False,False,"vt/terminal: document that compress(.incremental) restarts after Complete, and pin it with a test (WS19 T18)"
+14a1003cc,2026-07-29T21:21:56-07:00,False,False,False,"port-docs: reclassify O10/O11/O19a/O20 + the local detectArgs as justified divergences, delete the discharged V1, hand V"
+36ef74ffa,2026-07-29T21:30:52-07:00,False,False,False,"gates: G-P2 — Phase 2 closure gate; FAILS on any open item without an owner in an OPEN workstream, all three arms proven"
+d5f59905d,2026-07-29T21:34:28-07:00,False,False,False,termio: build the non-UTF-8 fixture at runtime so clippy::invalid_from_utf8 does not fire on the vacuity check (WS19 T15
+04b521d71,2026-07-29T21:37:57-07:00,False,False,False,gates: G-P2 also asserts WS19's own tasks are executed; annotate all 32 audit rows with execution status; re-own the las
+297afcf5f,2026-07-29T21:38:48-07:00,False,False,False,merge: WS19 Phase 2 closeout — 12 of 20 tasks; Phase 2 NOT closed (G-P2 rc=1)
+2c9e021ab,2026-07-29T21:49:30-07:00,False,False,False,font-shaper: WS11 branch point — stb resize coverage proven vacuous at scale 1.0 (WS11 T1)
+6e41b017a,2026-07-29T21:51:42-07:00,False,False,False,rustty-apprt: msgid-coverage gate — catalogs vs .blp and code call sites (WS13 T1)
+d1cfab1b2,2026-07-29T21:51:53-07:00,False,False,False,docs: record the WS12 uucode + zigimg-tier decisions (WS12 T2)
+046466a57,2026-07-29T21:52:23-07:00,False,False,False,rustty-apprt/gtk: rebrand the stale Ghostty msgids + the bug-report bodies (R2) (WS13 T2)
+255019397,2026-07-29T21:52:51-07:00,False,False,False,font-shaper/stb: direct-FFI tests for stbir_resize_uint8 (interpolation + channel independence) (WS11 T2)
+6f27c3a34,2026-07-29T21:53:25-07:00,False,False,False,renderer: port renderer/WebGL.zig (2-line reference placeholder) + complete the .webgl selection arm (WS14 T2)
+1bbd29f1b,2026-07-29T21:56:30-07:00,False,False,False,"os/wasm: resurrect the 9dc2e5978-deleted host-ownership tracker + its 2 reference tests, feature-gated (WS14 T3)"
+f6882cba0,2026-07-29T21:56:57-07:00,False,False,False,tools: restore_zig_deps.sh — zig-free SHA-256 tarball pin + full vaxis sentinel list un-BLOCKs G2 (WS12 T3)
+da0a647e9,2026-07-29T21:59:23-07:00,False,False,True,rustty-apprt/gtk: route the code-side UI strings through gettext (WS13 T3)
+45cb50292,2026-07-29T21:59:29-07:00,False,False,False,gates: D10 — vendored stb_image_resize vs ghostty's own build recipe across 4 zig optimize modes (WS11 T3)
+f82b4a975,2026-07-29T22:00:07-07:00,False,False,False,rustty-vaxis: UCD provenance digests + non-vacuity pins for the uucode-0.1.0 tables (WS12 T4)
+1d2ad6c82,2026-07-29T22:02:35-07:00,False,False,True,xev: pool worker must not ACCESS the Loop allocation — completion-cached queue+wakeup handles (WS19 T10)
+1724ab37b,2026-07-29T22:02:41-07:00,False,False,False,font: port Atlas.Wasm live (7 C-ABI exports + debug canvas) with its 4-assert reference test; DG5 gate widened (WS14 T4)
+a0ea6de4d,2026-07-29T22:03:36-07:00,False,False,False,"core/app: complete the App.Wasm port (empty struct, reference exports commented upstream) (WS14 T5)"
+6d59b3c55,2026-07-29T22:04:19-07:00,False,False,False,rustty-cli: +boo end-to-end pty KAT (frames + colour + clean ESC exit; no-DSR negative control) (WS12 T5)
+4ecc661d0,2026-07-29T22:05:31-07:00,False,False,False,"font-shaper/freetype: grayscale bitmap-strike resize KAT (16x17 + 8x17, consensus-validated fixtures) (WS11 T4)"
+485d65bd3,2026-07-29T22:07:06-07:00,False,False,False,xtask: extract gettext_/tr msgids + scope the walk; regenerate the pot/catalog refs (WS13 T4)
+0eeaa97ca,2026-07-29T22:07:28-07:00,False,False,False,font-shaper/freetype: BGRA bitmap-strike resize KAT (136x128 -> 16x15 / 8x7 downsample) (WS11 T5)
+7bda55288,2026-07-29T22:08:57-07:00,False,False,False,vt/style: make Color padding-free so page mappings are fully initialized (WS19 T5)
+3e2ea9619,2026-07-29T22:10:32-07:00,False,False,False,font-shaper/freetype: machine-checked negative control — the resize KATs reject nearest + bilinear (WS11 T6)
+4947e6546,2026-07-29T22:10:45-07:00,False,False,False,rustty-apprt-c: rustty_translate forwards to dgettext + locale KAT with negative controls (WS13 T5)
+b4907ad6f,2026-07-29T22:11:10-07:00,False,False,False,rustty-zigimg: crate skeleton + decode (wuffs png/jpeg) + rgb24/rgba32 convert + PNG encoder over vendored zlib (WS12 T6
+ee6bee24e,2026-07-29T22:11:55-07:00,False,False,True,"rustty-apprt/gtk: port the XDG portal OpenURI call site (WS19 T8, closes the unowned L6 portal deferral)"
+89562d24f,2026-07-29T22:15:18-07:00,False,False,False,cli/version: emit the OSC-8 commit hyperlink with a real hash + repo-URL identity constant (WS19 T12)
+beb32f347,2026-07-29T22:17:04-07:00,False,False,False,rustty-extra: port src/build/mdgen — markdown generation + de-snarked fixtures (WS13 T6)
+5f063a778,2026-07-29T22:17:30-07:00,False,False,True,wasm32: freestanding xev backend arm + default-on renderer/oniguruma features so the wasm link drops 5 C -sys deps (WS14
+e2bb97b00,2026-07-29T22:21:21-07:00,False,False,False,gates: D10 arm-1 envelope corrected by Linux measurement; WS11 T7 recorded evidence (WS11 T7)
+71ba48634,2026-07-29T22:21:44-07:00,False,False,False,"rustty-vaxis: image tier LIVE — transmit_image/load_image over rustty-zigimg, draw/cell_size geometry (WS12 T8-T11)"
+29044d63b,2026-07-29T22:24:20-07:00,False,False,False,"wasm: rustty_wasm.wasm is now a real freestanding cdylib — complete retention set (font/Atlas.Wasm added, rustty-core ed"
+8e38bae54,2026-07-29T22:24:24-07:00,False,False,False,"docs: WS11 T8 recorded evidence — R5 discharged by behaviour A/B + feature-graph A/B, not binary hashing (WS11 T8)"
+32395198a,2026-07-29T22:26:21-07:00,False,False,False,"docs: WS12 ledger truth pass — uucode ratified, zigimg tier resolved, boo double-entry closed (WS12 T12)"
+92cd82371,2026-07-29T22:27:44-07:00,False,False,False,parity: close the reclassified stb_image_resize coverage item; ledger the ReleaseFast +/-1 divergence (WS11 T9)
+24c1b33bb,2026-07-29T22:27:57-07:00,False,False,False,fix(termio): drain the pty master before stop() on threadEnter error arms; ECHILD-aware waitpid in killPid (WS19 T17)
+6675b2ce7,2026-07-29T22:30:13-07:00,False,False,False,example/wasm-webgl + gates: WebGL2 consumer page and the falsifiable browser gate (WS14 T8/T9)
+68ecc1bbe,2026-07-29T22:34:19-07:00,False,False,True,"rustty-apprt/gtk: port the XDG portal OpenURI call site (WS19 T8, closes the unowned L6 portal deferral)"
+d7f042854,2026-07-29T22:52:24-07:00,False,False,True,rustty-apprt/gtk: re-read the live wayland decoration mode instead of the init snapshot; ledger the duplicate-global nit
+4a20b1822,2026-07-29T23:09:46-07:00,False,False,True,"port: WS17 V2 turnkey hw-GL probe, V3 KDE globals discharged under a live KWin, V5 restated (WS17 V2/V3/V5)"
+b12ea5ec8,2026-07-29T23:12:32-07:00,False,False,False,"port: WS17 V4 — set_urgent verified against REAL (headless) mutter, primary session untouched (WS17 V4)"
+c033d7656,2026-07-30T02:35:47Z,False,False,False,build(deps): bump wayland-client from 0.31.14 to 0.31.15
+23f8f1294,2026-07-30T07:01:45-07:00,False,False,False,"merge: WS19 T10/T12/T17 — xev pool-worker aliasing, +version OSC-8 hyperlink, termio drain+ECHILD"
+a099760b0,2026-07-30T07:02:23-07:00,False,False,False,merge: WS19 T8/T9 + WS17 verification debt — closes G-P2 items O6 and O7
+3bc7a9e15,2026-07-30T07:02:33-07:00,False,False,False,"merge: WS12 vaxis completion — image tier live, zero unimplemented!(), no deferral"
+c88ee04f4,2026-07-30T07:03:04-07:00,False,False,False,merge: WS19 T5 — make style::Color padding-free (G-P2 item O1)
+60aaa0b5e,2026-07-30T07:05:49-07:00,False,False,True,Merge branch 'worktree-agent-a568ddb059a35e3cd' into worktree-agent-af62d09d0d695f6a5
+f1cac2b26,2026-07-30T07:06:03-07:00,False,False,False,Merge branch 'worktree-agent-a6d625666fc339642' into worktree-agent-aa1d41176658c01db
+07287ee1e,2026-07-30T07:12:30-07:00,False,False,False,gates/docs: WS11 T10 final green sweep; retire the Task-7 VM scope note; fix the 2%->3% envelope drift (WS11 T10)
+4f1a69017,2026-07-30T07:13:20-07:00,False,False,False,"merge: WS11 font glyph resize — vacuous coverage closed, D10 parity gate landed"
+096eccd35,2026-07-30T07:14:38-07:00,False,False,False,Merge branch 'ws14-wasm-webgl' into worktree-agent-a191e452b66bdf9b6
+da7ee8352,2026-07-30T07:18:48-07:00,False,False,False,gates: opt-in ci.sh --webgl lane for the WS14 wasm/WebGL browser gate (WS14 T9)
+cc0e46389,2026-07-30T07:22:19-07:00,False,False,False,rustty-extra+xtask: port src/build/mdgen render + src/build/webgen (WS13 T7/T8)
+0a6d85554,2026-07-30T07:24:27-07:00,False,False,False,"example/wasm-webgl + gates: P5 cross-checks atlas_debug_canvas; show the positive arm, not NC2 (WS14 T10)"
+751f11912,2026-07-30T07:27:38-07:00,False,False,False,rustty-extra: escape non-ASCII as \[uXXXX] + join filled runs before the inline pass; rustty-apprt/build: msgfmt --check
+929be01a2,2026-07-30T07:29:51-07:00,False,False,False,rustty-extra/mdgen: \: break opportunities in long URLs — groff -ww now clean (WS13 T7)
+4919832a6,2026-07-30T07:30:19-07:00,False,False,False,parity: close O13a/O14/O15/O16; strike the misleading 'WASM DONE' framing and the stale main_wasm/Atlas.Wasm/WebGL rows 
+fa2a6b54c,2026-07-30T07:30:38-07:00,False,False,False,Revert the \: URL break-opportunity experiment (WS13 T7)
+f6e302a5f,2026-07-30T07:39:29-07:00,False,False,False,"xtask: port src/main_build_data.zig — the +gen-* build-data CLI (WS13, audit rows O13a/O13b)"
+83ac28e9d,2026-07-30T07:44:21-07:00,False,False,False,parity: strike the mdgen/webgen deferral; ledger WS13 i18n + docs (WS13 T10)
+7c36e9dcb,2026-07-30T07:44:27-07:00,False,False,False,rustty-apprt-c: fix the clippy doc-list overindent in the T5 KAT header; rustty-apprt/build: record the msgfmt --check F
+2f78c750e,2026-07-30T07:47:28-07:00,False,False,False,docs(ws13): record the VM cross-platform results and the pre-existing open_uri failure (WS13 T10)
+64756622c,2026-07-30T07:49:03-07:00,False,False,False,"merge: WS13 i18n & docs — 25 msgids now extract, mdgen/webgen ported, no deferrals"
+d709fce34,2026-07-30T07:50:09-07:00,False,False,True,fix(gtk/portal): correct the OpenURI ordering test — it contradicted the oracle
+17874b19c,2026-07-30T07:50:42-07:00,False,False,False,chore: gitignore .claude/worktrees
+df3584d8d,2026-07-30T07:55:38-07:00,False,False,False,font/renderer: restore the two reference comment blocks a scoped G3b caught (WS14 T12)
+c94051557,2026-07-30T07:57:10-07:00,False,False,False,"merge: WS14 wasm/WebGL — wasm32 green, falsifiable browser gate, no deferral"
+6a09ccd5a,2026-07-30T08:57:42-07:00,False,False,False,"merge: WS14 finishing work (T9 steps 4-6, T10, T11, T12)"
+9fa5967f8,2026-07-30T09:30:54-07:00,False,False,False,font-shaper: port the web_canvas DeferredFace payload (no deferral)
+7a838017f,2026-07-30T09:34:47-07:00,False,False,True,"xev: reclassify the iocp/wasi_poll seam as a scope boundary, gate-proven"
+7781af86a,2026-07-30T09:38:08-07:00,False,False,False,termio: reword the cfg(windows) spawn/read seams as an explicit platform scope boundary
+c43cf5218,2026-07-30T09:40:54-07:00,False,False,False,merge: xev gate self-test arm
+58b2f6e90,2026-07-30T09:40:54-07:00,False,False,False,gates: give the xev scope-boundary gate a real --self-test FAIL arm
+5566560c9,2026-07-30T10:00:50-07:00,False,False,True,xev: port the libxev wasi_poll backend (WS20) — real Loop/Completion/Batch + 8 reference tests
+e31e3fafe,2026-07-30T10:05:20-07:00,False,False,False,port: Phase 2 final audit — item-level deferral inventory
+bb863bc90,2026-07-30T10:06:26-07:00,False,False,False,merge: Phase 2 final audit — item-level deferral inventory
+d9cb9e5ce,2026-07-30T10:07:32-07:00,False,False,False,gates: G-P2 no longer accepts scope-exclusion or 'Phase 3' as blanket owner
+3cd4c4bc2,2026-07-30T10:10:39-07:00,False,False,True,xev: port the libxev iocp (Windows) backend + its windows.zig shim (WS20)
+472123a06,2026-07-30T10:15:20-07:00,False,False,False,termio: port the Windows read-thread and Subprocess.start spawn half (WS20)
+eed0cfde1,2026-07-30T10:22:12-07:00,False,False,False,port: retract the iocp/wasi_poll 'out of scope by platform' mis-scoping (WS20)
+507dcced2,2026-07-30T10:23:16-07:00,False,False,False,merge: port libxev iocp + wasi_poll backends and termio Windows paths
+a1a449eb9,2026-07-30T10:24:57-07:00,False,False,False,roadmap+gates: open WS20 to own the Phase 2 residue; widen the workstream-id ceiling
+f8df31710,2026-07-30T10:32:25-07:00,False,False,False,"gates: G6c — a -C debug-assertions=off vt Miri lane; re-measure the whole cfg_attr(miri,ignore) inventory (WS19 T6, clos"
+a5d6c2485,2026-07-30T10:33:13-07:00,False,False,False,merge: WS19 T6 — the -C debug-assertions=off vt Miri lane (G6c)
+998c72ea1,2026-07-30T10:36:00-07:00,False,False,False,ledger: strike 2 falsely-open inspector rows; re-own V7 from a closed WS to WS20
+47e56c031,2026-07-30T10:48:58-07:00,False,False,True,"apprt/gtk: port cgroup, pre_exec, post_fork, flatpak, config_errors_dialog (WS20)"
+58ca1cd47,2026-07-30T10:52:14-07:00,False,False,False,"termio/os: wire the flatpak spawn tier — real FlatpakHostCommand, waitXev/flatpakExit, killCommandFlatpak (WS20)"
+8ff6a0799,2026-07-30T10:54:36-07:00,False,False,True,xev: ThreadPool futex — Windows (ntdll RtlWaitOnAddress) + single-threaded arms (WS20)
+4070c394a,2026-07-30T10:58:07-07:00,False,False,False,vaxis: port the WindowsTty console backend + the windows Loop arms (WS20)
+c088e9a58,2026-07-30T11:06:59-07:00,False,False,True,apprt/gtk: v4_16 ceiling arm + KATs + ledger updates (WS20)
+e896e2d4c,2026-07-30T11:12:28-07:00,False,False,True,xev: instantiate the libxev WATCHER layer against iocp + wasi_poll (WS20)
+0c9d18052,2026-07-30T11:14:53-07:00,False,False,False,apprt/gtk: real-systemd cgroup KAT + V10/V11 verification debt (WS20)
+8adf91f1c,2026-07-30T11:15:44-07:00,False,False,False,font-shaper: port the freetype_windows discovery backend (WS20)
+d7a094411,2026-07-30T11:16:00-07:00,False,False,False,os/flatpak: shared-only aliasing for the detached host-command thread + Miri harness (WS20)
+4197d9224,2026-07-30T11:16:11-07:00,False,False,False,ledger: name the actual cross-compile blockers for font-shaper (WS20)
+fe53d38a0,2026-07-30T11:17:29-07:00,False,False,False,merge: WS20 — vaxis WindowsTty + Windows font backend ported in full
+ef519ca71,2026-07-30T11:18:29-07:00,False,False,False,"merge: WS20 — flatpak spawn tier, iocp/wasi_poll watcher layer, ThreadPool futex"
+12c951cde,2026-07-30T11:18:41-07:00,False,False,False,"merge: WS20 — the 9 zero-counterpart GTK files (5 real, 4 false positives)"
+de36d5f19,2026-07-30T11:24:08-07:00,False,False,False,"gate(G8): key baseline benchmarks by (id, optimize) — Debug rows were silently overwriting ReleaseFast (WS10 T2)"
+0dbdc2c27,2026-07-30T11:27:22-07:00,False,False,False,simd(vt): scalar UTF-8 decode consumes partial sequences cut off by ESC (WS10 T5)
+c8ce4e576,2026-07-30T11:35:48-07:00,False,False,False,gate(G8b): paired same-session perf fence + armed G8; live flip proof (WS10 T3)
+4c5596182,2026-07-30T11:41:24-07:00,False,False,False,"docs(ledger): WS10 Layer-0 re-baseline, drift verdict, and V15/V16/V17 (WS10 T1/T18/T22)"
+644713e15,2026-07-30T11:47:16-07:00,False,False,False,vt(tabstops): avoid reallocating tabstop storage on resize to existing capacity (WS10 T6)
+3e531222e,2026-07-30T11:48:14-07:00,False,False,False,"docs(debt): V15 — discharge the origin/main oracle comparison; the BENCHES diverged, not just memset (WS10 T22)"
+7ddd58078,2026-07-30T11:50:47-07:00,False,False,False,docs(debt): V17 — re-own the oracle-anchored measurement campaign to Phase 3 (BEYOND-PIN) (WS10 T22)
+ea80044b7,2026-07-30T11:52:00-07:00,False,False,False,"merge: WS10 layer 0 — G8 vacuity fix, G8b fence, cb4c49fbf + tabstops, V6 discharged"
+da2d0e505,2026-07-30T11:57:02-07:00,False,False,False,"gate(G-BENCH): rustty-bench unit-test lane, debug + release, with a count floor (WS10 T4)"
+6d6926980,2026-07-30T12:02:53-07:00,False,False,False,vt/stream: log unsupported-input messages once per distinct value (WS10 T7)
+7725606cd,2026-07-30T12:07:08-07:00,False,False,False,termio/exec: set user-initiated QoS on the pty read thread (macOS) (WS10 T8)
+684ac513b,2026-07-30T12:11:00-07:00,False,False,False,renderer/link: avoid allocating when there are no active links (WS10 T9)
+713cf221e,2026-07-30T12:17:19-07:00,False,False,False,bench/terminal-stream: full terminal handler + 64 KiB chunks (WS10 T10)
+a2f0d2c10,2026-07-30T12:19:50-07:00,False,False,False,bench/screen-clone: --loops option and 50k iteration count (WS10 T12)
+ae48e3bf2,2026-07-30T12:34:23-07:00,False,False,False,"vt/stream: CSI fast paths — direct final dispatch, bulk param parse, inline entry (WS10 T13+T14)"
+ae05b31b0,2026-07-30T12:40:39-07:00,False,False,False,simd/vt: decode ASCII inline in the SIMD scan for ESC (WS10 T15)
+4e556acb2,2026-07-30T12:48:13-07:00,False,False,False,"docs(perf): record WS10 lane status — what landed, what is INCOMPLETE (WS10)"
+d7c3afaea,2026-07-30T12:49:27-07:00,False,False,False,"merge: WS10 continuation — 9 of 15 BL-4 tasks (T4,T7-T10,T12-T15)"
+7c036847b,2026-07-30T13:01:37-07:00,False,False,False,"gates: repair the two permanently-RED gates (D6 rule c format bug, wasm path typo)"
+f1730b206,2026-07-30T13:04:23-07:00,False,False,False,vt/hash_map: bound page map probe lengths (WS10 T11)
+b8d24a690,2026-07-30T13:11:19-07:00,False,False,False,bench: HyperlinkMap benchmark + hyperlink-map action (WS10 T11)
+587e5ae09,2026-07-30T13:13:31-07:00,False,False,False,simd: lanes(T) helper (WS10 T16)
+56dba9c81,2026-07-30T13:23:01-07:00,False,False,False,vt/render: render state update optimizations + c/render surface (WS10 T19)
+6cffd2508,2026-07-30T13:44:45-07:00,False,False,False,vt/terminal: batch printed codepoint runs into direct row fills (WS10 T16)
+a78834640,2026-07-30T14:01:35-07:00,False,False,False,termio/exec: pipeline pty reads to overlap parsing with draining (WS10 T20)
+f96957cef,2026-07-30T14:04:01-07:00,False,False,False,vt/apc: dispatch APC string bytes in bulk slices (WS10 T17)
+a6537673a,2026-07-30T14:11:12-07:00,False,False,False,perf: WS10 final paired measurement and report (WS10 T21)
+394df7a7c,2026-07-30T14:11:40-07:00,False,False,False,"docs(ws10): f2a7652ab hunk-by-hunk sweep, V18 debt, Miri exceptions (WS10 T11/T16/T17)"
+1073c9d6d,2026-07-30T14:12:52-07:00,False,False,False,"merge: WS10 T11/T16/T17 — hash_map rehash, print_slice family, apc feed_slice"
+401c2dbdf,2026-07-30T14:18:00-07:00,False,False,False,audits: LIFETIMES rows for the T20 pipeline pointer fields (WS10 T20)
+18fc25569,2026-07-30T14:19:36-07:00,False,False,False,merge: WS10 T19/T20/T21 + repair two pre-existing RED gates
+7c67b98ac,2026-07-30T14:22:31-07:00,False,False,False,fix(page): reconcile the duplicate CellField/cell_field_mask from two WS10 lanes
+9fb60fa3a,2026-07-30T14:37:20-07:00,False,False,False,"gates: G-LZ4 proves the LZ4 encoder byte stream matches the oracle, with a 1,631-row self-test FAIL arm; port compress/A"
+b0257ef57,2026-07-30T14:53:20-07:00,False,False,False,"gates: A5 gains a vacuous-shrink floor, a header-driven layout arm with oracle registry parity, and an enum-discriminant"
+30e175ec7,2026-07-30T14:56:01-07:00,False,False,False,gates: D11 flags closed #[repr(C)] enums received by value across the C ABI; RED on 33 known sites (P3-W0 T3)
+f0a205b52,2026-07-30T14:57:41-07:00,False,False,True,fix(linux): repair the Linux build/test/clippy lane
+bf8768948,2026-07-30T15:00:56-07:00,False,False,False,port: close the ten declared-sampled coverage gaps with a per-hunk residue verdict (P3-W0 T4)
+d4dca9432,2026-07-30T15:05:39-07:00,False,False,False,fix(linux): rustty-os clippy lane (Linux-only lints)
+a16e17917,2026-07-30T15:05:42-07:00,False,False,True,renderer/metal: fix the sizeof-squared buffer over-allocation and the stale len on realloc (oracle 4a22eed6d); re-affirm
+4fa8daf5d,2026-07-30T15:09:39-07:00,False,False,False,"port: per-item caller-reachability triage for the 9 claimed-live vt defects; pin.rs right_wrap is LATENT, not live (P3-W"
+dba2f435f,2026-07-30T15:11:23-07:00,False,False,False,"fix(linux): systemd MONOTONIC_USEC — no conversion, like the reference"
+ca4cd845e,2026-07-30T15:16:07-07:00,False,False,False,"gates: oracle-drive the rustty-bench action set, un-vacuum the exhaustive LZ4 differential, gate the mem.rs decommit sim"
+c618e6e1e,2026-07-30T15:17:10-07:00,False,False,False,fix(linux): sentry cache_dir block ends in the reference's explicit break
+e9e89429b,2026-07-30T15:23:58-07:00,False,False,True,"fix(linux): libpng-sys bindgen lint, keymap_darwin CarbonMods cfg, xev test muts"
+f1cd006f2,2026-07-30T15:30:01-07:00,False,False,False,fix(linux): termio killpg label + execCommand type param off Darwin
+630ce0810,2026-07-30T15:39:20-07:00,False,False,True,"fix(linux): rustty-apprt clippy lane (GTK, Linux-only)"
+328460511,2026-07-30T16:29:29-07:00,False,False,False,merge: P3-W0 — Phase 3 instruments and evidence closure
+10044a59a,2026-07-30T16:41:58-07:00,False,False,False,"vt/pagelist: width-aware pin traversal and wrap math (oracle d6e24d985 end state, 0ff4e41b2 tests) (P3-W1 T1)"
+458d24b48,2026-07-30T16:44:29-07:00,False,False,False,vt/pagelist: PageIterator count limit crosses pages and does not underflow at row 0 (oracle 9b466e9c5) (P3-W1 T2)
+c3eb108f4,2026-07-30T16:49:54-07:00,False,False,False,fix(linux): serialize fontconfig FcFini against the parallel test runner
+a2672a467,2026-07-30T16:52:48-07:00,False,False,False,"vt/pagelist: unsigned_abs on scroll deltas, u32 screen-point accumulation, checked point_from_pin (oracle c753fe4a4 afbf"
+f79d83a6a,2026-07-30T17:03:29-07:00,False,False,False,"vt: feed grapheme breaks to the state machine, use stored page widths in clear/cursor paths, floor zero-capacity growth,"
+7cefe421e,2026-07-30T17:13:52-07:00,False,False,False,vt/search: reject empty needles and reset cached results before reload_active/select (oracle 5bc6588e4 627518447) (P3-W1
+b7882113b,2026-07-30T17:19:23-07:00,False,False,False,"vt: report underline style in DECRQSS, release styles per run; record that the UTF-8 and tabstop hunks are already porte"
+9801be213,2026-07-30T17:23:36-07:00,False,False,False,port: mark the 18 P3-W1 oracle commits ported/verified in MAIN_PARITY; close REACHABILITY rows 1b/4/5/6/8/9 (P3-W1 final
+badd4e842,2026-07-30T17:29:00-07:00,False,False,False,test(vt): re-pin std_size_golden after WS10 T11's hash-map layout changes
+e879fe92e,2026-07-30T18:20:05-07:00,False,False,False,fix(gates): D1 line drift + Linux-portable mktemp in check_leaks.sh
+34e54e0c2,2026-07-30T18:25:13-07:00,False,False,False,test(extra): exclude the two mdgen coverage tests from the Miri lane
+408f54920,2026-07-30T18:25:35-07:00,False,False,False,"merge: P3-W1 — vt-core live-bug wave (7 commits, 31 new tests)"
+f3128262b,2026-07-30T18:32:13-07:00,False,False,False,merge: Linux build verification and fixes (9 commits)
+9be05f7ab,2026-07-30T18:58:19-07:00,False,False,False,gates(G-P2): ENVIRONMENT-BLOCKED disposition with disk-resolved teeth; fix a struck-row derivation hole; truth-up 4 stal
+5fd692478,2026-07-30T18:58:29-07:00,False,False,True,test(gtk): drive signal_css_parsing_error itself — the byte dump is present IFF gtk-v4_16 (V14)
+c45abb06b,2026-07-30T18:58:48-07:00,False,False,False,vt/page: audit hash-map key/value pointer lifetimes against backward-shift deletion (oracle fedd42e8d prerequisite) (P3-
+0fe360c4b,2026-07-30T19:00:58-07:00,False,False,False,"docs(debt): V14 DISCHARGED — the byte dump is now proved at the HANDLER, with a run negative control"
+62f935de9,2026-07-30T19:01:42-07:00,False,False,False,"merge: V14 — the gtk-v4_16 byte dump is now proved at the HANDLER, not the binding"
+b21c159aa,2026-07-30T19:02:41-07:00,False,False,False,test(gtk): drop the unused gtk4::prelude glob from the css-parse-error KAT
+6cf539d86,2026-07-30T19:05:36-07:00,False,False,False,global: capture the environment block and the temp dir; assert no lib-vt edge to rustty-global (oracle e8525c0fd a77c706
+389dde001,2026-07-30T19:13:24-07:00,False,False,False,vt/page: load-factor-aware offset-map layout and no-clobber moves (oracle 7e14347c1 65f953e8e) (P3-W2 T2)
+00d5f0d15,2026-07-30T19:14:52-07:00,False,False,True,termio/apprt: fill the RtPreExecInfo/RtPostForkInfo growth point and wire the apprt rt_* hooks into Command (V13)
+5f0c47e99,2026-07-30T19:15:50-07:00,False,False,False,merge: V13 — Command now actually reaches the ported GTK pre_exec/post_fork
+e304888a2,2026-07-30T19:19:27-07:00,False,False,False,"docs(debt): V13 DISCHARGED — cgroup end-to-end run on Linux, after the first KAT proved VACUOUS"
+71991fb08,2026-07-30T19:24:08-07:00,False,False,False,"vt/hash_map: backward-shift deletion replaces tombstones, with a canonical-placement invariant (oracle fedd42e8d end sta"
+b4219b748,2026-07-30T19:33:37-07:00,False,False,True,os/termio: byte-type the environment family (fixes a live non-UTF-8 surface-creation panic) and move append/prepend into
+576c2145c,2026-07-30T19:44:47-07:00,False,False,True,"os: delete args.rs and env.rs, migrating every consumer to global accessors and byte-typed argv (oracle e8525c0fd deleti"
+4e6352cba,2026-07-30T19:48:01-07:00,False,False,False,termio: latch the real execve errno across the PATH search and raise the read thread's QoS class (oracle a77c706a1 2f0e6
+cb8a79ccb,2026-07-30T19:49:09-07:00,False,False,False,vt: retry row clones on page-capacity errors in erase_row and cursor_scroll_above_rotate (oracle ee9d5b352 043326249) (P
+8da32f44b,2026-07-30T19:50:20-07:00,False,False,False,termio: dispatch the bulk print and APC slice actions (oracle f6f79acce 47e26df60) (P3-W7 T6)
+ad65e533c,2026-07-30T19:50:58-07:00,False,False,False,docs(vt): record the P3-W2 T4 executed negative controls at the retry helpers
+c5c5b75cd,2026-07-30T19:52:12-07:00,False,False,False,"termio: two-stage pty read pipeline with a 4x64 KiB ring, raw-pointer slot handoff, Miri-proven ordering (oracle 2f0e665"
+9f497e6fd,2026-07-30T19:54:11-07:00,False,False,False,"port: record area E's deliberate non-ports with 4-criterion bases, including quirks_memset and the hostname.isValid keep"
+e4f7b2c83,2026-07-30T20:00:51-07:00,False,False,True,apprt(gtk): byte-type the GTK subprocess-env sites (Linux-only arms; P3-W7 T2/T4 follow-up)
+e1f850764,2026-07-30T20:07:57-07:00,False,False,False,merge: P3-W2 — page maps and capacity resilience (5 commits)
+617a1f56f,2026-07-30T20:16:02-07:00,False,False,False,port: record the check_tests_ported delta from the args.rs/env.rs deletions (P3-W7 T4 follow-up)
+f35ac069a,2026-07-30T20:23:09-07:00,False,False,True,"merge: P3-W7 — OS / termio / platform (9 commits, both platforms green)"
+d8a7aad9d,2026-07-30T20:40:25-07:00,False,False,False,macos: opinionated pasteboard string extraction with 17 ported tests; file-URL-only services reads (oracle 49806fc4c acd
+35e734e53,2026-07-30T20:46:16-07:00,False,False,False,"macos: exact-geometry quick-terminal cache, synchronous main-thread surface free, publisher retain-cycle fix, preedit co"
+2035be343,2026-07-30T20:58:11-07:00,False,False,False,z2d/font: native Path::offset replaces the two-surface inner-stroke mask; drawE0B5 forces perpendicular butt caps; 6 gol
+cea333f75,2026-07-30T20:59:23-07:00,False,False,False,font/opentype: pin the SVG document-list bounds guards with tests (oracle b988efcfe) (P3-W8 T4)
+da863e701,2026-07-30T21:04:26-07:00,False,False,False,inspector/renderer: assert metadata-only pagelist traversal and kitty image generation staleness (oracle 6d5dda40d bdc0b
+0c4dc22ba,2026-07-30T21:06:50-07:00,False,False,False,"docs(miri): F1 — real pre-existing UB in the LZ4 page compressor, and the baseline gap that hid it"
+1911f1466,2026-07-30T21:09:00-07:00,False,False,True,apprt/gtk: honor xdg_toplevel suspended and clamp the max window size to the current monitor (oracle 2f3814ca5 004c88e41
+b86af099d,2026-07-30T21:38:34-07:00,False,False,False,"merge: P3-W8 — UI tiers, tasks 1-5 and 8 (6 commits); Wayland hotkeys NOT started"
+5ac64fbee,2026-07-30T21:46:46-07:00,False,False,False,chore: ignore Miri lane run logs (findings live in FINDINGS.md)
+6717f074a,2026-07-30T21:56:45-07:00,False,False,False,"config/vt: exclude trailing spaces from URL path matches in both regex copies, and gate that they stay identical (oracle"
+a4cbbdf13,2026-07-30T22:07:23-07:00,False,False,False,vt/pagelist: init takes Options and enforces a line limit (oracle 5b2d3b7df 659a60ae5) (P3-W3 T1)
+550c9f79d,2026-07-30T22:12:44-07:00,False,False,False,config: add gtk-horizontal-tab-scroll and reconcile the field-count contract against the oracle SHA (oracle 5ea45919d b5
+4848f8abd,2026-07-30T22:13:10-07:00,False,False,False,config: refresh the background-blur and keybind global: doc blocks (oracle 2da02f4d2 d71695550) (P3-W9 T2)
+773ddf7b4,2026-07-30T22:19:22-07:00,False,False,False,synthetic: random Kitty graphics APC generator and its +kitty action (oracle f6f79acce) (P3-W9 T4)
+d427c7c58,2026-07-30T22:19:36-07:00,False,False,True,vt: max_scrollback becomes max_scrollback_bytes with an optional unlimited encoding and a line companion (oracle 86f81fb
+01c5ca06e,2026-07-30T22:23:14-07:00,False,False,False,extra: re-vendor the iterm2 theme corpus at 20260720-153658-97e244c with a per-file digest manifest gate (oracle 4c1d696
+bfabb1ebb,2026-07-30T22:29:16-07:00,False,False,False,"deps: measure the vaxis/zf/uucode/libxev deltas, DEFER the uucode and vaxis/zf bumps with byte-level evidence, re-affirm"
+abc2b3de7,2026-07-30T22:30:30-07:00,False,False,False,"vt/pagelist: PageList::Limits with runtime setters, immediate pruning, and mark_activity on enforce (oracle f4c68d65e) ("
+6e0f2ba40,2026-07-30T22:35:49-07:00,False,False,False,"port: translate zh_CN Close Split, refresh the edit-config error text and the wuffs provenance citation, and record area"
+6aada214b,2026-07-30T22:44:53-07:00,False,False,False,"config: Limit(T, default) with an unlimited sentinel; scrollback-limit becomes scrollback-limit-bytes with a -lines comp"
+d4021824e,2026-07-30T22:51:11-07:00,False,False,False,docs(gates): record P3-W9's G3b beyond-pin delta with per-sentence attribution (config 9 -> 28; P3-W10 T3 must take it t
+9d8fafb82,2026-07-30T22:53:06-07:00,False,False,False,"fix(vt): two pre-existing UB bugs found by the P3 vt Miri sweep (F1, F2)"
+ede15d533,2026-07-30T22:55:54-07:00,False,False,False,vt-c: remove RusttyTerminalOptions; scrollback limits become options 27/28 with data readers 34/35 (oracle 03d5fa268 a27
+7a531cae7,2026-07-30T23:11:34-07:00,False,False,False,termio/inspector/bench: consume the byte and line scrollback limits (oracle 86f81fb5b f4c68d65e tails) (P3-W3 T6)
+1b9eeccf4,2026-07-30T23:15:30-07:00,False,False,False,"docs(P3-W3): close re-vet row P3-RV1, record the check_tests_ported rename delta, and verify the MAIN_PARITY 50 MB claim"
+ffe8010b3,2026-07-30T23:19:55-07:00,False,False,False,vt-c: update the four stale terminal_c.new reference comments to the new constructor form (oracle 03d5fa268) (P3-W3 T5 f
+e1b30b100,2026-07-30T23:21:16-07:00,False,False,False,gates(G-ONIG): a --features oniguruma lane; no CI lane compiled it at all
+42ca8ba9a,2026-07-30T23:21:34-07:00,False,False,False,"merge: fix both latent UBs the full vt Miri sweep found (F1, F2)"
+8cc02ae3e,2026-07-30T23:21:57-07:00,False,False,False,merge: P3-W9 — config / CLI / build / i18n / synthetic (8 commits)
+2681c5b56,2026-07-30T23:30:14-07:00,False,False,False,"merge: P3-W3 — runtime scrollback limits, one atomic unit across six crates (7 commits)"
+ad8d00537,2026-07-30T23:31:04-07:00,False,False,False,"gates(G-P2): recognize P3-W<n> owners, derived from git merge commits"
+727d1ab41,2026-07-30T23:43:28-07:00,False,False,False,"vt-c: refresh the grid_ref reference comment, extend the grapheme-UTF-8 test table, match upstream vt.h include order, d"
+01437ec66,2026-07-30T23:44:27-07:00,False,False,False,vt/screen: make resize failure-safe with tripwire fail points and an allocation-free cursor restore (oracle dde3d4d6b) (
+e513633af,2026-07-31T00:05:13-07:00,False,False,False,vt-c: narrow inbound closed enums at the ABI boundary (scroll_viewport in-range; focus/sys/size_report pre-existing); D1
+1535471fe,2026-07-31T00:18:27-07:00,False,False,False,"vt: Terminal.Resize with cell geometry, sync-output reset and alt-screen recovery, threaded through stream_terminal, ter"
+384d62995,2026-07-31T00:18:42-07:00,False,False,False,vt-c: desktop-notification and progress-report effects with registered sized structs (oracle c3655ba25 47d602c42 628adaf
+2f3d21449,2026-07-31T00:27:16-07:00,False,False,False,"vt: roll back tabstops, pixel geometry, sync-output and screen dims on resize failure (oracle a3c1caba5) (P3-W4 T3)"
+864a85863,2026-07-31T00:29:00-07:00,False,False,False,"docs(V19,V20): run V20a's headed occlusion control on the VM (PASSES), and convert the two genuine environment limits to"
+0227b8bfc,2026-07-31T00:32:02-07:00,False,False,False,vt: mixed-width selection clamp regression tests; reconcile the type_json registry both directions (oracle b6f34be44 a9f
+6339a2a0d,2026-07-31T00:37:26-07:00,False,False,False,"merge: P3-W6 — C-API surface and effects, tasks 1/2/3/7 + V19/V20 (5 commits)"
+baf17022f,2026-07-31T00:42:46-07:00,False,False,True,vt: Terminal owns cursor defaults; delete the handler and termio copies (oracle c594031d5) (P3-W4 T4)
+eefa4ca1b,2026-07-31T00:53:51-07:00,False,False,False,"vt: sticky semantic-failure flag with the handler error re-partition, exposed as DATA 33 (oracle 439d35e27) (P3-W4 T5)"
+dbccae405,2026-07-31T01:02:20-07:00,False,False,False,vt/dcs: DECRQSS encodes its own response into a fixed buffer; termio and the C API consume it (oracle 39ae85f04) (P3-W4 
+765cc7963,2026-07-31T01:20:19-07:00,False,False,False,vt/termio/core: DEC mode 2033 visibility reports end to end; route the color-scheme report through the shared encoder (o
+14284f2c7,2026-07-31T01:32:58-07:00,False,False,False,docs(P3-W4): file V21 — the Surface-level visibility KAT (dedup + report-reaches-pty) is ported but not behaviourally ve
+a76aff373,2026-07-31T01:37:37-07:00,False,False,False,"merge: P3-W4 — resize, cursor defaults, visibility, DECRQSS (8 commits, T1-T7 all done)"
+9a1d2d6fb,2026-07-31T01:47:14-07:00,False,False,True,verify(V20b): discharge the compute-size monitor clamp's geometry effect on two real heads
+770da98c7,2026-07-31T02:04:38-07:00,False,False,False,"merge: V20b DISCHARGED — the ""needs two monitors"" block was wrong, and V19's third item was too"
+a8855af04,2026-07-31T02:13:36-07:00,False,False,False,"vt/screen: fast in-page scroll-region rotate with raw-pointer pin fixups, Miri-proven (oracle 77190bd02) (P3-W5 T3)"
+8acc40b1b,2026-07-31T02:13:52-07:00,False,False,False,"fix(vt): repair `cargo test -p rustty-vt --release`, RED on main since P3-W4 T5"
+6a17ebbda,2026-07-31T02:15:55-07:00,False,False,False,"docs(P3-W5): re-vet verdict — 8 of 9 plan tasks were already shipped by WS10, with per-task evidence"
+7a3cccd49,2026-07-31T02:18:10-07:00,False,False,False,docs(ledger): close 13 stale MAIN_PARITY rows and re-vet row P3-RV3
+1fa2a1263,2026-07-31T02:19:57-07:00,False,False,False,"docs(P3-W5 T3): record the real-code Miri run (cargo miri test -p rustty-vt, 7/7 green in 1151s) alongside the harness"
+bb0e2ccbe,2026-07-31T02:21:06-07:00,False,False,False,merge: P3-W5 — the plan was 8/9 STALE; port cursor_scroll_region_up and fix a RED release lane
+fb1d84520,2026-07-31T02:22:50-07:00,False,False,False,verify(V19): assert the fa3802a70 BackportPointerStyle mapping on macOS 26
+c9b2f27c8,2026-07-31T02:24:56-07:00,False,False,False,style: cargo fmt the V20b compute-size KAT
+8a05f04dd,2026-07-31T02:25:10-07:00,False,False,False,merge: V19's fa3802a70 third DISCHARGED — the pointer-style mapping was never macOS-27-gated
+64a201993,2026-07-31T02:25:37-07:00,False,False,False,gates(G-P2): PORTED paths containing spaces were never checked
+da6e4f094,2026-07-31T02:31:04-07:00,False,False,False,fix(release): three more sites where the release lane could not build or pass
+4d690b434,2026-07-31T02:49:09-07:00,False,False,False,vt/kitty: temp-file medium restricts to an explicit directory instead of the process TMPDIR (oracle e8525c0fd b988efcfe 
+e67ff420b,2026-07-31T02:53:01-07:00,False,False,False,vt/kitty: transient usage hints re-key image eviction (oracle a65e11cc9) (P3-W11 T2 / P3-W6 T5)
+1a139c834,2026-07-31T03:02:02-07:00,False,False,False,vt/search: reuse viewport fingerprint storage with a single-pass update (oracle 9659167ec bc8bb6c0f) (P3-W11 T3 / P3-W6 
+21cfb8127,2026-07-31T03:09:12-07:00,False,False,False,core: V21 — the Surface-level visibility KAT (dedup; oracle 6c8c07981) (P3-W11 T6)
+9dff03b2d,2026-07-31T03:11:20-07:00,False,False,True,apprt/gtk: honor gtk-horizontal-tab-scroll and forward horizontal scroll to the terminal (oracle 5ea45919d) (P3-W11 T5 /
+30a37030e,2026-07-31T03:33:58-07:00,False,False,False,docs(P3-W11): lane status — 5 of 6 tasks landed; the Wayland hotkeys series stays OPEN and owned
+631aaf453,2026-07-31T03:35:22-07:00,False,False,False,"merge: P3-W11 — completion sweep, 5 of 6 tasks (6 commits); Wayland hotkeys re-filed, not begun"
+f16150629,2026-07-31T03:45:34-07:00,False,False,True,"apprt/gtk: fix the two clippy errors in the gtk,wayland,x11 feature lane"
+a19c05a40,2026-07-31T03:51:47-07:00,False,False,False,"ci: G-GTKFEAT — gate the --features gtk,wayland,x11 lane (it was linted by nothing)"
+cb185a8ca,2026-07-31T03:59:07-07:00,False,False,False,"merge: fix the RED gtk,wayland,x11 clippy lane, and gate the feature combination"
+e858d5d91,2026-07-31T04:43:25-07:00,False,False,True,"apprt/gtk: vendor vicinae-hotkey-v1 and bind global shortcuts through the Wayland manager, with a per-binding bind-faile"
+2dfee2973,2026-07-31T04:54:03-07:00,False,False,True,"merge: Wayland global hotkeys F-W1..F-W4 — the last unported Phase 3 item, landed whole"
+a1b63daa1,2026-07-31T05:01:25-07:00,False,False,False,docs(V22): give the wire-path row a live owner (P3-W12) and a genuinely runnable recipe
+a8dc231ea,2026-07-31T06:33:32Z,False,False,False,chore(deps): bump libc from 0.2.186 to 0.2.189
+6838c9822,2026-07-31T06:40:39-07:00,False,False,False,port(W10 pre-flight): capture the G3b and test-count baselines at the pin
+048d965fd,2026-07-31T06:44:34-07:00,False,False,True,test(P3-W12): drive the vicinae_hotkey_v1 wire path against a fake compositor (V22)
+a01107868,2026-07-31T07:09:48-07:00,False,False,False,merge: P3-W12 — the vicinae wire-path harness; V22 DISCHARGED
+b9ec65ac6,2026-07-31T07:24:35-07:00,False,True,False,port: correct 13 MAIN_PARITY rows in both directions (P3-W10 T2)
+0efe06a1c,2026-07-31T07:55:48-07:00,False,True,False,port: advance the oracle sync point to 6ad1fe7d8 (working tree moved) (P3-W10 T3)
+3aeb1c21f,2026-07-31T08:07:35-07:00,False,True,False,port: strike 5 more BL-1 generation rows and flag the stale compression rows (P3-W10 T2)
+f44d4ab7a,2026-07-31T08:08:47-07:00,False,True,False,docs(gates): correct the G3b pin-advance guidance with the measured result (P3-W10 T3)
+bb2cbbf32,2026-07-31T08:13:14-07:00,False,False,False,fix(gate): repair the G6b compressed-page leak harness; triage the advance's gate flips (P3-W10 T4)
+14697f995,2026-07-31T08:14:02-07:00,False,False,False,docs: note the G3b before-side print cap in the w10 delta table (P3-W10)
+9efca602b,2026-07-31T08:14:54-07:00,False,False,False,docs: correct the w10 note — G3 does not read the oracle tree (P3-W10)
+18da9ba5b,2026-07-31T08:47:40-07:00,False,False,False,merge: P3-W10 — the pin is advanced to 6ad1fe7d8; the plan's model of an advance was wrong
+2a557febc,2026-07-31T09:17:48-07:00,False,False,False,audit(G-FILES): per-file oracle coverage gate; record 3 post-pin non-ports
+93d7d3d6d,2026-07-31T09:21:10-07:00,False,False,False,"test(extra): exclude the third hanging webgen test from the Miri lane, with a real measurement"
+417cd1381,2026-07-31T09:24:04-07:00,False,False,False,audit(G-SYMS): per-symbol oracle coverage gate; all 2554 pub fns accounted for
+58693dade,2026-07-31T09:44:45-07:00,False,False,False,test(vt): port 3 unported oracle PageList compression tests (live-oracle audit)
+74b716f0f,2026-07-31T09:51:00-07:00,False,False,False,audit(G-TESTS): per-test live-oracle coverage gate; port 2 absent PageList compression tests
+37c7dec2c,2026-07-31T09:51:17-07:00,False,False,False,merge: 3 absent PageList compression tests (audit pass 3)
+97c96e063,2026-07-31T10:02:43-07:00,False,False,False,audit(G-TESTS): demonstrated FAIL arms; stricter matcher finds 16 more absences
+e56a5257e,2026-07-31T10:03:54-07:00,False,False,False,ci: register G-TESTS + G-TESTS-SELF; the self-test runs as its own HARD gate
+aeb05fbdc,2026-07-31T10:07:32-07:00,False,False,False,audit(G-CENSUS): the frozen phase-0 census is 88% of the live oracle; record it
+ecbdb2626,2026-07-31T10:09:15-07:00,False,False,True,loose-ends: close 4 real gaps + 1 undocumented hole; restore 15 dropped oracle markers
+44fa9ebca,2026-07-31T10:10:14-07:00,False,False,False,merge: loose-ends sweep — 4 env-capture divergences + 1 undocumented hole
+abaa20d29,2026-07-31T10:19:30-07:00,False,False,True,"audit: re-verify all 231 tracked deferrals against code; 14 wrong statuses, 5 fixes"
+7aef1968a,2026-07-31T10:20:20-07:00,False,False,False,"merge: deferral re-audit — 14 wrong statuses, G3b scope-override vacuity, 5 fixes"
+c34527bd1,2026-07-31T10:23:49-07:00,False,False,True,fix(gtk/media): stop the bell MediaFile test racing GstPlay teardown on Linux
+5e7749d60,2026-07-31T10:25:13-07:00,False,False,False,gate(G-P2): a BEYOND-PIN basis EXPIRES when the pin advances
+927e0e1ee,2026-07-31T10:25:35-07:00,False,False,False,test(vt): port the 20 missing PageList incremental-compression tests (G3b-vt)
+3ec3908cb,2026-07-31T10:26:16-07:00,False,False,False,"test(pagelist,vt-c): port the 16 absent cold-history compression tests (9156ada16)"
+6a07ed468,2026-07-31T10:28:39-07:00,False,False,True,audit(miri): re-audit every MIRI EXCEPTION family; make the xev ASan control real
+453656896,2026-07-31T10:29:20-07:00,False,False,False,merge: 17 PageList/vt-c compression tests from the test-coverage audit
+c25d02ced,2026-07-31T10:30:34-07:00,False,False,True,merge: Miri exception re-audit — ASan control existed only on paper
+421c37461,2026-07-31T10:31:59-07:00,False,False,False,verify(V15/V16/V18): the oracle DOES build at the new pin — premise refuted
+6c114c308,2026-07-31T10:32:45-07:00,False,False,False,G3b-REST: discharge the 116 non-vt reference-comment misses from the 6ad1fe7d8 resync
+0b7ebdcdc,2026-07-31T10:34:48-07:00,False,False,False,"fix(vt/tmux): regex non-match must return to idle, not panic (P3 unreachable audit)"
+b8b55b429,2026-07-31T10:34:59-07:00,False,False,False,merge: G3b non-vt backlog 116->0; 4 unported code changes found
+1d25a2b70,2026-07-31T10:37:21-07:00,False,False,False,merge: unreachable! audit — input-driven panic in tmux control fixed
+b631fcec3,2026-07-31T10:44:09-07:00,False,False,False,parity(BL-1): re-triage the 14 stale `missing BL-1` rows with evidence
+e1cd0856a,2026-07-31T10:44:43-07:00,False,False,False,merge: Linux audit — fix a ~30% flaky GstPlay teardown crash
+70a4b2909,2026-07-31T10:46:16-07:00,False,False,True,"fix(xev): real Stacked-Borrows UB in ThreadPool — wildcard container_of, protected &mut deinit, join-chain data race (WS"
+54a90dbf6,2026-07-31T10:46:28-07:00,False,False,False,fix: thread freetype-load-flags through the DI bridge + port the termio tmux dcsCommand arm
+49edf86a4,2026-07-31T10:46:35-07:00,False,False,True,fix: silence 2 release-only dead-code warnings; record 2 faithfully-ported upstream bugs
+bfe03ea66,2026-07-31T10:47:10-07:00,False,False,False,"merge: xev Stacked Borrows UB — 3 findings, 2 in the implementation"
+7b49b228f,2026-07-31T10:47:26-07:00,False,False,False,merge: freetype-load-flags + tmux dcsCommand — two user-visible bugs closed
+b1c44ce83,2026-07-31T10:49:16-07:00,False,False,False,docs(miri): record the 31st xev annotation without breaking the src-scoped floor
+823f9b8de,2026-07-31T10:50:53-07:00,False,False,False,"tools: resolve the oracle from the MAIN checkout, not the worktree"
+9017ec030,2026-07-31T10:52:06-07:00,False,False,False,port(vt): discharge the remaining G3b-vt reference comments + the Screen fast path they pointed at
+d4c97b6da,2026-07-31T10:54:41-07:00,False,False,True,"port: close 4 unowned re-audit deferrals (wayland map shape, os_signpost, iOS gating, Thread.zig G3b)"
+256b4d8a6,2026-07-31T10:57:02-07:00,False,False,False,gate(G-FILES): an argued non-port must not flip to THIN when something cites it
+c42489b2d,2026-07-31T10:57:49-07:00,False,False,False,merge: 4 small deferrals closed; G3b silently skips 33% of the corpus
+d5e135055,2026-07-31T11:02:33-07:00,False,False,True,fix(config/renderer): font-feature must carry raw bytes — a NUL in a config file aborted renderer init (P3 panic-paths)
+a9b696aa7,2026-07-31T11:02:42-07:00,False,False,False,merge: G3b vt 218->0; 20 more PageList tests + a missing Screen fast path
+6bf1888ab,2026-07-31T11:04:14-07:00,False,False,False,merge-fix(vt): dedupe 16 PageList tests two lanes ported independently
+79a23ffeb,2026-07-31T11:04:20-07:00,False,False,False,merge: untrusted-input panic sweep — font-feature NUL abort fixed
+13ec8ffec,2026-07-31T11:05:19-07:00,False,False,False,ledger: record the xev join Acquire deviation + U3 tmux overflow upstream bug
+586747ab8,2026-07-31T11:20:01-07:00,False,False,False,fix(vt): redo the dedup correctly — the first pass orphaned attributes
+5243303fb,2026-07-31T11:31:45-07:00,False,False,True,"fix(xev): the ASan crash was a dropped Zig field default, not an ASan limitation"
+5166374d7,2026-07-31T12:04:42Z,False,False,False,build(deps): bump cc from 1.2.65 to 1.4.0
+07a61e769,2026-07-31T13:04:34-07:00,False,False,True,miri(adversarial): break 2 of 4 exception families — remove 3 bogus ignores
+fa02b36cc,2026-07-31T13:05:54-07:00,False,False,False,"merge: adversarial Miri re-vet — 3 ignores removed, 2 stated causes wrong"
+2bd45ccc7,2026-07-31T13:19:29-07:00,False,False,True,"gate(G1): exempt contract entries UPSTREAM DELETED — verified, not trusted"
+986d90c84,2026-07-31T13:51:18-07:00,False,False,False,"ci-triage: G4-uni oracle bump, G2 live-verified drift ledger, D1 re-audit, D6 waiver"
+268d156f3,2026-07-31T13:56:05-07:00,False,False,False,"G6: unblock the Miri lanes — cfg(miri) stubs for the libSystem SINKS, measured exceptions for the rest"
+23ced2b1c,2026-07-31T14:37:40-07:00,False,False,False,"ledger: record the G6/G6c triage measurements, the contention hazard, and what is still open"
+db4e76d8d,2026-07-31T14:39:14-07:00,False,False,False,"merge: ci.sh triage — G4-uni/G2/D1/D6 fixed, G6c already green, G6 partial"
+dc054bbc8,2026-07-31T14:44:57-07:00,False,False,False,"gate(G6): a broken done-status probe was a SILENT SKIP, and could be a silent green"
+4f45f4225,2026-07-31T18:17:19Z,False,False,False,build(deps): bump allocator-api2 from 0.2.21 to 0.4.0
+d34cc1549,2026-08-10T13:13:58-07:00,False,False,True,untrack codex stuff
+8120dd10d,2026-08-11T22:03:54-07:00,False,False,True,"codex-vet: vet all 147 audited parity findings, remediate 140, restore Windows"
+c8e76c6eb,2026-08-17T22:27:46-07:00,False,False,False,"phase-4: advance the oracle pin 6ad1fe7d8 -> 12967b68f (543 commits, +72,554/-8,106) with before/after gate evidence"
+d4944da28,2026-08-17T22:40:06-07:00,False,False,False,phase-4: land the 7 area assessments + reconciliation and the master plan
+27c784ab2,2026-08-17T23:03:45-07:00,False,False,True,phase-4 W0: fix 10 live bugs shipping in rustty today (fail-first)
+558614d09,2026-08-17T23:19:24-07:00,False,False,False,"phase-4 W1: leaf foundations — lib enum stable values + crc32c, datastruct allocators, vt fraction/fastprint, os stderr/"
+3d6fd16e9,2026-08-17T23:41:22-07:00,False,False,True,"phase-4 par-1: ssh-terminfo cache, config bundle, po/ i18n end-state mirror, .github mirrors, crash no-global-state"
+027e6fa36,2026-08-18T06:49:31-07:00,False,False,False,phase-4 W2: PageList Builder/allocatePage end state + RefCountedSet iterator + snapshot re-export seam
+683905291,2026-08-18T07:30:39-07:00,False,False,False,"phase-4 W2: stream-continuation bundle end state — Tracker/BoundaryScanner, Stream.init(Options), ApcEnd{terminated}, Un"
+95beca864,2026-08-18T07:58:46-07:00,False,False,True,"phase-4 par-2: kitty end-state + security, formatter PinMap bundle, input, modes DECECM, termio MemoryPool, renderer cel"
+bd157deed,2026-08-18T12:39:25-07:00,False,False,True,"phase-4 par-3: reflow end-state chain (SB+TB Miri-proven), terminal tail, snapshot scaffold+records, GTK wave, E-tail, t"
+7a93446e6,2026-08-18T14:21:33-07:00,False,False,True,"phase-4 par-4: snapshot grid/page/history + C-API bundles T,R,M,K + embed-header bundle E"
+47b2dbbb7,2026-08-25T11:25:32-07:00,False,False,False,"phase-4 par-5: snapshot subsystem COMPLETE + C-API bundles S and W + benches — A5 fully GREEN, two Miri-found bugs fixed"
+445239ad0,2026-08-25T11:40:45-07:00,False,False,False,"phase-4 finale: Linux-lane fixes — fc-match double-destroy (UPSTREAM BUG P4-U3), kitty prefix-test scratch placement, +n"
+d63dd9fc7,2026-08-25T12:06:21-07:00,False,False,True,"phase-4 finale: G3b re-greened (1,230 -> 0), last two code gaps closed, comment-fidelity sweep"
+cc8c65309,2026-08-25T12:50:53-07:00,False,False,False,"phase-5: advance the oracle pin 12967b68f -> 683d8db64 (245 commits, +25,534/-3,360); assessments + master plan"
+5a8f9e839,2026-08-25T13:12:00-07:00,False,False,False,"phase-5 W1: leaf prerequisites — simd base64 strict+streaming, wuffs swizzle end state (live gaToRgba divergence FIXED),"

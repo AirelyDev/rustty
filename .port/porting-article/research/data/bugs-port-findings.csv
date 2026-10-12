@@ -1,0 +1,335 @@
+id,num,title,severity,klass,test_only,closed,first_commit,first_date
+N1,1,"`GlobalState::new` performs an extra, unfaithful environ capture",medium,behaviour divergence from Ghostty,False,True,3c6f84a43,2026-09-09
+N2,2,one `log.warn` in `tmux/viewer.zig` has no restorable Rust counterpart,low,logging / diagnostic fidelity,True,True,642ab97e2,2026-09-09
+N3,3,"the port shares one ""seen"" table between two `logUnsupportedOnce` sites the reference keeps separate",low,behaviour divergence from Ghostty,False,True,422fe8155,2026-09-09
+N4,4,`DeferredFace.zig` has three live `log.warn` sites and no `LOG` row names the file,low,logging / diagnostic fidelity,False,True,40a0cab9f,2026-09-10
+N5,5,"`S94-F1`'s mpsc stand-in rests on a justification that is false, and the real port exists",medium,behaviour divergence from Ghostty,False,True,198780b2f,2026-09-10
+N6,6,"`discovery.zig`'s two table-parse `log.warn`s were discarded by `.ok()`, and no row names them",low,logging / diagnostic fidelity,False,True,40a0cab9f,2026-09-10
+N7,7,`metal/buffer.zig`'s two null-contents warns are unrestorable and unclaimed,low,logging / diagnostic fidelity,False,True,fbf8f6ab7,2026-09-10
+N8,8,"`initPostPipelines`'s error set collapsed to one variant, so its restored log always prints the same thing",low,logging / diagnostic fidelity,False,True,a7269d769,2026-09-10
+N9,9,the Linux twins of `generic.zig` and `image.zig` were logging-dead while their macOS twins were live (CLOSED by task-14c-5),medium,logging / diagnostic fidelity,False,True,468b5982b,2026-09-10
+N10,10,`web-canvas-instantiate.mjs` was dead for ~1 day: this plan's own log backend added an `env.log` import the glue did not supply,low,logging / diagnostic fidelity,False,False,65bf86e2a,2026-09-10
+N11,11,"restored `log` sites render Rust's derived formatter where Zig renders its builtin aggregate formatter, crate-wide across ~35 sites",low,logging / diagnostic fidelity,False,True,349183b19,2026-09-10
+N12,12,"the audit's line anchors leave whole reference-file HEADS unaudited, and no row will ever claim them (new gate G-LOGFILE)",medium,logging / diagnostic fidelity,False,True,8f500a8e7,2026-09-10
+N13,13,two `self_.?` elisions turn a Zig safe-build panic into silent UB on an ABI-nullable pointer,medium,crash / panic,False,True,8f500a8e7,2026-09-10
+N14,14,"the GTK subtree writes 244 diagnostics straight to stderr, bypassing the log facade entirely",medium,logging / diagnostic fidelity,False,False,3ec9b2054,2026-09-10
+N15,15,"the portmap was seeded from the audit's LOG rows, so it inherited the audit's blind spots: 112 reference files and 523 diagnostics were outside the gate entirel",high,logging / diagnostic fidelity,False,False,a91e840c1,2026-09-10
+N16,16,"three `Config.zig` `log.warn` sites are UNRESTORABLE, not dropped: their Rust counterparts are infallible",low,logging / diagnostic fidelity,False,False,0a294a255,2026-09-10
+N17,17,"the `log` facade's `.default` scope (`target: """"`) rendered `warning(): msg`, not `warning: msg`",low,logging / diagnostic fidelity,False,True,d902de544,2026-09-10
+N18,18,"`App.keymap` is EAGER in the port and LAZY upstream, which costs `embedded.zig:251`'s diagnostic",low,logging / diagnostic fidelity,False,True,d902de544,2026-09-10
+N19,19,a whole crate's diagnostics were invisible to G-LOGFILE: undeclared port file + an emission shape that counts as neither,medium,logging / diagnostic fidelity,False,True,dceaf8b07,2026-09-10
+N20,20,stale pre-resync Zig comments reproduce reference log calls that no longer exist at the pin (MACHINE-CHECKED since 2026-09-11),low,logging / diagnostic fidelity,False,False,835b6e943,2026-09-10
+N21,21,"a message that is PRESENT but WRONG reconciles perfectly: G-LOGFILE now compares text, not only counts",medium,logging / diagnostic fidelity,False,False,1e3217234,2026-09-10
+N22,22,G-LOGFILE counts `log.*` sites inside reference functions that the reference never calls (CLOSED 2026-09-11 by a site-level dead-site declaration),,logging / diagnostic fidelity,False,True,7d7bb8e5b,2026-09-10
+N23,23,"`src/config/CApi.zig` was 11-short and no row claimed it; 7 restored, 4 unrestorable",,behaviour divergence from Ghostty,False,True,7d7bb8e5b,2026-09-10
+N24,24,"a WAIVED row whose ""the port cannot produce this failure"" rests on a *tracked defect*, not on a language property",,behaviour divergence from Ghostty,False,True,03822c87c,2026-09-10
+N25,25,"five `rustty-font` diagnostics live only in test code, and were counted as if they were the port",low,logging / diagnostic fidelity,True,True,a2061c158,2026-09-10
+N26,26,"the `checkGhosttyHEnum` tautology is four crates wide, not one file",medium,behaviour divergence from Ghostty,False,True,7a6fb8dec,2026-09-10
+N27,27,"the vt enum-discriminant checker pairs header and Rust POSITIONALLY, so a header reorder is invisible",low,ABI / C header layout,False,True,7a6fb8dec,2026-09-10
+N28,28,two log-sink tests could fail SPURIOUSLY: they asserted over every OTHER test's diagnostics,medium,logging / diagnostic fidelity,False,False,bb0f57d92,2026-09-10
+N29,29,"the `checkGhosttyHEnum` ports bound header ↔ a hand-typed literal, and never reached the Rust enums",,ABI / C header layout,False,False,bfccd6fac,2026-09-10
+N30,30,"`snapshot/grid.zig`'s `Remap.init` is fallible upstream and INFALLIBLE in the port, and no ALLOC row claims it",low,behaviour divergence from Ghostty,False,False,d316ec34a,2026-09-10
+N31,31,"the Miri runner fabricates failures: it classifies on an abort STRING, and it uses a fixed temp path two sessions collide on",medium,aliasing UB (Miri SB/TB),False,True,d0739ace9,2026-09-11
+N32,32,`winproto/noop.zig`'s `updateConfigEvent` cannot be ported: its parameter type does not exist at the pin,,behaviour divergence from Ghostty,False,False,4ed80a1e8,2026-09-11
+N33,33,the stale-note class HAS a mechanically checkable subset: module-header test-count totality claims (4 unclaimed instances found),,ABI / C header layout,False,False,4ed80a1e8,2026-09-11
+N34,34,"eight tmux control-mode notification arms are DEAD in the default build, because `oniguruma` is default-OFF and the reference compiles `oni` unconditionally",,behaviour divergence from Ghostty,False,False,402e14a93,2026-09-11
+N36,36,the header-sync tests are HALF-blind: 22 `checkGhosttyHEnum` ports cannot see a variant ADDED to the Rust enum,,ABI / C header layout,False,True,d5f92612a,2026-09-11
+N37,37,"`xtask dist-lib-vt` has been BROKEN since task 17, and G-DIST runs it at its DEFAULT depth",,behaviour divergence from Ghostty,False,True,24d5f8a6a,2026-09-11
+N38,38,"an unclaimed port panic in the GlobalShortcuts `Activated` handler, reachable from any session-bus peer",,crash / panic,False,True,f3a937e92,2026-09-11
+N39,39,"a tmux control-mode block over 1 MiB left the viewer alive, and the next attach panicked",high,crash / panic,False,True,86d81428c,2026-09-11
+N40,40,eight tmux notification id captures unwrapped an overflowing `parseInt`,high,behaviour divergence from Ghostty,False,True,86d81428c,2026-09-11
+N41,41,"a zero tmux layout dimension crashed pane creation, and the pane-creation errdefer destroyed existing panes",high,crash / panic,False,True,86d81428c,2026-09-11
+N42,42,tmux layout parsing and teardown recursed without limit on a 2 MiB stack,medium,ABI / C header layout,False,True,86d81428c,2026-09-11
+N43,43,"the tmux viewer's ""active area should be empty"" debug assert was reachable",low,behaviour divergence from Ghostty,False,True,86d81428c,2026-09-11
+N44,44,a tmux `list-panes` scroll region outside the pane crashed the next line feed,medium,crash / panic,False,True,f9cf6aac6,2026-09-11
+N45,45,a non-UTF-8 command-line argument panicked `Config::load_cli_args` on Linux and FreeBSD,high,crash / panic,False,True,9e5a92d01,2026-09-11
+N46,46,a cell-relative `cursor-text` or selection colour with a custom shader panicked the renderer (S116-F1),medium,crash / panic,False,True,9e5a92d01,2026-09-11
+N47,47,the initial window size and size-limit arithmetic panicked on overflow,low,crash / panic,False,True,9e5a92d01,2026-09-11
+N48,48,a UTF-8 mouse report on a surrogate coordinate panicked,low,crash / panic,False,True,9e5a92d01,2026-09-11
+N49,49,"kitty shared-memory loads took SIGBUS on a truncated object, and formed a `&[u8]` over a peer-writable mapping",low,crash / panic,False,True,9e5a92d01,2026-09-11
+N50,50,"an OSC 7 path with `%00` aborted the app on the next new tab, split or window",high,crash / panic,False,True,d3c52bd90,2026-09-11
+N51,51,"a NUL byte in `command`, `font-family`, a flatpak `env` value or host passwd output panicked",low,crash / panic,False,True,d3c52bd90,2026-09-11
+N52,52,a C-ABI scroll event with momentum 7 aborted the library,low,crash / panic,False,True,d3c52bd90,2026-09-11
+N53,53,a font whose variation-axes read fails leaked its HarfBuzz font,low,leak,False,True,d3c52bd90,2026-09-11
+N54,54,the snapshot decoder zero-filled an attacker-declared string length before reading it,low,behaviour divergence from Ghostty,False,True,987c6417a,2026-09-11
+N55,55,a child that exited before its kqueue watch was registered panicked the io thread,medium,crash / panic,False,True,cfa7b5ea5,2026-09-22
+N56,56,the inherited working directory handed to the host leaked on every inherited surface,low,leak,False,True,14faf6da1,2026-09-22
+N57,57,"a failed keymap reload made `deinit` call `CFRelease(NULL)`, and a failed `init` leaked the source",low,leak,False,True,d63cedbb4,2026-09-22
+N58,58,the Metal display callback could still see a callback without its context,low,behaviour divergence from Ghostty,False,True,4b8ec5372,2026-09-22
+N59,59,a `window-padding` of 2^31 or more panicked on the padding sums,low,crash / panic,False,True,0dc79a0c1,2026-09-22
+N60,60,"a mouse button mask of 192..=195, or an X10 byte below 32, panicked the vaxis parser",low,crash / panic,False,True,9e5846e6b,2026-09-22
+N61,61,the vaxis SIGWINCH handler locked a mutex and ran callbacks in signal context,low,behaviour divergence from Ghostty,False,True,d4563f4f1,2026-09-22
+N62,62,the renderer thread's `stopCallback` trapped on an `Async` wait error,low,behaviour divergence from Ghostty,False,True,91b009a79,2026-09-22
+N63,63,the IME point and the custom-shader cursor uniforms panicked on a saturated padding,low,crash / panic,False,True,91b009a79,2026-09-22
+N66,66,"styled output on a terminal about 48,000 or more columns wide panics the port on the style refcount",medium,crash / panic,False,True,97ce9e5fb,2026-09-22
+N70,70,`+crash-report` truncated the age of a very old crash file instead of handling it,low,crash / panic,False,True,223894994,2026-09-22
+N71,71,"`scroll_viewport`'s `debug_assert!` aborted across `extern ""C""` on an undeclared tag",low,crash / panic,False,True,223894994,2026-09-22
+N72,72,`Surface.init`'s error path freed the terminal while the renderer thread was running,low,behaviour divergence from Ghostty,False,True,223894994,2026-09-22
+N73,73,"the web-canvas `rustty_wc_face_new` export took the point size as `f32`, not `u16`",low,behaviour divergence from Ghostty,False,True,d73152cbf,2026-09-22
+N74,74,CoreText `Face::name` panicked on a font with no family name,low,crash / panic,False,True,d73152cbf,2026-09-22
+N75,75,"a failed `Surface::init` kept its font-grid reference, and the app's teardown then aborted",low,crash / panic,False,True,d73152cbf,2026-09-22
+N80,80,the row-copy retry loops degrade unstorable cells to defaults instead of crashing at the style-set ceiling,low,crash / panic,False,False,0e33d7e16,2026-09-22
+N81,81,"the log-reconcile gate cannot declare a PORT-ONLY emission, so each one masks one future reference-site loss",low,logging / diagnostic fidelity,False,False,7e95a9d0f,2026-09-23
+N82,82,the port's hyperlink hash is SipHash where the reference's is Wyhash (observable through the PSL arm),low,behaviour divergence from Ghostty,False,True,7e95a9d0f,2026-09-23
+N88,88,"the style set's item size made every page's layout, and so its rows, differ from the reference's",medium,ABI / C header layout,False,True,0b0f03f4d,2026-09-22
+N89,89,"the `hyperlink.Set`, `Page` and `PageList` node headers are larger than the reference's",low,ABI / C header layout,False,True,0b0f03f4d,2026-09-22
+N90,90,the UD64 page-size boundary test fails on Linux aarch64,low,behaviour divergence from Ghostty,False,True,0b0f03f4d,2026-09-22
+N91,91,on wasm32 the port's hyperlink set item was 32 bytes against the reference's 28,medium,behaviour divergence from Ghostty,False,True,2e5b52ce7,2026-09-22
+N92,92,`delete_item` reset a dead set item with a whole-`Item` typed write,low,behaviour divergence from Ghostty,False,True,2e5b52ce7,2026-09-22
+N93,93,on style-heavy screens Ghostty clones faster than the port,low,behaviour divergence from Ghostty,False,False,2e5b52ce7,2026-09-22
+N100,100,nine more `std.fmt.parseInt` sites in `src/terminal` parsed with Rust's `str::parse`,low,behaviour divergence from Ghostty,False,True,ca3205046,2026-09-23
+N101,101,the a=f frame's own RGBA conversion could not answer ENOMEM,low,behaviour divergence from Ghostty,False,True,1e3ab8289,2026-09-23
+N102,102,tmux control-mode parsers raced Oniguruma's lazy global init (the intermittent `tmux::` test crashes),medium,crash / panic,False,True,66608d986,2026-09-23
+N110,110,"`+version`'s commit hyperlink came from a separate `git rev-parse`, not from the version's `+BUILD`",low,behaviour divergence from Ghostty,False,True,9582c0f36,2026-09-23
+N120,120,two ports of `std.fmt.parseFloat`: rustty-config's is f64-only and private,low,behaviour divergence from Ghostty,False,False,ef1b37574,2026-09-23
+N121,121,five `+show-face` error lines print a Rust Debug value where the reference prints `error.<Name>`,low,behaviour divergence from Ghostty,False,True,f47229810,2026-09-23
+N122,122,`+new-tab` accepted a surface id with a leading `+`,low,behaviour divergence from Ghostty,False,True,0e35a853a,2026-09-23
+N123,123,`quick-terminal-size` rejected hex-float percentages,low,behaviour divergence from Ghostty,False,True,0e35a853a,2026-09-23
+N124,124,`std_fmt::parse_int` named the wrong error when an overflow came before a bad character,low,behaviour divergence from Ghostty,False,True,0e35a853a,2026-09-23
+N130,130,"the GTK apprt decodes title BYTES lossily at every GObject-string boundary, where the reference passes them raw",low,behaviour divergence from Ghostty,False,True,df149d67a,2026-09-23
+N140,140,the XDG helpers collapse `homedir.home`'s `error.BufferTooSmall` into `NoHomeDir`,low,behaviour divergence from Ghostty,False,True,4ae22c577,2026-09-23
+N150,150,"a third port of Zig's number parsers, now at the lowest layer (`rustty-zigstd::fmt`)",,behaviour divergence from Ghostty,False,False,470ef35f1,2026-09-23
+N151,151,CoreText keeps naming a font after a variation instance of the same data was built,,behaviour divergence from Ghostty,False,True,b241aaacd,2026-09-23
+N160,160,"`systemd.notify.send`'s address setup, outside S112-F8's anchors: a 108-byte crash and a broken abstract-socket case",low,crash / panic,False,True,60fa143f1,2026-09-23
+N170,170,`randomTmpPath` renders the temp dir through `String::from_utf8_lossy`,low,behaviour divergence from Ghostty,False,True,b06c0a7f3,2026-09-23
+N171,171,`flatpakExit` can now receive the timer error its `catch unreachable` assumes away,low,crash / panic,False,True,b06c0a7f3,2026-09-23
+N172,172,the port's `TempDir` opens the current directory for an empty temp-dir path,low,behaviour divergence from Ghostty,False,True,b63e3d7b7,2026-09-23
+N173,173,"after S43-F3, `codepoint-width --mode=wcwidth` is no longer comparable to the pinned perf oracle",low,behaviour divergence from Ghostty,False,True,ec6a7c080,2026-09-23
+N180,180,"`+page-compression --mode=report` printed to stdout (the S62-F3/F4/F5 class, unlisted)",medium,behaviour divergence from Ghostty,False,True,34cf8b64a,2026-09-23
+N181,181,the S115-F1 `end_frame` wrapper in the Linux renderer twin has never been compiled,low,behaviour divergence from Ghostty,False,True,0e3f99c65,2026-09-23
+N182,182,`expectApproxEqual`'s `expectEqual` fallback arms printed nothing in the port,low,behaviour divergence from Ghostty,False,True,0e3f99c65,2026-09-23
+N190,190,"with port-only emissions subtracted, 11 more reference files showed a deficit their surplus had hidden",low,behaviour divergence from Ghostty,False,False,dd3132292,2026-09-23
+N191,191,"the GTK surface logs a `winproto failed to add subprocess env` warning the reference does not have, and continues where the reference fails",low,logging / diagnostic fidelity,False,True,dd3132292,2026-09-23
+N192,192,"`launchedBySystemd` folds the open and the read of `/proc/<ppid>/comm` into one call, so `systemd.zig:51` can never be logged",low,behaviour divergence from Ghostty,False,True,dd3132292,2026-09-23
+N196,196,tests passed without testing anything when their environment was missing,medium,behaviour divergence from Ghostty,False,True,1096fa4cd,2026-09-23
+N197,197,CI's distcheck runs the extracted tarball's tests with `RUSTTY_REQUIRE_FUZZ_CORPUS=1` inherited,medium,behaviour divergence from Ghostty,False,True,1096fa4cd,2026-09-23
+N203,203,the GTK surface warned on source-removal and clipboard failures the reference discards,low,logging / diagnostic fidelity,False,True,91c4c331c,2026-09-23
+N204,204,OpenURI's `stop_cleanup_timer` panicked on a stale timer where the reference warns,low,crash / panic,False,True,91c4c331c,2026-09-23
+N205,205,a requested working directory naming a regular file took the wrong diagnostic,low,logging / diagnostic fidelity,False,True,91c4c331c,2026-09-23
+N206,206,"the URL port and the vaxis CSI parameters use Rust's number parser, not Zig's `std.fmt`",low,behaviour divergence from Ghostty,False,False,7ee55242f,2026-09-23
+N207,207,`+terminal-stream` on an OSC 8-heavy corpus is about 3.3x slower than the oracle,medium,behaviour divergence from Ghostty,False,False,8719ded3b,2026-09-23
+N208,208,`Offset(T).Slice` field order differs from the reference on 64-bit targets,low,ABI / C header layout,False,True,8719ded3b,2026-09-23
+N215,215,"against the oracle rebuilt at the pin, `+terminal-stream` retired 27% more instructions than Ghostty",medium,behaviour divergence from Ghostty,False,True,e0e3a5354,2026-09-24
+N220,220,"the deferred uucode revision bump (`NON_PORTS.md` §G1): CI still pinned Zig 0.15.2, which cannot build the harness's uucode",medium,behaviour divergence from Ghostty,False,False,3dd1ba26c,2026-09-23
+N240,240,"the deferred `vaxis` 0.5.1 -> 0.6.0 and `zf` 0.10.3 -> 0.11.0 bumps (`NON_PORTS.md` §G2), with vaxis's uucode 0.1.0 -> 2826a37a",medium,behaviour divergence from Ghostty,False,False,894f0f086,2026-09-24
+N250,250,"the tmux viewer's pane captures ask tmux for `-C` and are decoded (R13 fix, UD12)",low,behaviour divergence from Ghostty,False,True,32e01d6f6,2026-09-24
+N251,251,"a `list-panes` reply skips a pane whose captures are still queued (R13 fix, UD9)",low,behaviour divergence from Ghostty,False,True,32e01d6f6,2026-09-24
+N255,255,"libxev's FreeBSD loop-wakeup `@panic` stub is unreachable, not ""reachable only through an explicit `Loop::wakeup()`""",low,crash / panic,False,True,12fe32931,2026-09-24
+N256,256,"the FreeBSD row's ios/visionos item was stale, and the three pty stream tests ran where the reference skips them",low,behaviour divergence from Ghostty,False,True,12fe32931,2026-09-24
+N257,257,`cli_smoke.rs`'s `version_plus` asserted nothing about the renderer and libxev lines on FreeBSD,low,behaviour divergence from Ghostty,False,True,12fe32931,2026-09-24
+N260,260,the caller's allocator must outlive every object built from it; the header does not say so,informational,ABI / C header layout,False,True,897eca45b,2026-09-27
+N261,261,allocator_api2's stable `Vec` has no memcpy/fill specialization (+81% on `screen-clone.render` when swapped naively),medium,behaviour divergence from Ghostty,False,True,897eca45b,2026-09-27
+N262,262,a search's allocations are split between the search's allocator and the terminal's,informational,behaviour divergence from Ghostty,False,True,897eca45b,2026-09-27
+N263,263,OSC `Command` text payloads were owned copies where the reference borrows,low,behaviour divergence from Ghostty,False,True,897eca45b,2026-09-27
+N264,264,`PageList::init` had lost the reference's `alloc` parameter,low,behaviour divergence from Ghostty,False,True,897eca45b,2026-09-27
+N265,265,"the reference's `test ""face metrics""` never checks anything: its backend guard is inverted",low,behaviour divergence from Ghostty,False,False,041803671,2026-09-24
+N266,266,"the font backend build option is folded to the per-OS default: the `coretext_freetype`, `coretext_harfbuzz`, `coretext_noshape` and `freetype` arms are not live",medium,behaviour divergence from Ghostty,False,True,041803671,2026-09-24
+N270,270,"`GlobalZigAllocator::resize` reported success for any shrink, so the later free reached `dealloc` with a smaller layout",medium,ABI / C header layout,False,True,445fdc8fc,2026-09-24
+N271,271,six port-only tripwire stand-ins for the reference's `FailingAllocator` tests are retired,low,behaviour divergence from Ghostty,False,True,7205f4361,2026-09-24
+N272,272,"S7-3 routing: what goes through the allocator handle, what is bound at construction, and what is left",informational,behaviour divergence from Ghostty,False,True,7205f4361,2026-09-24
+N273,273,`sys::GlobalRawAllocator::raw_resize` reported success for any shrink (the sibling of N270),medium,behaviour divergence from Ghostty,False,True,6742046bb,2026-09-24
+N274,274,"S7-4 routing: kitty graphics, APC/DCS, stream handler, clipboards and the vt-c wrapper, through the allocator handle",informational,behaviour divergence from Ghostty,False,False,6e1fca308,2026-09-24
+N275,275,the kitty graphics payload was cloned before its in-place base64 decode,low,behaviour divergence from Ghostty,False,True,6e1fca308,2026-09-24
+N276,276,`image_by_id` and `image_by_number` returned a deep copy of the stored image,low,behaviour divergence from Ghostty,False,True,6e1fca308,2026-09-24
+N277,277,six more port-only tripwire stand-ins for `FailingAllocator` tests are retired,low,behaviour divergence from Ghostty,False,True,6e1fca308,2026-09-24
+N278,278,"threads the reference spawns with `std.Thread.spawn(.{}, ..)` had Rust's 2 MiB stack, not Zig's 16 MiB",low,behaviour divergence from Ghostty,False,True,c63d84686,2026-09-26
+N280,280,`macosLogger`'s per-scope `os_log` cache (upstream `3225e9ebb`) was never ported,low,behaviour divergence from Ghostty,False,True,f1c1639b0,2026-09-24
+N281,281,`class/config.zig` `getMut` had no port and no record,low,verification gate / instrument,False,True,f1c1639b0,2026-09-24
+N282,282,`gsettings.zig` `getAlloc` had no port and no record,low,verification gate / instrument,False,True,f1c1639b0,2026-09-24
+N283,283,G3b had no audited way to mark a deliberately-not-carried comment,low,verification gate / instrument,False,True,f1c1639b0,2026-09-24
+N284,284,two BlurRegion CSD-note lines stripped as gag prose carried a fact,low,behaviour divergence from Ghostty,False,True,f1c1639b0,2026-09-24
+N285,285,"the FreeType arm of `test ""face metrics""` has stale expectations (reference test-weakness)",low,behaviour divergence from Ghostty,False,True,a4d265565,2026-09-24
+N286,286,`-Dfont-backend`: which backends the port builds per target,low,behaviour divergence from Ghostty,False,False,a4d265565,2026-09-24
+N287,287,the `freetype_windows` `DeferredFace` name accessors did not type-check,medium,behaviour divergence from Ghostty,False,True,a4d265565,2026-09-24
+N288,288,`loadCoreTextFreetype` opens face 0 of a font collection (reference defect),medium,behaviour divergence from Ghostty,False,True,a4d265565,2026-09-24
+N290,290,G-SKIP hardened against the S-3 review's eight bypasses (S-3b),medium,behaviour divergence from Ghostty,False,True,f66a52b75,2026-09-24
+N291,291,"the display-link test is enforced on the macOS leg; stale ""Noto Serif Tibetan"" comments",,behaviour divergence from Ghostty,False,True,f66a52b75,2026-09-24
+N292,292,"theme lookup `BufferTooSmall` → `OutOfMemory`, and the C API's `err=` form (N140 closed)",low,behaviour divergence from Ghostty,False,True,6c5b2a532,2026-09-24
+N293,293,`readthread_pipeline_shuts_down_cleanly_from_both_stages` bounded a live drain with a wall clock,low,behaviour divergence from Ghostty,False,True,2d7926153,2026-09-24
+N295,295,the S74-F3 cwd-error test ran into `loadCliArgs`'s Linux fast path,low,behaviour divergence from Ghostty,False,True,07233ca38,2026-09-26
+N296,296,the paste-event mutex test ticked its event loop once,low,behaviour divergence from Ghostty,False,True,07233ca38,2026-09-26
+N297,297,`io_thread` crashed on Linux: an `input` failure after the shell starts leaves the loop on a dead frame (UD290),medium,crash / panic,False,True,07233ca38,2026-09-26
+N298,298,two Linux test-portability fixes: the CMake install directory and the gather-stage hangup fixture,low,behaviour divergence from Ghostty,False,True,07233ca38,2026-09-26
+N299,299,the reference's Highway CPU detection is inert on Linux (UD291),low,behaviour divergence from Ghostty,False,True,07233ca38,2026-09-26
+N300,300,"the port aborted on every surface drag-and-drop, and the headed KAT that emits `drop` had stopped reaching it (UD295)",high,crash / panic,False,True,8128b298c,2026-09-26
+N310,310,"G-LOGFILE allowances driven from 131 over 50 files to 17 over 8, each now a port or a machine-checked row",low,logging / diagnostic fidelity,False,False,19473b3b8,2026-09-26
+N311,311,the GTK apprt logs three errors the reference propagates with `try`,low,behaviour divergence from Ghostty,False,True,19473b3b8,2026-09-26
+N312,312,`load_custom_css` reports a read failure as an open failure and keeps going,low,behaviour divergence from Ghostty,False,True,19473b3b8,2026-09-26
+N313,313,the Zig build graph's own diagnostics have no counterpart in the cargo/xtask build,low,logging / diagnostic fidelity,False,True,19473b3b8,2026-09-26
+N314,314,"two reference sites are test-only or never compiled, but the gate cannot verify it",low,verification gate / instrument,False,False,19473b3b8,2026-09-26
+N315,315,"S7-5 routing: the render state's contents, through the allocator it is updated with",informational,behaviour divergence from Ghostty,False,False,a826d3b95,2026-09-26
+N316,316,a failed render-state update is followed by a partial rebuild (UD315),low,behaviour divergence from Ghostty,False,True,a826d3b95,2026-09-26
+N320,320,S7-7 routing and borrowing: the OSC parser (S174-F3 closed; N263 resolved),informational,behaviour divergence from Ghostty,False,True,e8fc083dc,2026-09-26
+N321,321,"`parseGetSetDynamicColor` leaks its grown list when a later `addOne` fails (reference defect, R13; UD310)",low,leak,False,True,e8fc083dc,2026-09-26
+N322,322,the vendored `SegmentedList.growCapacity` cleanup frees the slot that failed (latent reference defect; UD311),low,behaviour divergence from Ghostty,False,True,e8fc083dc,2026-09-26
+N323,323,"`ghostty_osc_command_data` traps on a NULL command the header allows (reference defect, R13; UD312)",medium,ABI / C header layout,False,True,e8fc083dc,2026-09-26
+N324,324,a borrowed OSC command that owned its lists cost the per-byte parser loop up to 2.2x,informational,behaviour divergence from Ghostty,False,True,e8fc083dc,2026-09-26
+N325,325,"S7-6 routing: the search's state through the search's allocator, four allocations through the terminal's (S176-F1, S4-F2 closed)",informational,behaviour divergence from Ghostty,False,False,67896ff88,2026-09-26
+N326,326,port-only search copies removed; FLATTENED_TW and REGISTER_TW retired,informational,behaviour divergence from Ghostty,False,True,67896ff88,2026-09-26
+N327,327,"the C API's search feed and run spin under allocation failure (reference defect, R13; UD305)",medium,behaviour divergence from Ghostty,False,True,67896ff88,2026-09-26
+N328,328,the page formatter's point map grows fallibly through its allocator; the PinMap's points stay on the Rust heap,informational,behaviour divergence from Ghostty,False,True,67896ff88,2026-09-26
+N329,329,Stacked Borrows status of the search after S7-6,informational,aliasing UB (Miri SB/TB),False,True,67896ff88,2026-09-26
+N330,330,the formatter pin map grows through the pin map's allocator (the N328 residual),low,behaviour divergence from Ghostty,False,False,5bf7e3e5e,2026-09-26
+N331,331,the C API's allocating writers grow through the reference's allocator and hand over their buffer (`toOwnedSlice`),medium,behaviour divergence from Ghostty,False,False,5bf7e3e5e,2026-09-26
+N332,332,`snapshot::encode` takes the reference's allocator again; the record scratch spills through it,low,verification gate / instrument,False,True,5bf7e3e5e,2026-09-26
+N333,333,the selection-gesture event's codepoint copy goes through the event's allocator (F-008 Tier 2 item 3),low,behaviour divergence from Ghostty,False,True,5bf7e3e5e,2026-09-26
+N334,334,"F-008/W12-01 Tier 2 closed: the audit, and what stays on the Rust heap",informational,verification gate / instrument,False,True,5bf7e3e5e,2026-09-26
+N335,335,"`passwd.get`'s Flatpak block leaks the pty slave when the host command cannot start (reference defect, R13; UD320)",low,leak,False,True,a7a1c0a2f,2026-09-26
+N336,336,"`TemplateCallbackReturn` told gboolean template callbacks to return `i32`, which aborts under glib-rs",low,crash / panic,False,True,99693478c,2026-09-26
+N337,337,the surface paste `drop` handler aborted on a dropped string that is not UTF-8,low,crash / panic,False,True,99693478c,2026-09-26
+N338,338,the surface's two `GtkDropTarget::drop` handlers read the signal's boxed parameter as the dropped value: drag-and-drop never pasted and never moved a split,high,behaviour divergence from Ghostty,False,True,99693478c,2026-09-26
+N339,339,"survey: every GTK signal connection's return type, port against reference (UD295 follow-up)",,behaviour divergence from Ghostty,False,True,99693478c,2026-09-26
+N340,340,"on Windows `EnvMap` looks `PATH` up case-sensitively, and Windows names it `Path`",medium,behaviour divergence from Ghostty,False,True,52f6dc7ab,2026-09-27
+N341,341,Windows read-thread quit: a `CancelIoEx` between two reads is lost (reference race),low,data race / deadlock,False,True,52f6dc7ab,2026-09-27
+N342,342,the application tier does not compile for Windows; CI's Windows leg cannot pass as written,medium,behaviour divergence from Ghostty,False,False,52f6dc7ab,2026-09-27
+N343,343,"`xev.Async` on Windows is a value, and copies of it do not share a wakeup",low,behaviour divergence from Ghostty,False,True,52f6dc7ab,2026-09-27
+N344,344,"Windows compile, link and test fixes made by task W-1",,behaviour divergence from Ghostty,False,True,52f6dc7ab,2026-09-27
+N345,345,"rustty-vt's ""real Io"" has no entropy on Windows, so five vt tests fail there",medium,behaviour divergence from Ghostty,False,True,52f6dc7ab,2026-09-27
+N346,346,"two Windows test-harness gaps outside W-1's rows (rustty-vt-c, rustty-vaxis)",low,behaviour divergence from Ghostty,False,True,52f6dc7ab,2026-09-27
+N347,347,"under clang-cl, `flag_if_supported` still drops the reference's other `-f` flags (highway, simdutf)",low,behaviour divergence from Ghostty,False,False,ea25e1e30,2026-09-27
+N350,350,"three workspace members are excluded from the Windows build, explicitly",,behaviour divergence from Ghostty,False,True,692117514,2026-09-27
+N351,351,"Windows compile, link and test fixes made by task W-2",,behaviour divergence from Ghostty,False,False,692117514,2026-09-27
+N352,352,"on Windows the port's global `Environ` is a snapshot, Zig's reads the process environment live",low,behaviour divergence from Ghostty,False,True,692117514,2026-09-27
+N353,353,"on MSVC targets most vendored C/C++ dependencies are compiled by cl.exe, the reference compiles them with clang",low,behaviour divergence from Ghostty,False,False,692117514,2026-09-27
+N354,354,`windows_threadenter_reads_the_pty_through_the_windows_read_thread` failed once in a full Windows run,low,behaviour divergence from Ghostty,False,False,692117514,2026-09-27
+N355,355,a one-off SIGSEGV of `rustty-renderer`'s unit-test binary on macOS,unknown,crash / panic,False,True,8c5defba4,2026-09-27
+N360,360,allocator call-shape residuals (T3): every C-observable difference the S-7 series leaves,low,behaviour divergence from Ghostty,False,False,897eca45b,2026-09-27
+N361,361,strict provenance for page offsets; the remaining exposed-provenance sites,low,ABI / C header layout,False,False,897eca45b,2026-09-27
+N362,362,"three S7 tests were not Miri-ready: a Stacked Borrows violation in a test, a should_panic leak, an 18-hour test",low,aliasing UB (Miri SB/TB),False,True,897eca45b,2026-09-27
+N365,365,the CLI's writes to an unusable stdout/stderr succeeded in the port and fail in the reference,medium,logging / diagnostic fidelity,False,True,04b9d73a3,2026-09-27
+N366,366,`+show-config` compared the config against the bare struct defaults,medium,behaviour divergence from Ghostty,False,True,04b9d73a3,2026-09-27
+N367,367,startup log lines printed Rust `Debug` values where the reference prints Zig's `{}`,low,logging / diagnostic fidelity,False,True,04b9d73a3,2026-09-27
+N368,368,`+edit-config`'s Windows message had one blank line too many,low,behaviour divergence from Ghostty,False,True,04b9d73a3,2026-09-27
+N369,369,"what ""running Rustty on Windows"" is at the pin, and how it is tested",,behaviour divergence from Ghostty,False,True,04b9d73a3,2026-09-27
+N370,370,packaging manifests: the flatpak and snap dropped reference build flags; both flatpaks now verified offline,medium,behaviour divergence from Ghostty,False,False,14de1d874,2026-09-27
+N371,371,`xtask resources`: the Linux app id ignored the optimize mode,medium,behaviour divergence from Ghostty,False,True,14de1d874,2026-09-27
+N372,372,"the CMake-built macOS lib-vt had rustc's 11.0 floor, not the reference's 13.0",low,behaviour divergence from Ghostty,False,True,14de1d874,2026-09-27
+N373,373,`-Demit-webdata` had no counterpart: every resources run installed the website data,low,behaviour divergence from Ghostty,False,True,14de1d874,2026-09-27
+N374,374,`nix.yml` and `snap.yml` ported; `flatpak.yml` aligned with the reference,low,behaviour divergence from Ghostty,False,True,14de1d874,2026-09-27
+N375,375,"Nix, dotfile, example and macOS-plist parity fixes",low,behaviour divergence from Ghostty,False,False,14de1d874,2026-09-27
+N376,376,"`test.yml` job by job: what `ci.yml` + `ci.sh` cover, and the jobs still without a counterpart",medium,behaviour divergence from Ghostty,False,True,14de1d874,2026-09-27
+N377,377,the Zig build graph (`build.zig` + `src/build/*`) against Cargo + xtask: remaining options,low,behaviour divergence from Ghostty,False,True,14de1d874,2026-09-27
+N378,378,release workflows: residual differences from the reference,medium,behaviour divergence from Ghostty,False,True,14de1d874,2026-09-27
+N379,379,"the fuzz package, `.github` script records and other residuals",low,verification gate / instrument,False,True,14de1d874,2026-09-27
+N380,380,rustty-os and CLI diagnostics bypassed the log facade through `eprintln!`,low,logging / diagnostic fidelity,False,True,2c4ef39aa,2026-09-27
+N381,381,"POSIX `createMap`/`getAlloc`: the reference's last entry wins, the port's first",low,behaviour divergence from Ghostty,False,True,e9a68aa69,2026-09-27
+N382,382,"an access violation in `rustty-xev`'s IOCP `async_notify` (once, rustty-core unit tests, Windows)",medium,behaviour divergence from Ghostty,False,True,cc2df0463,2026-09-27
+N383,383,`cargo test -p rustty-core` alone on Windows fails two compression tests; the workspace run passes them,low,behaviour divergence from Ghostty,False,True,cc2df0463,2026-09-27
+N384,384,`EnvMap` iterated in random order; Zig's map iterates in insertion order (the child's envp order),low,behaviour divergence from Ghostty,False,True,4994a5159,2026-09-27
+N385,385,`async_notify` forms `&Loop` on the notifying thread while the loop thread holds `&mut Loop` (IOCP),low,behaviour divergence from Ghostty,False,False,4994a5159,2026-09-27
+N390,390,librustty-vt's release log level was `.err`; Zig's default in every release mode is `.info`,medium,logging / diagnostic fidelity,False,True,dd28d83ae,2026-09-27
+N391,391,the terminal-stream benchmark's handler pointer was invalidated by moving its box (Stacked Borrows),medium,aliasing UB (Miri SB/TB),False,True,a0f56e2ab,2026-09-27
+N392,392,`rustty-vaxis`'s `image_tier` test binary never ran under Miri (it did not compile there),low,aliasing UB (Miri SB/TB),True,True,7fa824061,2026-09-27
+N393,393,the C `Style` writer stored eight bytes through a one-byte field pointer (provenance),medium,behaviour divergence from Ghostty,False,True,add88e2a7,2026-09-27
+N394,394,`RenderState::update` held a shared row slice across `set_dirty` writes (Stacked Borrows),medium,aliasing UB (Miri SB/TB),False,True,485299239,2026-09-27
+N395,395,G4's leg B compares the port against c-vt goldens recorded at the phase-0 pin; a fresh port driver diverges on three,medium,behaviour divergence from Ghostty,False,True,a7f06986f,2026-09-28
+N400,400,G-BLUEPRINT's first run: green; its description of `blueprint-compiler format` was wrong,low,behaviour divergence from Ghostty,False,True,7d8a101a8,2026-09-27
+N401,401,"G-GTKFEAT's first run since task-18: green, and its gated-test floor had drifted 53 below the measurement",low,behaviour divergence from Ghostty,False,True,7d8a101a8,2026-09-27
+N402,402,G-KAITAI: green on macOS with Homebrew's compiler; CI never installed one,low,behaviour divergence from Ghostty,False,True,7d8a101a8,2026-09-27
+N403,403,"G-VALGRIND reported test failures as valgrind findings, and printed the wrong stack",low,leak,False,True,7d8a101a8,2026-09-27
+N404,404,"G-VALGRIND covered 3 crates; rustty-font-shaper had 88 definite leaks, one of them a reference defect",medium,leak,False,True,7d8a101a8,2026-09-27
+N405,405,how the tool-BLOCKED gates were run without root (reproduction recipe),,behaviour divergence from Ghostty,False,True,7d8a101a8,2026-09-27
+N406,406,every Linux event loop leaked its boxed completion queue (`dynamic::Loop` never dropped its backend),low,leak,False,True,7d8a101a8,2026-09-27
+N407,407,"G-VALGRIND ran test binaries from the repository root, not their package directory",low,leak,False,True,7d8a101a8,2026-09-27
+N410,410,"rustty-termio under memcheck: an empty argv, a leaked Pipeline, and the 8-minute run",low,leak,False,True,373f8c05c,2026-09-28
+N411,411,"rustty-renderer's test helpers leaked their font grids and terminals (2,477 memcheck errors)",low,leak,False,True,373f8c05c,2026-09-28
+N412,412,"the renderer's 10 uninitialised-value reports are llvmpipe's, not the port's",none,memory error (ASan/MSan/UAF/OOB),False,True,373f8c05c,2026-09-28
+N413,413,"G-VALGRIND now covers the whole workspace, sharded into its own CI job",medium,leak,False,True,373f8c05c,2026-09-28
+N414,414,two tests asserted they never run under Valgrind,low,leak,False,True,373f8c05c,2026-09-28
+N415,415,rustty-core's surface_visibility_kat leaked its Termio,low,leak,False,True,373f8c05c,2026-09-28
+N416,416,one rustty-cli test cannot run under Valgrind at all,none,leak,False,True,373f8c05c,2026-09-28
+N417,417,G-VALGRIND reported a crate that failed to build as BLOCKED,low,leak,False,True,373f8c05c,2026-09-28
+N418,418,"rustty-vt's lib under memcheck: three test leaks, two of them lost `defer s.deinit()`s",low,leak,False,True,373f8c05c,2026-09-28
+N420,420,"`-Dsimd=false` could not be applied to the app, and no build of anything was SIMD-free",medium,behaviour divergence from Ghostty,False,True,c626aa01c,2026-09-28
+N421,421,`-Di18n` and `-Demit-docs` had no override,low,behaviour divergence from Ghostty,False,True,c626aa01c,2026-09-28
+N422,422,the wasm `simd128` default and the `-Dstrip` and `-Dpie` defaults,low,behaviour divergence from Ghostty,False,True,c626aa01c,2026-09-28
+N423,423,`zig build run` had no counterpart that sets the resources directory,low,behaviour divergence from Ghostty,False,True,c626aa01c,2026-09-28
+N424,424,dist tarballs named after the bare manifest version; `-Dlib-version-string` missing,low,behaviour divergence from Ghostty,False,True,c626aa01c,2026-09-28
+N425,425,"librustty-vt did not compile for Android: the port read Zig's `.linux` as Rust's `target_os = ""linux""`",medium,behaviour divergence from Ghostty,False,True,f8aaaaaeb,2026-09-28
+N426,426,"the Android library could not load: rustty-os read errno through `__errno_location`, which bionic lacks",high,behaviour divergence from Ghostty,False,True,f8aaaaaeb,2026-09-28
+N427,427,the type manifest's `abi` object did not name Android,low,ABI / C header layout,False,True,f8aaaaaeb,2026-09-28
+N428,428,"the Android lane: NDK builds on the Mac, an Android 15 16 KiB-page emulator, and a differential run against the reference",low,behaviour divergence from Ghostty,False,True,f8aaaaaeb,2026-09-28
+N429,429,CI has no Android leg (N376 gap 5): the job it needs,low,behaviour divergence from Ghostty,False,True,f8aaaaaeb,2026-09-28
+N430,430,WASI `Async::notify` from a callback formed `&Loop` and wrote `Loop.wakeup` while `run(&mut self)` was live,low,behaviour divergence from Ghostty,False,True,6d265a75c,2026-09-28
+N431,431,every xev backend held a protected `&mut Loop` across callbacks that re-enter the loop,medium,behaviour divergence from Ghostty,False,True,6d265a75c,2026-09-28
+N432,432,"`Async.wait` rewrites the completion before taking the lock, racing a concurrent `notify` (IOCP)",low,behaviour divergence from Ghostty,False,False,6d265a75c,2026-09-28
+N434,434,the xev timer heaps linked a Timer through a `&mut (*c).op` borrow that the next `&mut (*c).op` invalidated,medium,behaviour divergence from Ghostty,False,True,8a0c6703a,2026-09-28
+N435,435,`ScreenSearch::feed` carried the reference's `.complete => unreachable` after history is prepended,medium,crash / panic,False,True,ec0dd16ff,2026-09-28
+N436,436,`ghostty_search_tick` read the freed terminal's PageList after `ghostty_terminal_free`,medium,behaviour divergence from Ghostty,False,True,ec0dd16ff,2026-09-28
+N437,437,the render thread forms whole-`Renderer` references that overlap the main thread's raw sync draw (macOS),medium,behaviour divergence from Ghostty,False,True,ec0dd16ff,2026-09-28
+N438,438,"the reference's fontconfig archive omits `fcconffile.c`, leaving two public functions undefined",none,behaviour divergence from Ghostty,False,True,74a81ce55,2026-09-28
+N440,440,the Metal completion handler reaches the renderer without the draw mutex while the render thread holds a whole-renderer `&mut`,medium,behaviour divergence from Ghostty,False,True,b76719fec,2026-09-29
+N441,441,main-thread references to the whole core `Surface` cover the renderer the render thread writes under the draw mutex,medium,behaviour divergence from Ghostty,False,True,b76719fec,2026-09-29
+N442,442,`performBindingAction(&mut self)` holds a protected `&mut Surface` across the host callback that re-enters the same surface,medium,behaviour divergence from Ghostty,False,True,877de19a6,2026-09-29
+N443,443,`App::performAction`/`keyEvent` hold a protected reference to the app across any host callback that re-enters it,medium,behaviour divergence from Ghostty,False,True,9fc59ef03,2026-09-29
+N444,444,the io thread's and render thread's inline state in the core `Surface` is covered by main-thread whole-`Surface` references,medium,behaviour divergence from Ghostty,False,True,9fc59ef03,2026-09-29
+N448,448,superseded: now UD366,,behaviour divergence from Ghostty,False,False,f38a79bff,2026-09-29
+N449,449,the io writer thread's `&mut self` `Termio` methods cover the terminal the read thread writes,medium,behaviour divergence from Ghostty,False,True,ef4843478,2026-09-29
+N450,450,"the live inspector KAT leaves both render threads running when an assertion panics, and the process then crashes at exit",low,crash / panic,False,True,8ce12f66b,2026-09-29
+N451,451,`rustty_terminal_free` moves out a wrapper whose `terminfo_name` borrows the freed wrapper storage,low,behaviour divergence from Ghostty,False,True,3c5e3b282,2026-09-29
+N452,452,effect callbacks that re-enter the Terminal C API reach stream/handler bytes under the protected `&mut Stream`/`&mut Handler`,medium,behaviour divergence from Ghostty,False,True,7b34d78bf,2026-09-29
+N453,453,"the overscan port's two reference defects: a stale `rowDataRange()` after a failed update, and `u16` style-run rows (UD369, UD370)",low,behaviour divergence from Ghostty,False,True,560d5635a,2026-09-29
+N454,454,the C paste reader can re-enter the terminal while the paste holds protected handler and terminal borrows,medium,behaviour divergence from Ghostty,False,True,,
+N455,455,two vt-c tests have test-side Tree Borrows UB,low,aliasing UB (Miri SB/TB),True,True,,
+N456,456,"host action callbacks that resize the window write the target surface under the shared `Target` protector (`reset_window_size` live, `resize_window` latent)",medium,behaviour divergence from Ghostty,False,True,51d144279,2026-09-29
+N458,458,"a port-only string-map test dropped its `Screen` without `deinit`, tripping the W1.T5 node-pool assert",none,behaviour divergence from Ghostty,True,True,22090553b,2026-09-29
+N459,459,`recomputeInitialSize` holds a protected `&mut Surface` across the `initial_size` host callback (re-entry unverified),low,behaviour divergence from Ghostty,False,True,13bd41ed4,2026-09-30
+N461,461,the UD351 OSC 7 control test assumed a unix host,none,behaviour divergence from Ghostty,True,True,64b98ea9f,2026-09-30
+N462,462,the DMA-BUF strict-mode pivots were dead code on Windows,low,behaviour divergence from Ghostty,False,True,64b98ea9f,2026-09-30
+N463,463,the iocp `log_warn!` shim left a release-only unused variable,low,logging / diagnostic fidelity,False,True,64b98ea9f,2026-09-30
+N464,464,`dcimgui-sys/ext.cpp` failed a native aarch64 Windows build with clang 23,low,behaviour divergence from Ghostty,False,True,64b98ea9f,2026-09-30
+N465,465,"`Surface::close(&mut self)` holds a protected `&mut Surface` across the runtime's close callback, which re-enters the surface",medium,behaviour divergence from Ghostty,False,True,2cf7a65cc,2026-09-30
+N477,477,GTK `--shell-integration=` with an empty value did not reset the override,low,behaviour divergence from Ghostty,False,True,39740f4b9,2026-09-30
+N478,478,the `cursor_left` reference comment predated `d4f45bee3`,low,behaviour divergence from Ghostty,False,True,39740f4b9,2026-09-30
+N479,479,the apprt-c C-ABI smoke needed a prior `cargo build`,low,ABI / C header layout,False,True,39740f4b9,2026-09-30
+N480,480,G-WINCHK red on macOS and Linux: wuffs-sys ignored `RUSTTY_SYS_CHECK_ONLY`,low,behaviour divergence from Ghostty,False,True,39740f4b9,2026-09-30
+N481,481,"G2 WEAKENED `core::keyToMouseShape` (frozen 13, rust 12)",low,behaviour divergence from Ghostty,False,True,39740f4b9,2026-09-30
+N482,482,G-REL red on macOS: xtask's CMake tests rebuilt the release lane's rlibs in place,low,behaviour divergence from Ghostty,False,True,4bae2264b,2026-09-30
+N483,483,gates hardcoded the Mac paths of the oracle and the zig cache; Linux was BLOCKED without `/Users/gael` symlinks,low,behaviour divergence from Ghostty,False,True,71ada522a,2026-09-30
+N484,484,"the bash shell-integration gate ran a `.sh` directly, which Windows cannot execute",low,verification gate / instrument,False,True,90db577ce,2026-09-30
+N485,485,`rustty-inspector` crashed on Windows ARM64: rustc and clang-cl disagree on a variadic HFA,medium,crash / panic,False,True,90db577ce,2026-09-30
+N486,486,"VT-headers gate is macOS-only beyond its paths, and rvm's oracle `origin/main` is stale",low,ABI / C header layout,False,True,71ada522a,2026-09-30
+N487,487,G-NIX failed on Linux: `librustty-vt` built without libclang for the wuffs-sys bindgen script,low,behaviour divergence from Ghostty,False,True,625230efa,2026-09-30
+N488,488,"the Nix lane had three more defects behind N487: absolute libdir, stale library names, dev-shell-bound formatter check",low,behaviour divergence from Ghostty,False,True,a447efb92,2026-09-30
+N489,489,the dev shell cannot be built on aarch64-linux: nixpkgs' `python3.14-wasmtime` fails its check phase,low,behaviour divergence from Ghostty,False,False,6c3299c38,2026-09-30
+N490,490,`check_symbol_manifest.sh` takes its header from `GHOSTTY_H` and turns a missing header into a WARNING,low,ABI / C header layout,False,True,6c3299c38,2026-09-30
+N491,491,Phase 7 tests missed the G6-only Miri annotation: the Phase 7 briefs ran no Miri,medium,aliasing UB (Miri SB/TB),False,True,e3bd7b9f2,2026-09-30
+N492,492,"five `rustty-vt` tests have test-side Tree Borrows UB: a `&mut` reborrow handed to a raw-pointer holder, then touched through the owner",low,aliasing UB (Miri SB/TB),True,True,ce7bc393b,2026-10-01
+N493,493,a Phase 7 test helper compared memory byte by byte: intractable under Miri,low,aliasing UB (Miri SB/TB),False,True,5f8868aed,2026-10-01
+N494,494,`rustty-vt` kitty tests reach the Wuffs C FFI under Miri and abort the whole G6 binary,low,aliasing UB (Miri SB/TB),False,True,d61e6758d,2026-10-01
+N495,495,`rustty-cli`'s Mach-O constructor cannot link under AddressSanitizer,low,behaviour divergence from Ghostty,False,True,610a4f6dc,2026-10-02
+N496,496,first sanitizer-lane runs: test-side defects and lane configuration,low,behaviour divergence from Ghostty,True,True,610a4f6dc,2026-10-02
+N497,497,a Miri exception claimed ASan coverage for a test no ASan run executed,low,aliasing UB (Miri SB/TB),False,True,610a4f6dc,2026-10-02
+N498,498,`rustty_app_free` leaked the app's whole cloned configuration,low,leak,False,True,1ba92dfe7,2026-10-02
+N499,499,the `screen-clone` benchmark's in-process tests leaked every `clone`-mode copy,low,leak,False,True,7ddf62ffd,2026-10-02
+N500,500,`snapshot::codec::tests::complete_snapshot_preserves_every_supported_continuation_cut` has Tree Borrows UB (test-side shape),low,aliasing UB (Miri SB/TB),True,True,6d2d783ba,2026-10-02
+N501,501,macOS had no leak lane because of a wrong premise: G-LSAN runs there,medium,leak,False,True,ac750e2af,2026-10-02
+N502,502,"leaks behind every closed surface, on every platform (only macOS tests reached them): the render thread's and renderer state's Rust-owned heap was never dropped",low,leak,True,True,ac750e2af,2026-10-02
+N503,503,rustty-renderer's macOS test helpers leaked their renderers and font grids (N411's macOS twins),low,leak,False,True,fd7c17c56,2026-10-02
+N504,504,"G-HWASAN's first run: a C-ABI smoke link, `xtask`'s nested builds, and a cross-check parser defect",low,memory error (ASan/MSan/UAF/OOB),False,True,1529049d9,2026-10-02
+N505,505,"seven `rustty-vt-c` and `rustty-core` tests have test-side Tree Borrows UB: an out-pointer or handle minted from a `&mut` reborrow, then the owner read directly",low,aliasing UB (Miri SB/TB),True,True,3f8627a1b,2026-10-02
+N506,506,macOS ASan runtime can deadlock in `fork` while another thread frees: an intermittent hang in G-ASAN / G-LSAN,low,data race / deadlock,False,True,9eb49e0d5,2026-10-02
+N507,507,G6 on nextest went RED on two crates the libtest lane passed: `rustty-cli`'s disabled doc tests and `rustty-wasm`'s source-ignored test (gate-side),low,verification gate / instrument,False,True,8ff0fb60c,2026-10-06
+N508,508,G-TSAN's first runs: a data race in vendored Highway's SIMD dispatch (UD377) and TSan's allocator limit,low,data race / deadlock,False,True,ed830178c,2026-10-07
+N509,509,G-VALGRIND: Mesa EGL drops a never-terminated display's driver data at exit (two definite leaks per renderer process),none,leak,False,True,4eee1318e,2026-10-07
+N510,510,G-VALGRIND: a target read-back test compared llvmpipe pixels memcheck marks undefined,none,leak,True,True,4eee1318e,2026-10-07
+N511,511,`apc-parser` runs 1.8x slower than Ghostty; `hyperlink-map` churn and lookup 1.26x and 1.17x (V18's first paired numbers),medium,behaviour divergence from Ghostty,False,True,75ce42c45,2026-10-07
+N512,512,`librustty_vt_c.dylib` was 1.30x Ghostty's dylib: triplicated `const` lookup tables and unwind data for a path that always aborts,low,crash / panic,False,True,040f4a3b2,2026-10-07
+N513,513,G-SAN-SELF's A4 Rust heap-overflow arm could go GREEN under HWASan (1 in 256),low,memory error (ASan/MSan/UAF/OOB),False,True,4a32358ae,2026-10-07
+N514,514,G-TSAN's first Linux run: `rustty-xev` reports from TSan's fd model (tests run side by side),low,data race / deadlock,False,True,4a32358ae,2026-10-07
+N515,515,"`rustty-xev` `dynamic_udp_read_write` could hang: one UDP port for both backend iterations, with SO_REUSEPORT",low,behaviour divergence from Ghostty,True,True,4a32358ae,2026-10-07
+N516,516,gtk4-rs's `BuilderRustScope` leaks every template-callback closure (each GTK widget template instantiation),low,leak,False,True,4a32358ae,2026-10-07
+N517,517,"the parity-surface generator reads phase-0 line windows of `stream.zig`: 13 CSI finals missing, 5 ESC rows are CSI arms",medium,behaviour divergence from Ghostty,False,True,f01c24631,2026-10-07
+N518,518,A non-reflow narrow leaves a wide head in the new last column (ICH / EL 1 / row shift reach past the row),medium,behaviour divergence from Ghostty,False,True,55a34acd0,2026-10-07
+N519,519,G-TESTS' four-token name matcher masks 17 of the 90 tests added in the Phase 8 range,low,behaviour divergence from Ghostty,False,False,03709b897,2026-10-07
+N520,520,`flags.xt_checksum` is not carried by the snapshot TERMINAL record,low,verification gate / instrument,False,False,0dde962fc,2026-10-07
+N521,521,`rustty_terminal_paste` kept going after a refused write when the reader returned true,low,behaviour divergence from Ghostty,False,True,0dde962fc,2026-10-07
+N522,522,"PORT-ONLY: the app-scoped render `Device` lives in its own allocation (`DeviceBox`), not by value in `App`",none,behaviour divergence from Ghostty,False,False,d940ef752,2026-10-07
+N523,523,"G9 never checked CSI, ESC or C0: the kinds were registered but `surface_ids` gave them no ids",medium,behaviour divergence from Ghostty,False,True,cb038cdb4,2026-10-07
+N524,524,G9 counted OSC kind `unknown` as ported because the word `unknown` occurs in `rustty-vt`,low,behaviour divergence from Ghostty,False,True,cb038cdb4,2026-10-07
+N525,525,"the c-vt corpus scripts wrote into the main checkout, and the examples' `zig build` fails on macOS",low,behaviour divergence from Ghostty,False,True,cb038cdb4,2026-10-07
+N526,526,the freestanding `rustty_wasm` build was broken since ca2ef434b and nothing noticed,medium,behaviour divergence from Ghostty,False,True,3d3210a64,2026-10-07
+N527,527,`build-rustty.sh` overrode the project's `OTHER_LDFLAGS` and RusttyTests failed to link,,behaviour divergence from Ghostty,False,True,58793083b,2026-10-07
+N528,528,`rustty_terminal_get` rejected `RUSTTY_TERMINAL_DATA_MOUSE_SHAPE`,medium,behaviour divergence from Ghostty,False,True,f6df38530,2026-10-08
+N529,529,cbindgen emits one layout for same-named vt-c types; `include/rustty.h` declared the SGR unknown with the OSC layout,medium,ABI / C header layout,False,True,f6df38530,2026-10-08
+N530,530,"gate drift at the a60e9e2a5 advance: G3b self-test line anchor, G4 leg B not runnable on macOS, two examples off upstream",medium,verification gate / instrument,False,True,275c05ba9,2026-10-08

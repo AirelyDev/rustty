@@ -1,0 +1,102 @@
+id,tier,is_self_test,family,command
+G7,HARD,no,gate,bash $GATES/check_acyclic.sh
+G4,HARD,no,gate,bash $GATES/run_differential.sh
+G4-uni,HARD,no,gate,bash $ROOT/.port/phase-0/harness/unicode/run_unicode_diff.sh
+G-LINT,HARD,no,gate,bash $GATES/check_lints.sh
+G-MIRIRUN-SELF,HARD,yes,self-test,bash $ROOT/.port/tools/miri-run.sh --self-test
+G-CCONSUMER-SELF,HARD,yes,self-test,bash $GATES/check_c_consumer.sh --self-test
+G-CCONSUMER,HARD,no,gate,bash $GATES/check_c_consumer.sh
+G-EXAMPLES,HARD,no,gate,bash $GATES/check_examples.sh
+G-DIST,HARD,no,gate,bash $GATES/check_dist.sh
+G-NIX,HARD,no,gate,bash $GATES/check_nix.sh
+G-NIX-SELF,HARD,yes,self-test,bash $GATES/check_nix.sh --self-test
+G-XTARGET-SELF,HARD,yes,self-test,bash $GATES/check_cross_targets.sh --self-test
+G-XTARGET,HARD,no,gate,bash $GATES/check_cross_targets.sh
+G-I18N,HARD,no,gate,bash $GATES/check_translations.sh
+G-BLUEPRINT,HARD,no,gate,bash $GATES/check_blueprints.sh
+G-VALGRIND-SELF,HARD,yes,self-test,bash $GATES/check_valgrind.sh --self-test
+G-VALGRIND,HARD,no,gate,bash $GATES/check_valgrind.sh
+G-SAN-SELF,HARD,yes,self-test,bash $GATES/sanitizers.sh --self-test
+G-ASAN,HARD,no,gate,bash $GATES/sanitizers.sh --gate asan
+G-LSAN,HARD,no,gate,bash $GATES/sanitizers.sh --gate lsan
+G-MSAN,HARD,no,gate,bash $GATES/sanitizers.sh --gate msan
+G-HWASAN,HARD,no,gate,bash $GATES/sanitizers.sh --gate hwasan
+G-TSAN,HARD,no,gate,bash $GATES/sanitizers.sh --gate tsan
+G-LSAN-GTK,HARD,no,gate,bash $GATES/sanitizers.sh --gate lsan-gtk
+G-XCF-SELF,HARD,yes,self-test,bash $GATES/check_xcframework.sh --self-test
+G-XCF,HARD,no,gate,bash $GATES/check_xcframework.sh
+G-FEATMATRIX,HARD,no,gate,bash $GATES/check_feature_matrix.sh
+G-FONTBACKEND,HARD,no,gate,bash $GATES/check_font_backends.sh
+G-EOL,HARD,no,gate,bash $GATES/check_eol_fidelity.sh
+G-ORACLE-SH-SELF,HARD,yes,self-test,bash $GATES/_oracle_root.sh --self-test
+G-XTASK,HARD,no,gate,bash $GATES/check_xtask_surface.sh
+G-DOXYGEN,HARD,no,gate,bash $GATES/check_doxygen.sh
+G-REL,HARD,no,gate,bash $GATES/check_release_lane.sh
+G-GTKINIT,HARD,no,gate,bash $GATES/check_gtk_one_init.sh
+G-SKIP-SELF,HARD,yes,self-test,$PY $GATES/check_silent_skips.py --self-test
+G-SKIP,HARD,no,gate,$PY $GATES/check_silent_skips.py
+G-P2-SELF,HARD,yes,self-test,$PY $GATES/check_phase2_closure.py --self-test
+G-P2,HARD,no,gate,$PY $GATES/check_phase2_closure.py
+G-FILES,HARD,no,gate,$PY $ROOT/.port/tools/audit_file_coverage.py
+G-SYMS,HARD,no,gate,$PY $ROOT/.port/tools/audit_symbol_coverage.py
+G-TESTS-SELF,HARD,yes,self-test,$PY $ROOT/.port/tools/audit_test_coverage.py --self-test
+G-TESTS,HARD,no,gate,$PY $ROOT/.port/tools/audit_test_coverage.py
+G-CENSUS-SELF,HARD,yes,self-test,$PY $GATES/check_census_staleness.py --self-test
+G-CENSUS,HARD,no,gate,$PY $GATES/check_census_staleness.py
+G-ONIG,HARD,no,gate,bash $GATES/check_oniguruma_lane.sh
+G-VTCLIB-SELF,HARD,yes,self-test,bash $GATES/check_vtc_lib_isolation.sh --self-test
+G-VTCLIB,HARD,no,gate,bash $GATES/check_vtc_lib_isolation.sh
+G-ARTIFACT-SELF,HARD,yes,self-test,$PY $GATES/check_runtime_artifact_setter.py --self-test
+G-ARTIFACT,HARD,no,gate,$PY $GATES/check_runtime_artifact_setter.py
+G-VTALLOC-SELF,HARD,yes,self-test,bash $GATES/check_vt_alloc_vec_ban.sh --self-test
+G-VTALLOC,HARD,no,gate,bash $GATES/check_vt_alloc_vec_ban.sh
+G-GTKFEAT,HARD,no,gate,bash $GATES/check_gtk_feature_lane.sh
+G-XEVREACH,HARD,no,gate,sh $GATES/xev_scope_boundary_gate.sh
+G-BENCH,HARD,no,gate,bash $GATES/check_bench_tests.sh
+G-WINCHK,HARD,no,gate,bash $GATES/w2f001_windows_check_gate.sh
+G-XEV-IOS,HARD,no,gate,bash $GATES/xev_ios_kqueue_gate.sh
+G-WINPROTO-DEFAULT,HARD,no,gate,bash $GATES/check_default_linux_winproto.sh
+G1-SELF,HARD,yes,self-test,$PY $GATES/check_tests_ported.py --self-test
+G1,PROGRESS,no,gate,$PY $GATES/check_tests_ported.py
+G1b,PROGRESS,no,gate,run_test_counts
+G2,PROGRESS,no,gate,$PY $GATES/check_assertions.py
+G3,PROGRESS,no,gate,$PY $GATES/check_comments_fidelity.py
+G3b,PROGRESS,no,gate,$PY $GATES/check_comment_coverage.py
+G9,PROGRESS,no,gate,$PY $GATES/check_parity_surface.py
+G-PARITY-SELF,HARD,yes,self-test,$PY $GATES/check_parity_closure.py --self-test
+G-PARITY,HARD,no,gate,$PY $GATES/check_parity_closure.py
+G-UDDOCS-SELF,HARD,yes,self-test,$PY $GATES/check_ud_docs.py --self-test
+G-UDDOCS,HARD,no,gate,$PY $GATES/check_ud_docs.py
+G-LOGFILE-SELF,HARD,yes,self-test,$PY $GATES/check_log_reconcile.py --self-test
+G-LOGFILE,HARD,no,gate,$PY $GATES/check_log_reconcile.py
+G-REFGEOM-SELF,HARD,yes,self-test,$PY $GATES/check_ref_item_geometry.py --self-test
+G-REFGEOM,HARD,no,gate,$PY $GATES/check_ref_item_geometry.py
+G-ESCTEST-SELF,HARD,yes,self-test,bash $GATES/check_esctest.sh --self-test
+G-ESCTEST,HARD,no,gate,bash $GATES/check_esctest.sh
+G5,PROGRESS,no,gate,bash $GATES/run_fuzz_smoke.sh
+G6,PROGRESS,no,gate,bash $GATES/check_leaks.sh --all-done
+G6b,HARD,no,gate,bash $GATES/check_pagelist_compress_leaks.sh
+G6c,PROGRESS,no,gate,bash $GATES/check_leaks.sh --debug-assertions-off
+G6t,PROGRESS,no,gate,bash $GATES/check_leaks.sh --tree-borrows
+D1,PROGRESS,no,detector,bash $GATES/check_slice_reinterpret.sh
+D2,PROGRESS,no,detector,bash $GATES/check_capacity_saturation.sh
+D3,PROGRESS,no,detector,$PY $GATES/check_constants_parity.py
+G-LZ4,PROGRESS,no,gate,bash $GATES/check_lz4_byte_exact.sh
+G-THEMES,HARD,no,gate,$PY $GATES/check_theme_corpus.py
+D4,PROGRESS,no,detector,bash $GATES/check_comptime_phase.sh
+D5,PROGRESS,no,detector,bash $GATES/check_paired_invariants.sh
+D6,PROGRESS,no,detector,bash $GATES/check_sanitizer_canary.sh
+D8,PROGRESS,no,detector,bash $GATES/check_clone_injection.sh
+D9,PROGRESS,no,detector,bash $GATES/check_stale_comments.sh
+D10,PROGRESS,no,detector,bash $GATES/check_stb_resize_parity.sh
+D11,HARD,no,detector,bash $GATES/check_closed_enum_abi.sh
+D11r,HARD,no,detector,sh $GATES/check_closed_enum_abi_runtime.sh
+A3,PROGRESS,no,abi,bash $GATES/check_rustty_h_abi.sh
+A4,PROGRESS,no,abi,bash $GATES/check_embed_h_abi.sh
+A5,PROGRESS,no,abi,sh $GATES/check_rustty_vt_headers.sh
+A5-MASK-SELF,PROGRESS,yes,self-test,sh $GATES/check_rustty_vt_headers.sh --self-test-masking
+G-VTFEAT-SELF,HARD,yes,self-test,python3 $GATES/check_vt_features.py --self-test
+G-VTFEAT,PROGRESS,no,gate,python3 $GATES/check_vt_features.py
+G-ABISCHEMA,PROGRESS,no,gate,bash $GATES/check_abi_schema.sh
+G-KAITAI-SELF,HARD,yes,self-test,bash $GATES/check_kaitai_snapshot.sh --self-test
+G-KAITAI,HARD,no,gate,bash $GATES/check_kaitai_snapshot.sh
