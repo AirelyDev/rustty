@@ -117,12 +117,6 @@ additional dependencies:
 
 - `blueprint-compiler` (version 0.16.0 or newer)
 
-> [!NOTE]
->
-> The GTK application is not yet live in the Rust port; the GTK apprt is being
-> brought up in a later milestone. Until then these dependencies are only
-> required for the components that consume the Blueprint UI definitions.
-
 macOS users don't require any additional dependencies.
 
 ## Xcode Version and SDKs

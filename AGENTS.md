@@ -32,7 +32,7 @@ A file for [guiding coding agents](https://agents.md/).
   (VT/terminal engine), `rustty-core`, and `rustty-renderer`, alongside the
   supporting crates (`rustty-config`, `rustty-font`, `rustty-input`, …).
 - macOS app: `macos/`
-- GTK (Linux and FreeBSD) app: `crates/rustty-apprt` (note: not yet live).
+- GTK (Linux and FreeBSD) app: `crates/rustty-apprt`.
 
 ## Syncing with upstream Ghostty
 

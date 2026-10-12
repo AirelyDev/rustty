@@ -10,7 +10,11 @@
     terminal emulator pushing modern features.
     <br />
     A native GUI or embeddable library via <code>librustty</code>.
-    <br />
+  </p>
+  <p align="center">
+    <a href="https://rustty.sh/porting"><strong>📖 Read the story: how Ghostty was ported to Rust &rarr;</strong></a>
+  </p>
+  <p align="center">
     <a href="#about">About</a>
     ·
     <a href="https://rustty.sh/download">Download</a>
@@ -82,10 +86,10 @@ The high-level ambitious plan for the project, in order:
 |  #  | Step                                                    | Status |
 | :-: | ------------------------------------------------------- | :----: |
 |  1  | Standards-compliant terminal emulation                  |   ✅   |
-|  2  | Competitive performance                                 |   🚧   |
-|  3  | Rich windowing features -- multi-window, tabbing, panes |   🚧   |
-|  4  | Native Platform Experiences                             |   🚧   |
-|  5  | Cross-platform `librustty` for Embeddable Terminals     |   🚧   |
+|  2  | Competitive performance                                 |   ✅   |
+|  3  | Rich windowing features -- multi-window, tabbing, panes |   ✅   |
+|  4  | Native Platform Experiences                             |   ✅   |
+|  5  | Cross-platform `librustty` for Embeddable Terminals     |   ✅   |
 |  6  | Rustty-only Terminal Control Sequences                  |   ❌   |
 
 Additional details for each step in the big roadmap below:
