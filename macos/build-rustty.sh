@@ -30,11 +30,12 @@ case "$XCFRAMEWORK_TARGET" in
     ARCH_FLAG=()
     ;;
   native)
-    DESTINATION="platform=macOS,arch=$(uname -m)"
-    # The destination alone does not restrict a Release build, whose ARCHS lists
-    # both architectures: it would link x86_64 against this arm64-only library
-    # ("Undefined symbols for architecture x86_64"). `-arch` is what
-    # GhosttyXcodebuild.zig:36-48 passes.
+    # A destination naming the arch does not restrict a Release build, whose
+    # ARCHS lists both architectures: it would link x86_64 against this
+    # arm64-only library ("Undefined symbols for architecture x86_64"). `-arch`
+    # is what GhosttyXcodebuild.zig:36-48 passes, and xcodebuild rejects it
+    # beside a destination that already implies an architecture.
+    DESTINATION='generic/platform=macOS'
     ARCH_FLAG=(-arch "$(uname -m)")
     ;;
   *)
