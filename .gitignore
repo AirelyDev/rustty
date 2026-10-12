@@ -95,6 +95,7 @@ example/swift-vt-xcframework/.build/
 # is NOT redundant: `librustty-vt-*` does not match `rustty-*`, and without it
 # a 43 MB artifact gets committed.
 /dist/rustty-*.tar.gz
+/dist/release/
 /dist/librustty-vt-*.tar.gz
 
 # llvm coverage profiling artifacts
