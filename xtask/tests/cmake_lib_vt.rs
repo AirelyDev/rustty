@@ -233,7 +233,17 @@ fn install_layout_is_versioned_like_the_reference() {
                     prefix.display()
                 )
             });
-        let v = env!("CARGO_PKG_VERSION");
+        // The library's own version (`project(rustty-vt VERSION x.y.z)`), which
+        // is the oracle's separate `lib_version`, not the app/workspace version.
+        let cmake = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../CMakeLists.txt"),
+        )
+        .expect("read CMakeLists.txt");
+        let v = cmake
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("project(rustty-vt VERSION "))
+            .and_then(|r| r.split_whitespace().next())
+            .expect("project(rustty-vt VERSION ...) in CMakeLists.txt");
         let major = v.split('.').next().unwrap();
         let (real, so, link) = if cfg!(target_os = "macos") {
             (

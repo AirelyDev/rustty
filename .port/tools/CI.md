@@ -141,7 +141,7 @@ suite.
 
 In the `WARNINGS` summary each BLOCKED gate is followed by up to three
 `reason:` lines, copied from the `BLOCKED` lines the gate printed. A gate that
-is an expected warning on a lane (G4, G-EOL, D10, G-LOGFILE, G-REFGEOM, G-ESCTEST on CI) can
+is an expected warning on a lane (G4, G-EOL, D10, G-LOGFILE, G-REFGEOM, G-ESCTEST, G-VERSION on CI) can
 therefore not hide a new, different reason behind the same gate id: read the
 reason, not just the id.
 
@@ -205,7 +205,7 @@ the ghostty oracle checkout is absent on CI ⇒ probe exits 3 BLOCKED.) Locally,
 G4's driver-source staleness guard also BLOCKS (exit 3) when the oracle is
 absent, is not at `ORACLE_PIN`, lacks a built `zig-out/include`, or there is no
 C compiler, and when `ORACLE_PIN` is missing or malformed. G-EOL, D10,
-G-LOGFILE, G-REFGEOM and G-ESCTEST are BLOCKED on CI for the same no-oracle reason; `ci.yml`'s policy
+G-LOGFILE, G-REFGEOM, G-ESCTEST and G-VERSION are BLOCKED on CI for the same no-oracle reason (G-VERSION needs only the pin's commit to exist in the oracle, like D10); `ci.yml`'s policy
 note names all of them.
 
 ---

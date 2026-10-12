@@ -167,7 +167,7 @@ mod tests {
     use super::*;
 
     fn c(kind: &str, explicit: &str, tag: &str, branch: &str, hash: &str) -> String {
-        compose("0.1.0", kind, explicit, tag, branch, hash)
+        compose("1.3.2-dev", kind, explicit, tag, branch, hash)
             .as_str()
             .to_string()
     }
@@ -176,11 +176,11 @@ mod tests {
     #[test]
     fn compose_follows_the_reference_arms() {
         assert_eq!(c("explicit", "2.0.0-rc1", "", "", ""), "2.0.0-rc1");
-        assert_eq!(c("dep", "", "", "", ""), "0.1.0");
-        assert_eq!(c("nogit", "", "", "", ""), "0.1.0-dev+0000000");
-        assert_eq!(c("tag", "", "v0.1.0", "main", "abc1234"), "0.1.0");
-        assert_eq!(c("tag", "", "tip", "main", "abc1234"), "0.1.0-main+abc1234");
-        assert_eq!(c("git", "", "", "main", "abc1234"), "0.1.0-main+abc1234");
+        assert_eq!(c("dep", "", "", "", ""), "1.3.2");
+        assert_eq!(c("nogit", "", "", "", ""), "1.3.2-dev+0000000");
+        assert_eq!(c("tag", "", "v1.3.2", "main", "abc1234"), "1.3.2");
+        assert_eq!(c("tag", "", "tip", "main", "abc1234"), "1.3.2-main+abc1234");
+        assert_eq!(c("git", "", "", "main", "abc1234"), "1.3.2-main+abc1234");
         // The app version's own pre-release is dropped (`.major/.minor/.patch`).
         assert_eq!(
             compose("1.3.2-dev", "git", "", "", "main", "abc1234").as_str(),

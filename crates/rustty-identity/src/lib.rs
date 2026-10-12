@@ -73,16 +73,19 @@ mod values {
     /// Human-facing application name.
     pub const APP_NAME: &str = "rustty";
 
-    /// The semantic version of this build (mirrors the reference scheme; the
-    /// reference reads this from `build.zig.zon`).
-    pub const VERSION: &str = "0.1.0";
+    /// The semantic version of this build. Rustty carries the reference's own
+    /// version at the pinned oracle commit (`build.zig.zon` `.version`, read
+    /// at `.port/tools/gates/ORACLE_PIN`), so a rustty version number says
+    /// which Ghostty it ports. `G-VERSION` fails when it drifts from the pin.
+    pub const VERSION: &str = "1.3.2-dev";
 
     /// The version of the standalone VT library (librustty-vt), SEPARATE from
     /// the app `VERSION`. This mirrors the reference's deliberate app/lib
     /// version split — `build.zig:10`: `const lib_version = "0.1.0-dev";`
     /// ("Libghostty version. We use a separate version from the app.") —
-    /// rustty's own vt library version is `0.1.0` (no pre-release tag).
-    pub const VT_LIB_VERSION: &str = "0.1.0";
+    /// rustty carries the same library version as the pinned oracle, checked
+    /// by `G-VERSION` alongside `VERSION`.
+    pub const VT_LIB_VERSION: &str = "0.1.0-dev";
 
     /// Reverse-DNS bundle identifier (macOS `.app`, single-instance keys, etc.).
     /// Reference: `com.mitchellh.ghostty` (`src/build_config.zig:58`).
@@ -309,13 +312,14 @@ mod tests {
         assert_eq!(ISSUE_URL, "https://github.com/AirelyDev/rustty/issues");
         assert!(!WEBSITE.contains("ghostty") && !ISSUE_URL.contains("ghostty"));
         // The vt library carries its OWN version (the reference's deliberate
-        // app/lib split, build.zig:7-10); rustty's vt lib version has no
-        // pre-release tag.
-        assert_eq!(VT_LIB_VERSION, "0.1.0");
+        // app/lib split, build.zig:7-10); both versions are the pinned
+        // oracle's.
+        assert_eq!(VERSION, "1.3.2-dev");
+        assert_eq!(VT_LIB_VERSION, "0.1.0-dev");
         // The primary terminfo name MUST equal TERM (tcell invariant).
         assert_eq!(TERMINFO_PRIMARY_NAME, TERM);
         // VT query wire strings.
-        assert_eq!(xtversion_response(), "\x1bP>|rustty 0.1.0\x1b\\");
+        assert_eq!(xtversion_response(), "\x1bP>|rustty 1.3.2-dev\x1b\\");
         assert_eq!(libvt_xtversion_response(), "\x1bP>|librustty\x1b\\");
         // Nothing rustty leaks the reference name.
         assert!(!APP_NAME.contains("ghostty"));

@@ -82,12 +82,12 @@ fn dylib_identity() {
     println!("cargo::rerun-if-env-changed=RUSTTY_LIB_VERSION_STRING");
     let version = match std::env::var("RUSTTY_LIB_VERSION_STRING") {
         Ok(v) if !v.is_empty() => v.split(['-', '+']).next().unwrap_or_default().to_string(),
-        _ => format!(
-            "{}.{}.{}",
-            std::env::var("CARGO_PKG_VERSION_MAJOR").unwrap_or_default(),
-            std::env::var("CARGO_PKG_VERSION_MINOR").unwrap_or_default(),
-            std::env::var("CARGO_PKG_VERSION_PATCH").unwrap_or_default(),
-        ),
+        // The library's own version, not the app's `CARGO_PKG_VERSION`.
+        _ => rustty_identity::VT_LIB_VERSION
+            .split(['-', '+'])
+            .next()
+            .unwrap_or_default()
+            .to_string(),
     };
     println!("cargo::rerun-if-changed=src/dylib_link_args.rs");
     println!("cargo::rerun-if-env-changed=RUSTTY_VT_SONAME");

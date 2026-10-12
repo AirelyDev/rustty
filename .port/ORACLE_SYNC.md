@@ -177,7 +177,12 @@ agent depends on that tree standing still. Advancing therefore requires:
    together.
 5. `.port/tools/gates/ORACLE_PIN` (the full 40-hex SHA, one line), `.port/ORACLE_SYNC.md`,
    `.port/PORT_RULES.md` (R12) and `.port/cycle-analysis.md` are updated **together in one
-   commit**, and the commit message states which range the advance absorbed. Until `ORACLE_PIN`
+   commit**, and the commit message states which range the advance absorbed. The same commit moves
+   the version numbers to the new pin's (`build.zig.zon` `.version` and `build.zig` `lib_version`):
+   `VERSION` and `VT_LIB_VERSION` in `crates/rustty-identity/src/lib.rs` (both arms), the
+   `[workspace.package]` version in `Cargo.toml` (the app version without `-dev`) and the
+   `project(rustty-vt VERSION …)` line in `CMakeLists.txt`. G-VERSION
+   (`.port/tools/gates/check_version_pin.sh`) goes RED until they agree. Until `ORACLE_PIN`
    names the new HEAD, G-EOL, G4, G-LOGFILE and G-REFGEOM report BLOCKED on every local run. D10 does not,
    and keeps reading the old pin's `src/stb`. Then:
    - rebuild the oracle's `zig-out/include` and re-run `.port/phase-0/harness/build_ref_driver.sh`

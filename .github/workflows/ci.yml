@@ -437,7 +437,7 @@ jobs:
         run: |
           echo "G4: local-only (R3 — oracle not on CI); expect 'G4 BLOCKED (exit 3)' as a WARNING in the ci.sh summary below."
           echo "G1b: local-only for the same reason (ghostty oracle checkout absent on CI)."
-          echo "G-EOL, D10, G-LOGFILE, G-REFGEOM, G-VTFEAT, G-ESCTEST: expect BLOCKED (exit 3) WARNINGs too (no oracle at ORACLE_PIN on CI); check each one's reason line."
+          echo "G-EOL, D10, G-LOGFILE, G-REFGEOM, G-VTFEAT, G-ESCTEST, G-VERSION: expect BLOCKED (exit 3) WARNINGs too (no oracle at ORACLE_PIN on CI); check each one's reason line."
           echo "G-ORACLE-SH-SELF needs node (set up above); a BLOCKED there means node is missing."
 
       # The single entry. ci.sh runs (collecting all failures):

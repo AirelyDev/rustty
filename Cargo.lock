@@ -66,7 +66,7 @@ dependencies = [
 
 [[package]]
 name = "breakpad-sys"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "cc",
 ]
@@ -151,7 +151,7 @@ dependencies = [
 
 [[package]]
 name = "dcimgui-sys"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "bindgen",
  "cc",
@@ -246,7 +246,7 @@ dependencies = [
 
 [[package]]
 name = "fontconfig-sys"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "bindgen",
  "cc",
@@ -256,7 +256,7 @@ dependencies = [
 
 [[package]]
 name = "freetype-sys"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "bindgen",
  "cc",
@@ -435,7 +435,7 @@ dependencies = [
 
 [[package]]
 name = "gettext-sys"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "bindgen",
  "cc",
@@ -542,7 +542,7 @@ checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
 name = "glslang-sys"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "bindgen",
  "cc",
@@ -693,7 +693,7 @@ dependencies = [
 
 [[package]]
 name = "harfbuzz-sys"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "bindgen",
  "cc",
@@ -717,7 +717,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "highway-sys"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "cc",
 ]
@@ -811,7 +811,7 @@ dependencies = [
 
 [[package]]
 name = "libpng-sys"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "bindgen",
  "cc",
@@ -820,7 +820,7 @@ dependencies = [
 
 [[package]]
 name = "libxml2-sys"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "bindgen",
  "cc",
@@ -1008,7 +1008,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "oniguruma-sys"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "bindgen",
  "cc",
@@ -1167,7 +1167,7 @@ dependencies = [
 
 [[package]]
 name = "rustty"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "allocator-api2",
  "rustty-apprt",
@@ -1180,7 +1180,7 @@ dependencies = [
 
 [[package]]
 name = "rustty-apprt"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "allocator-api2",
  "bitflags",
@@ -1231,7 +1231,7 @@ dependencies = [
 
 [[package]]
 name = "rustty-apprt-api"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "allocator-api2",
  "rustty-build-config",
@@ -1247,7 +1247,7 @@ dependencies = [
 
 [[package]]
 name = "rustty-apprt-c"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "allocator-api2",
  "libc",
@@ -1280,7 +1280,7 @@ dependencies = [
 
 [[package]]
 name = "rustty-args"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "log",
  "rustty-build-config",
@@ -1291,7 +1291,7 @@ dependencies = [
 
 [[package]]
 name = "rustty-bench"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "allocator-api2",
  "log",
@@ -1311,7 +1311,7 @@ dependencies = [
 
 [[package]]
 name = "rustty-build-config"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "rustty-datastruct",
  "rustty-identity",
@@ -1319,11 +1319,11 @@ dependencies = [
 
 [[package]]
 name = "rustty-cfg-fmt"
-version = "0.1.0"
+version = "1.3.2"
 
 [[package]]
 name = "rustty-cli"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "allocator-api2",
  "libc",
@@ -1355,7 +1355,7 @@ dependencies = [
 
 [[package]]
 name = "rustty-config"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "libc",
  "rustty-args",
@@ -1379,7 +1379,7 @@ dependencies = [
 
 [[package]]
 name = "rustty-core"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "allocator-api2",
  "log",
@@ -1409,7 +1409,7 @@ dependencies = [
 
 [[package]]
 name = "rustty-crash"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "indexmap",
  "log",
@@ -1424,7 +1424,7 @@ dependencies = [
 
 [[package]]
 name = "rustty-datastruct"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "allocator-api2",
  "rustty-util",
@@ -1433,7 +1433,7 @@ dependencies = [
 
 [[package]]
 name = "rustty-extra"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "rustty-build-config",
  "rustty-cfg-fmt",
@@ -1446,7 +1446,7 @@ dependencies = [
 
 [[package]]
 name = "rustty-font"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "allocator-api2",
  "log",
@@ -1463,7 +1463,7 @@ dependencies = [
 
 [[package]]
 name = "rustty-font-shaper"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "allocator-api2",
  "cc",
@@ -1488,7 +1488,7 @@ dependencies = [
 
 [[package]]
 name = "rustty-global"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "indexmap",
  "libc",
@@ -1497,15 +1497,15 @@ dependencies = [
 
 [[package]]
 name = "rustty-helpgen"
-version = "0.1.0"
+version = "1.3.2"
 
 [[package]]
 name = "rustty-identity"
-version = "0.1.0"
+version = "1.3.2"
 
 [[package]]
 name = "rustty-input"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "log",
  "rustty-args",
@@ -1523,7 +1523,7 @@ dependencies = [
 
 [[package]]
 name = "rustty-inspector"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "allocator-api2",
  "dcimgui-sys",
@@ -1540,21 +1540,21 @@ dependencies = [
 
 [[package]]
 name = "rustty-lib"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "rustty-zigstd",
 ]
 
 [[package]]
 name = "rustty-oniguruma"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "oniguruma-sys",
 ]
 
 [[package]]
 name = "rustty-os"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "allocator-api2",
  "cc",
@@ -1576,7 +1576,7 @@ dependencies = [
 
 [[package]]
 name = "rustty-render-types"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "rustty-datastruct",
  "rustty-util",
@@ -1584,7 +1584,7 @@ dependencies = [
 
 [[package]]
 name = "rustty-renderer"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "allocator-api2",
  "block2",
@@ -1623,7 +1623,7 @@ dependencies = [
 
 [[package]]
 name = "rustty-simd"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "cc",
  "highway-sys",
@@ -1635,7 +1635,7 @@ dependencies = [
 
 [[package]]
 name = "rustty-synthetic"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "allocator-api2",
  "rustty-args",
@@ -1645,14 +1645,14 @@ dependencies = [
 
 [[package]]
 name = "rustty-terminfo"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "rustty-identity",
 ]
 
 [[package]]
 name = "rustty-termio"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "allocator-api2",
  "libc",
@@ -1679,15 +1679,15 @@ dependencies = [
 
 [[package]]
 name = "rustty-unicode"
-version = "0.1.0"
+version = "1.3.2"
 
 [[package]]
 name = "rustty-util"
-version = "0.1.0"
+version = "1.3.2"
 
 [[package]]
 name = "rustty-vaxis"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "allocator-api2",
  "libc",
@@ -1698,7 +1698,7 @@ dependencies = [
 
 [[package]]
 name = "rustty-version"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "rustty-build-config",
  "rustty-identity",
@@ -1706,7 +1706,7 @@ dependencies = [
 
 [[package]]
 name = "rustty-vt"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "allocator-api2",
  "dcimgui-sys",
@@ -1731,10 +1731,11 @@ dependencies = [
 
 [[package]]
 name = "rustty-vt-c"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "allocator-api2",
  "log",
+ "rustty-identity",
  "rustty-lib",
  "rustty-os",
  "rustty-render-types",
@@ -1745,7 +1746,7 @@ dependencies = [
 
 [[package]]
 name = "rustty-wasm"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "log",
  "rustty-config",
@@ -1757,7 +1758,7 @@ dependencies = [
 
 [[package]]
 name = "rustty-web-canvas"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "allocator-api2",
  "rustty-font",
@@ -1767,7 +1768,7 @@ dependencies = [
 
 [[package]]
 name = "rustty-wuffs"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "allocator-api2",
  "log",
@@ -1777,7 +1778,7 @@ dependencies = [
 
 [[package]]
 name = "rustty-xev"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "libc",
  "rustty-global",
@@ -1785,15 +1786,15 @@ dependencies = [
 
 [[package]]
 name = "rustty-z2d"
-version = "0.1.0"
+version = "1.3.2"
 
 [[package]]
 name = "rustty-zf"
-version = "0.1.0"
+version = "1.3.2"
 
 [[package]]
 name = "rustty-zigimg"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "allocator-api2",
  "rustty-wuffs",
@@ -1802,7 +1803,7 @@ dependencies = [
 
 [[package]]
 name = "rustty-zigstd"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "allocator-api2",
  "hashbrown",
@@ -1823,7 +1824,7 @@ checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 
 [[package]]
 name = "sentry-sys"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "bindgen",
  "breakpad-sys",
@@ -1902,7 +1903,7 @@ checksum = "703d5c7ef118737c72f1af64ad2f6f8c5e1921f818cdcb97b8fe6fc69bf66214"
 
 [[package]]
 name = "simdutf-sys"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "cc",
 ]
@@ -1921,7 +1922,7 @@ checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 
 [[package]]
 name = "spirv-cross-sys"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "bindgen",
  "cc",
@@ -2132,7 +2133,7 @@ dependencies = [
 
 [[package]]
 name = "wuffs-sys"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "bindgen",
  "cc",
@@ -2157,7 +2158,7 @@ checksum = "3ae8337f8a065cfc972643663ea4279e04e7256de865aa66fe25cec5fb912d3f"
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "rustty-extra",
  "rustty-terminfo",
@@ -2167,7 +2168,7 @@ dependencies = [
 
 [[package]]
 name = "zlib-sys"
-version = "0.1.0"
+version = "1.3.2"
 dependencies = [
  "cc",
 ]

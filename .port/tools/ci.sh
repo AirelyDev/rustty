@@ -908,6 +908,11 @@ GATE_REGISTRY=(
   # tree and was green either way. HARD: green, and a demonstrated RED flip
   # (delete the corpora path rule -> "still under line-ending conversion").
   "G-EOL|HARD|light|tier=parity|bash $GATES/check_eol_fidelity.sh"
+  # G-VERSION — rustty's app and vt-library versions are the pinned oracle's
+  # (`build.zig.zon` `.version`, `build.zig` `lib_version`, read at ORACLE_PIN),
+  # in rustty-identity, Cargo.toml and CMakeLists.txt. BLOCKED (3) without the
+  # oracle, like G-EOL.
+  "G-VERSION|HARD|light|tier=parity|bash $GATES/check_version_pin.sh"
   # G-ORACLE-SH-SELF (R13-GF2) — the shell twin of `_gatelib.oracle_root`.
   # G-EOL, G4 and the macOS menu-shortcut parity harness used to read the
   # oracle from an environment variable (GHOSTTY_ORACLE / GHOSTTY /

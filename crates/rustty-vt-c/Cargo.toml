@@ -204,3 +204,9 @@ rustty-util = { workspace = true }
 # (`compression_activity_and_incremental_scheduling` hit `.unsupported =>
 # unreachable` there). Same dev-dependency unification rule as above.
 rustty-vt = { path = "../rustty-vt", features = ["tripwire-test", "test-allocators", "test-decommit-sim"] }
+
+# build.rs versions the shared library from `rustty_identity::VT_LIB_VERSION`,
+# the same source `rustty-vt` reports through build_info, not the app version
+# (`CARGO_PKG_VERSION`), which is a different number.
+[build-dependencies]
+rustty-identity = { workspace = true }
