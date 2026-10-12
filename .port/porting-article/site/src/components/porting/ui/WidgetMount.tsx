@@ -21,6 +21,7 @@ const LOADERS: Record<string, () => Promise<{ default: ComponentType }>> = {
   "perf-replay": () => import("@/components/porting/perf-replay"),
   cost: () => import("@/components/porting/cost"),
   "every-prompt": () => import("@/components/porting/every-prompt"),
+  "live-terminal": () => import("@/components/porting/live-terminal"),
 };
 
 /** LAZY caches one React.lazy component per slug so its identity is stable across renders. */

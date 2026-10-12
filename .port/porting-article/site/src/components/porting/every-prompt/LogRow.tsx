@@ -4,13 +4,7 @@ import CommitLink from "../ui/CommitLink";
 import Tooltip from "../ui/Tooltip";
 import s from "./EveryPrompt.module.css";
 import Glossed from "./Glossed";
-import {
-  BASIS_LABEL,
-  badges,
-  fmtPacific,
-  OTHER_REPO_NOTE,
-  type Row,
-} from "./log-model";
+import { BASIS_LABEL, badges, fmtPacific, type Row } from "./log-model";
 import { LANE_COLOURS, LANE_NAMES, modelLabel } from "./model";
 
 /** COLLAPSED_LINES is how many lines of text a collapsed row shows. */
@@ -87,7 +81,6 @@ function LogRow({
 
   const bs = badges(r);
   const ambiguous = r.commitsBasis === "ambiguous";
-  const otherRepo = r.commitsBasis === "other-repo";
   const commits = allCommits ? r.commits : r.commits.slice(0, COMMITS_SHOWN);
   const more = r.commits.length - COMMITS_SHOWN;
   const textId = `ep-text-${r.id}`;
@@ -136,7 +129,7 @@ function LogRow({
           {expanded ? "show less" : "show the whole prompt"}
         </button>
       ) : null}
-      {bs.length || r.commits.length || ambiguous || otherRepo ? (
+      {bs.length || r.commits.length || ambiguous ? (
         <div className={s.rowFoot}>
           {bs.map((b) => (
             <span key={b} className={s.badge} data-badge={b}>
@@ -145,8 +138,6 @@ function LogRow({
           ))}
           {ambiguous ? (
             <span className={s.quiet}>commits ambiguous</span>
-          ) : otherRepo ? (
-            <span className={s.quiet}>{OTHER_REPO_NOTE}</span>
           ) : r.commits.length ? (
             <span className={s.rowCommits}>
               <Tooltip

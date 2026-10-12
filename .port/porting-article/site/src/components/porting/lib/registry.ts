@@ -6,8 +6,18 @@ export type WidgetEntry = {
   title: string;
   label: string;
   source: string;
-  /** Permalink the source pill opens: the widget's research dataset or primary record. */
+  /**
+   * Links for parts of `source`, keyed by the exact text to link (a project, a
+   * tool, a commit). Each part links on its own; unlisted text stays plain.
+   */
+  sourceLinks?: Readonly<Record<string, string>>;
+  /**
+   * Permalink to the widget's research dataset or primary record. It shows as
+   * its own link after the label, unless a sourceLinks entry already points to it.
+   */
   sourceHref: string;
+  /** Text of that link; defaults to "record" for a Markdown file, else "data". */
+  sourceHrefLabel?: string;
   caption: string;
   /**
    * Visible line under the title: what the widget adds beyond the prose and
@@ -22,6 +32,23 @@ export type WidgetEntry = {
   dataFile: string | null;
   requiredKeys: string[];
 };
+
+/** Pages that the source pills link to, one per project, tool or commit they name. */
+const GIT = "https://git-scm.com/";
+const GIT_LOG = "https://git-scm.com/docs/git-log";
+const GIT_GREP = "https://git-scm.com/docs/git-grep";
+const GIT_TRAILERS = "https://git-scm.com/docs/git-interpret-trailers";
+const CARGO_METADATA =
+  "https://doc.rust-lang.org/cargo/commands/cargo-metadata.html";
+const MIRI = "https://github.com/rust-lang/miri";
+const TOKEI = "https://github.com/XAMPPRocky/tokei";
+const CLAUDE_CODE = "https://code.claude.com/docs/en/overview";
+const CODEX = "https://developers.openai.com/codex/app";
+const GHOSTTY_REPO = "https://github.com/ghostty-org/ghostty";
+const RUSTTY_REPO = "https://github.com/AirelyDev/rustty";
+const WTERM_REPO = "https://github.com/vercel-labs/wterm";
+const JUST_BASH_REPO = "https://github.com/vercel-labs/just-bash";
+const RUSTTY_WTERM_REPO = "https://github.com/AirelyDev/rustty-wterm";
 
 /**
  * All widgets used by the porting article, in article order.
@@ -39,6 +66,12 @@ export const WIDGETS: readonly WidgetEntry[] = [
     source: "fact table · git · tokei · test census · perf records",
     sourceHref:
       "https://github.com/AirelyDev/rustty/blob/882e3df21ee8c93d9055ffac9abce8385b6e5db6/.port/porting-article/research/refresh-2026-10-10.md#L18",
+    sourceLinks: {
+      "fact table":
+        "https://github.com/AirelyDev/rustty/blob/882e3df21ee8c93d9055ffac9abce8385b6e5db6/.port/porting-article/research/refresh-2026-10-10.md#L18",
+      git: GIT,
+      tokei: TOKEI,
+    },
     caption:
       "Tiles summarise the whole port, 2026-06-21 to 2026-10-10. Line counts are tokei code lines; test counts are Rust #[test] functions in every crate (including the ported libxev, libvaxis and z2d and the -sys wrappers) and Zig test blocks in Ghostty's src/ at the current reference commit; matched module by module with the dependencies, as in the translation lens, it is 7,221 against 4,911. Every value comes from the article's fact table; hover, tap or focus a tile for each figure's provenance and as-of commit. Cost and usage figures stop at 2026-10-08. The API-equivalent figure is list price for the same usage, a reference value, not money spent.",
     summary:
@@ -57,6 +90,7 @@ export const WIDGETS: readonly WidgetEntry[] = [
     source: "git log · per-module #[test] counts",
     sourceHref:
       "https://github.com/AirelyDev/rustty/blob/882e3df21ee8c93d9055ffac9abce8385b6e5db6/.port/porting-article/research/data/mock-test-contract-rust-per-module-daily-2026-10-10.csv",
+    sourceLinks: { "git log": GIT_LOG },
     caption:
       "One square per Zig test, coloured by the day its module's Rust test count reached it. Counts from 110 daily snapshots of the Rustty repo against the Ghostty reference commit of the day.",
     summary:
@@ -75,12 +109,16 @@ export const WIDGETS: readonly WidgetEntry[] = [
     source: "Ghostty src/ at 4749c4e93 · cargo metadata",
     sourceHref:
       "https://github.com/AirelyDev/rustty/blob/882e3df21ee8c93d9055ffac9abce8385b6e5db6/.port/porting-article/research/data/mock-cutting-the-cycle-data.json",
+    sourceLinks: {
+      "Ghostty src/ at 4749c4e93": `${GHOSTTY_REPO}/tree/4749c4e93731067049bfbf2e4572061cef2bdd17/src`,
+      "cargo metadata": CARGO_METADATA,
+    },
     caption:
       "Stages 1 and 2: runtime @import edges among the 512 Zig files of Ghostty's src/ at the first reference commit (2026-06-20), excluding imports inside test blocks; the cycle is found with Tarjan's algorithm. Files are grouped by directory and coloured by the crate tier they became. Stage 3: the Cargo workspace graph, node area by code lines. Stage 4: daily Rust lines per crate from each crate's first commit.",
     summary:
       "At the first reference commit, 345 of Ghostty's 512 source files formed a single import cycle with 1,410 edges inside it. The port broke it with 14 planned cuts, and every one is load-bearing: skip any one and Cargo sees a cycle. The result is 61 packages with a longest dependency chain of 18 hops.",
     deck: "The tabs step from the cycle among Ghostty's files, coloured by the crate tier each file became, through the planned cuts to the crate graph and a replay of each crate's growth. Click or press Enter on a file or crate for its details, or trace a real cycle file by file.",
-    minHeight: { desktop: 1115, phone: 2296 },
+    minHeight: { desktop: 1115, phone: 2320 },
     flagship: true,
     frame: "card",
     dataFile: "cutting-the-cycle.json",
@@ -93,12 +131,13 @@ export const WIDGETS: readonly WidgetEntry[] = [
     source: "git log --all · prompt history · usage transcripts",
     sourceHref:
       "https://github.com/AirelyDev/rustty/blob/882e3df21ee8c93d9055ffac9abce8385b6e5db6/.port/porting-article/research/data/mock-agents-vs-human-grid-2026-10-10.csv",
+    sourceLinks: { "git log --all": GIT_LOG },
     caption:
       "Each row is one Pacific day (06-20 to 10-08 14:00), each column one hour. Cells show non-merge commits on all branches (bots excluded), lines changed (vendored code excluded) or prompts, on a log scale; teal dots mark the author's prompts to the port, and hollow rings the 11 prompts of the founding sessions typed before the repository existed. Model is the Co-Authored-By trailer of each commit. API-equivalent cost is recovered per-call cost at list price for the port's sessions, a reference value, not money spent; hatched rows fall where Mac Claude transcripts were lost (06-21 to 09-07), so a blank there means not recorded, not zero. Threads are distinct agent threads in recovered transcripts. Lag is the time from the author's last port prompt to each commit; the 41 first-day commits followed an unrecorded launch prompt. Commit subjects in tooltips have internal task labels removed.",
     summary:
       "52% of 2,718 non-merge commits landed more than an hour after the author's last prompt, and 9% more than eight hours after. Agents committed most at 20:00; the author prompted most at 08:00. About 79 hours of hands-on prompting drove the port, roughly 34 commits per hands-on hour, and the longest unattended run was 180 commits overnight.",
     deck: "Days run down and Pacific hours across; switch the cells between commits, lines changed and prompts, brush to zoom, or replay day by day. Agents committed most at 20:00, while the author's prompts peaked at 08:00.",
-    minHeight: { desktop: 1675, phone: 2650 },
+    minHeight: { desktop: 1675, phone: 2674 },
     flagship: true,
     frame: "card",
     dataFile: "agents-vs-human.json",
@@ -118,6 +157,7 @@ export const WIDGETS: readonly WidgetEntry[] = [
     source: "git log · method records · pointer-lifetime ledger",
     sourceHref:
       "https://github.com/AirelyDev/rustty/blob/882e3df21ee8c93d9055ffac9abce8385b6e5db6/.port/porting-article/research/data/strategy-timeline-2026-10-10.csv",
+    sourceLinks: { "git log": GIT_LOG },
     caption:
       "Each marker is a dated change to how the port was run, placed at the commit that introduced it; hover, tap or focus it for the change and its commit. Era bands give commits per day. The ledger strip counts data rows in the pointer-lifetime ledger at each first-parent commit that changed it (last value per day); the registry strip counts check-registry entries at weekly snapshots.",
     summary:
@@ -136,6 +176,11 @@ export const WIDGETS: readonly WidgetEntry[] = [
     source: "git grep · Ghostty a60e9e2a5 · Rustty 1d22ba80d",
     sourceHref:
       "https://github.com/AirelyDev/rustty/blob/882e3df21ee8c93d9055ffac9abce8385b6e5db6/.port/porting-article/research/data/mock-translation-lens.json",
+    sourceLinks: {
+      "git grep": GIT_GREP,
+      "Ghostty a60e9e2a5": `${GHOSTTY_REPO}/commit/a60e9e2a57f73e1eef2bd1cf2995a467f69e7fb0`,
+      "Rustty 1d22ba80d": `${RUSTTY_REPO}/commit/1d22ba80db07312b78ee07870fd38962766096d8`,
+    },
     caption:
       "Excerpts are real code at Ghostty's reference commit and Rustty's head, side by side, with hand-drawn line mappings. Carried comments are found by exact text match. Occurrence counts are git grep over Ghostty's src/ (plus libxev where marked) and Rustty's crates/, tests included. The unsafe classification is a same-line heuristic and labelled as such.",
     summary:
@@ -161,12 +206,13 @@ export const WIDGETS: readonly WidgetEntry[] = [
     source: "git · Miri runs · review and audit records",
     sourceHref:
       "https://github.com/AirelyDev/rustty/blob/882e3df21ee8c93d9055ffac9abce8385b6e5db6/.port/porting-article/research/data/mock-three-reviewers-bugs.json",
+    sourceLinks: { git: GIT, Miri: MIRI },
     caption:
       "Rail: the 37 curated events (80 defects) recorded up to 2026-10-08, test-isolation races excluded, laned by the tool that found each one. Code is shown at the commits named in each stage; where a first pass was never committed, the Miri proof-harness model is shown and labelled. Miri output was regenerated on 2026-10-08 by running the command in each terminal title against the parent commit of the fix (bugs A and C) or on the in-repo proof harness's first-pass model (bugs B and D), with nightly Miri of 2026-07-22, so tag numbers come from those runs. Reviewer text is quoted verbatim, with internal identifiers cut as […].",
     summary:
       "Four real memory-safety bugs from the port, each a different aliasing mechanism, replayed through the code, the reviewer, Miri's borrow stack and the fix. Miri, or an audit that Miri then proved, found 62 of the 80 port memory-safety defects recorded up to 8 October. In one case the reviewer saw the hazard but proposed a cure that was still undefined behaviour; only the proof harness showed it.",
     deck: "Choose a bug and step through its life: the ported code, the reviewer's verdict, Miri's borrow stack at the bad access under either aliasing model, and the fix. The rail above places each bug among every recorded port memory-safety event, by the tool that found it.",
-    minHeight: { desktop: 1521, phone: 2982 },
+    minHeight: { desktop: 1521, phone: 3006 },
     flagship: true,
     frame: "terminal",
     dataFile: "three-reviewers.json",
@@ -179,12 +225,13 @@ export const WIDGETS: readonly WidgetEntry[] = [
     source: "memory-safety timeline · git · port-findings ledger",
     sourceHref:
       "https://github.com/AirelyDev/rustty/blob/882e3df21ee8c93d9055ffac9abce8385b6e5db6/.port/porting-article/research/data/mock-09-memory-safety-events-2026-10-10.csv",
+    sourceLinks: { git: GIT },
     caption:
       "Plotted: 39 hand-curated events from commits and the port-findings ledger. Before September, port bugs were tracked only in commit messages and squashed merges, so this is a floor. Rows group the detecting tool: Miri over each crate's tests, isolated Miri proof harnesses, the Tree Borrows lane, sanitizers, review and symptoms. Bubble area is defects per event; the cumulative curve counts defects.",
     summary:
       "The port introduced at least 83 memory-safety defects in 39 events, and Miri caught 64 of them. 62 were aliasing or provenance undefined behaviour, a bug class that exists because Rust has an aliasing model and Zig does not. Sanitizers found 7: leaks, a dropped Zig field default and a C library initialisation race, none of them aliasing.",
     deck: "Each bubble is one event, sized by its defects and laned by what caught it, with the working rules the bugs produced flagged along the timeline. Regroup the rows by crate area, filter from the crate × bug-class table, or select an event for its detail.",
-    minHeight: { desktop: 1284, phone: 2097 },
+    minHeight: { desktop: 1284, phone: 2121 },
     flagship: false,
     frame: "card",
     dataFile: "memory-safety.json",
@@ -197,6 +244,7 @@ export const WIDGETS: readonly WidgetEntry[] = [
     source: "perf log · raw benchmark sweeps · git log",
     sourceHref:
       "https://github.com/AirelyDev/rustty/blob/882e3df21ee8c93d9055ffac9abce8385b6e5db6/.port/porting-article/research/data/mock-05-perf-replay-data.json",
+    sourceLinks: { "git log": GIT_LOG },
     caption:
       "Plotted: per-benchmark median of 7 timed runs (1 warm-up discarded) for each Rustty build, divided by the median of Ghostty's benchmark tool (Zig ReleaseFast) measured in the same session. Log ratio axis; bars span the run-to-run range. Win, tie or loss uses a ±1.5% tie band. Step times are commit times of the code measured. Hardware: MacBook Pro, Apple M4 Pro, 14 cores, 48 GB.",
     summary:
@@ -219,12 +267,13 @@ export const WIDGETS: readonly WidgetEntry[] = [
     source: "Ghostty git · upstream catch-up records",
     sourceHref:
       "https://github.com/AirelyDev/rustty/blob/882e3df21ee8c93d9055ffac9abce8385b6e5db6/.port/porting-article/research/data/mock-06-moving-target-areas-2026-10-10.csv",
+    sourceLinks: { "Ghostty git": GHOSTTY_REPO },
     caption:
       "Plotted: Ghostty .zig line counts at the first-parent commit of each week and at each reference commit; Rustty .rs line counts per day (raw lines, not code lines, so the two are only roughly comparable). Matrix: end-to-end diff of each reference range grouped by top-level directory, and non-merge commits touching each directory. Wait is the upstream commit time of the new reference to the time of Rustty's commit that adopted it.",
     summary:
       "The port moved its Ghostty reference commit 8 times, absorbing 1,169 upstream non-merge commits while Ghostty's Zig code grew 34.0%. The wait between an upstream commit and the port adopting it was 47.6 hours at the first move, as little as 1.7 hours, and 7.7 hours at the last; the median was 7.55 hours. 43% of the upstream churn landed in the terminal engine.",
     deck: "The size chart sets Ghostty's growth against the port's, with each reference move marked, and the matrix shows where each move's upstream range landed, as lines changed or commits. Select a move to link the chart, the matrix and its detail panel.",
-    minHeight: { desktop: 2014, phone: 2963 },
+    minHeight: { desktop: 2014, phone: 2987 },
     flagship: false,
     frame: "card",
     dataFile: "moving-target.json",
@@ -262,6 +311,11 @@ export const WIDGETS: readonly WidgetEntry[] = [
     source: "upstream-defect ledger · Ghostty 246f70287",
     sourceHref:
       "https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/parity-closure/UPSTREAM-DEFECTS.md",
+    sourceLinks: {
+      "upstream-defect ledger":
+        "https://github.com/AirelyDev/rustty/blob/58aa62a81e7db5f8762b0158acc661dafc31f230/.port/parity-closure/UPSTREAM-DEFECTS.md",
+      "Ghostty 246f70287": `${GHOSTTY_REPO}/commit/246f702876b924a1cb7cade1e99274d1470302fc`,
+    },
     caption:
       "Plotted: every entry of the port's upstream-defect ledger (206), placed at the first file path in its reference. Tile area is Zig lines at Ghostty's reference commit; children under 3% of their directory fold into other files, and tiles holding a defect get a minimum area so their marks fit. Dependency defects and non-Zig build files sit in the strip below the map, not to scale. Class comes from each entry's kind (a mixed leak/crash entry counts as a crash). Colour and the class chips give the class (hollow: latent; dashed: test weakness; centre dot: hang); mark shape gives the discovery method. Discovery method (a hand pass over the ledger) and the ReleaseFast consequence (read from each entry's ReleaseFast field) are estimated classifications. Commit = the Rustty commit that recorded the entry, normally the one that shipped the fix.",
     summary:
@@ -280,6 +334,7 @@ export const WIDGETS: readonly WidgetEntry[] = [
     source: "audit registry · Codex rate-limit log · git",
     sourceHref:
       "https://github.com/AirelyDev/rustty/blob/882e3df21ee8c93d9055ffac9abce8385b6e5db6/.port/porting-article/research/data/r2-codex-audit-funnel.csv",
+    sourceLinks: { Codex: CODEX, git: GIT },
     caption:
       "Funnel stages count audit findings from the registry rows Codex wrote to the fixes verified in the remediation commit; the first count is as Codex reported it, the rest are counted from the vetting state. The meter is the median of the weekly-limit readings Codex logged in each hour (UTC) of its two audit runs, 07-31 to 08-02, with the band spanning every reading in the hour and the audit's events marked; the readings of 08-01 00:00 to 03:59 are unexplained and annotated.",
     summary:
@@ -334,6 +389,11 @@ export const WIDGETS: readonly WidgetEntry[] = [
     source: "Claude Code and Codex transcripts · git trailers",
     sourceHref:
       "https://github.com/AirelyDev/rustty/blob/882e3df21ee8c93d9055ffac9abce8385b6e5db6/.port/porting-article/research/data/usage-stats-agent-share-weekly-2026-10-10.csv",
+    sourceLinks: {
+      "Claude Code": CLAUDE_CODE,
+      Codex: CODEX,
+      "git trailers": GIT_TRAILERS,
+    },
     caption:
       "Top: non-merge commits per week, to 2026-10-10, by the model named in each commit's Co-Authored-By trailer, stacked around a centre line. Middle: median context per call by week with the 90th-percentile band, from recovered Claude Code and Codex transcripts to 2026-10-08; Mac transcripts before 09-08 were mostly lost, so earlier weeks are partial. Bottom: workflow scripts by the day they were first committed, and agent threads per day in recovered transcripts (square-root scale).",
     summary:
@@ -352,12 +412,13 @@ export const WIDGETS: readonly WidgetEntry[] = [
     source: "prompt history · Codex sessions · usage transcripts",
     sourceHref:
       "https://github.com/AirelyDev/rustty/blob/f153b70146edeaf792db0b65469dedbc792e9816/.port/porting-article/research/data/prompts-redacted-2026-10-11f.json",
+    sourceLinks: { Codex: CODEX },
     caption:
-      "Top: each bar is one session (one Claude Code or Codex session on one machine) from its first to its last prompt, rows packed so overlapping sessions stack, coloured and named by its area and thicker for more prompts; the 44 sessions that hold only Claude Code commands or shell escapes have no area and are hidden until turned on (then thin grey ticks), and diamonds mark the 3 founding sessions. Session titles are Claude Code's own; where it gave none or the author changed one, Claude wrote it (marked title by Claude). Below, each tick is one human prompt to the port or its website (typed prompt, slash command or shell escape), 2026-06-20 to 2026-10-11 in Pacific time, in three lanes: Claude Code on the Mac, Claude Code on the Linux VM and the Codex app; tick height is length on a log scale, and the bars beneath are non-merge commits per day. By default the ticks, the log and the length figures show instructions and decisions; the 187 Claude Code commands and shell escapes are one click away, and the prompt counts always include them. Mac Claude Code transcripts from before 2026-09-08 were purged, so model and effort are unknown there (hatched) unless the Co-Authored-By trailer of a commit linked to the prompt names the model (marked inferred from commits). Text is verbatim except 24 redactions (secrets, logins, email and IP addresses, names, one unrelated project), each shown as [redacted: reason]; pasted text is not published, and for 10 prompts it no longer exists. The 60 prompts of the October sessions about this article are included and tagged article work; the 163 prompts typed in the website folders (114 of them in the Codex app), most of them the late-June and early-July build of the site, carry a website folder badge, and their commits, in the website repo, are not linked. Commits are linked to a prompt only where the session or branch evidence ties them to it unambiguously. The 13 founding prompts (typed outside the repository, most of them before it existed) are included; prompts sent to subagents, automated Codex review sessions and other prompts typed outside the repository and the website folders are not.",
+      "Top: each bar is one session (one Claude Code or Codex session on one machine) from its first to its last prompt, rows packed so overlapping sessions stack, coloured and named by its area and thicker for more prompts; the 43 sessions that hold only Claude Code commands or shell escapes have no area and are hidden until turned on (then thin grey ticks), and diamonds mark the 3 founding sessions. Session titles are Claude Code's own; where it gave none or the author changed one, Claude wrote it (marked title by Claude). Below, each tick is one human prompt to the port (typed prompt, slash command or shell escape), 2026-06-20 to 2026-10-11 in Pacific time, in three lanes: Claude Code on the Mac, Claude Code on the Linux VM and the Codex app; tick height is length on a log scale, and the bars beneath are non-merge commits per day. By default the ticks, the log and the length figures show instructions and decisions; the 176 Claude Code commands and shell escapes are one click away, and the prompt counts always include them. Mac Claude Code transcripts from before 2026-09-08 were purged, so model and effort are unknown there (hatched) unless the Co-Authored-By trailer of a commit linked to the prompt names the model (marked inferred from commits). Text is verbatim except 23 redactions (secrets, logins, email and IP addresses, names, one unrelated project), each shown as [redacted: reason]; pasted text is not published, and for 10 prompts it no longer exists. The 60 prompts of the October sessions about this article are included and tagged article work. Commits are linked to a prompt only where the session or branch evidence ties them to it unambiguously. The 13 founding prompts (typed outside the repository, most of them before it existed) are included; prompts sent to subagents, automated Codex review sessions, the prompts typed in the website folders and other prompts typed outside the repository are not.",
     summary:
-      "1,229 human prompts to the port and its website (60 of them about this article) over 114 days: 928 in Claude Code on the Mac, 165 in Claude Code on the Linux VM and 136 in the Codex app. They came in 112 sessions, 44 of them only Claude Code commands or shell escapes; on the busiest days, 2026-07-03 and 2026-07-31, 7 sessions each had an instruction or decision, and the longest session held 168 prompts over 14 days. The median prompt is 50 characters long (all prompts), and 49 prompts only answer a choice or acknowledge. Model and effort are unknown for 505 prompts, most of them typed on the Mac before 2026-09-08, whose transcripts were purged; for 96 more the model is inferred from commits. The text carries 24 redactions in 19 prompts, and 130 prompts are linked to the commits they led to.",
-    deck: "Bars are sessions and ticks single prompts, taller for longer text; brush the days, filter by area, lane or kind, or search, then read the matching prompts word for word in the log. The median prompt, counting every kind, is 50 characters long.",
-    minHeight: { desktop: 2730, phone: 4740 },
+      "1,066 human prompts to the port (60 of them about this article) over 114 days: 879 in Claude Code on the Mac, 165 in Claude Code on the Linux VM and 22 in the Codex app. They came in 97 sessions, 43 of them only Claude Code commands or shell escapes; on the busiest day, 2026-07-31, 7 sessions had an instruction or decision, and the longest session held 168 prompts over 14 days. The median prompt is 47.5 characters long (all prompts), and 43 prompts only answer a choice or acknowledge. Model and effort are unknown for 463 prompts, most of them typed on the Mac before 2026-09-08, whose transcripts were purged; for 96 more the model is inferred from commits. The text carries 23 redactions in 18 prompts, and 130 prompts are linked to the commits they led to.",
+    deck: "Bars are sessions and ticks single prompts, taller for longer text; brush the days, filter by area, lane or kind, or search, then read the matching prompts word for word in the log. The median prompt, counting every kind, is 47.5 characters long.",
+    minHeight: { desktop: 2730, phone: 4764 },
     flagship: true,
     frame: "card",
     dataFile: "every-prompt.json",
@@ -370,6 +431,7 @@ export const WIDGETS: readonly WidgetEntry[] = [
     source: "usage transcripts · prompt history · git trailers",
     sourceHref:
       "https://github.com/AirelyDev/rustty/blob/882e3df21ee8c93d9055ffac9abce8385b6e5db6/.port/porting-article/research/data/mock-cost-data-2026-10-10.json",
+    sourceLinks: { "git trailers": GIT_TRAILERS },
     caption:
       "Plotted: API-equivalent list-price cost and billable tokens per call from recovered Claude Code and Codex transcripts (snapshot 2026-10-08). Mac Claude transcripts before 09-08 were purged; for those weeks the port's cost is modeled as a maxed subscription week × 50% port share. Paid figures use public plan prices. The API-equivalent cost is a reference value at list price, not money spent.",
     summary:
@@ -388,6 +450,7 @@ export const WIDGETS: readonly WidgetEntry[] = [
     source: "unsafe census · tokei",
     sourceHref:
       "https://github.com/AirelyDev/rustty/blob/882e3df21ee8c93d9055ffac9abce8385b6e5db6/.port/porting-article/research/data/codebase-unsafe-census-timeseries-2026-10-10.csv",
+    sourceLinks: { tokei: TOKEI },
     caption:
       "Unsafe sites counted by the port's census pattern (unsafe blocks, functions, extern blocks, impls and traits; vendored code excluded) per 1,000 physical lines of tracked Rust at each census commit, ending at head. Crate bars are labelled per 1,000 physical lines of the crate, engine-area bars per 1,000 code lines. The test/non-test split is a heuristic: everything after a file's first test module counts as test code.",
     summary:
@@ -398,6 +461,30 @@ export const WIDGETS: readonly WidgetEntry[] = [
     frame: "card",
     dataFile: "unsafe-density.json",
     requiredKeys: ["series", "crates", "vtAreas", "testShare"],
+  },
+  {
+    slug: "live-terminal",
+    title: "Rust and Zig engines, side by side",
+    label: "LIVE TERMINAL",
+    source: "rustty-wterm · wterm · just-bash",
+    sourceHref:
+      "https://github.com/vercel-labs/wterm/tree/488e9a7344e812e35a951f803618d7767cc4be5b/packages/@wterm/ghostty",
+    sourceLinks: {
+      "rustty-wterm": RUSTTY_WTERM_REPO,
+      wterm: WTERM_REPO,
+      "just-bash": JUST_BASH_REPO,
+    },
+    sourceHrefLabel: "Zig engine",
+    caption:
+      "One shell running in your browser, drawn at the same time by Rustty's terminal engine and by Ghostty's, both compiled to WebAssembly. The shell is just-bash and the terminal front end is wterm, both Apache-licensed projects from Vercel Labs; the Rust engine speaks the same interface wterm already uses for Ghostty's Zig engine, so both can draw the same session. Nothing is sent to a server.",
+    deck: "Run the scripts in the demo folder and compare what the two engines draw. Try ls demo and ./demo/truecolor.sh.",
+    summary:
+      "Two interactive terminals in the page, side by side (stacked on a narrow screen). They show one bash-like shell running in your browser, drawn by Rustty's Rust engine in the first and Ghostty's Zig engine in the second, both compiled to WebAssembly; typing in either one reaches the shell, and both draw the result.",
+    minHeight: { desktop: 579, phone: 858 },
+    flagship: false,
+    frame: "terminal",
+    dataFile: null,
+    requiredKeys: [],
   },
 ];
 

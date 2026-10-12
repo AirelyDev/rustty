@@ -188,19 +188,9 @@ export function runLogModelTests(lm: typeof LogModel, m: typeof Model) {
   assert.equal(lm.rowFlags(rows[5]) & m.FLAG.redacted, m.FLAG.redacted);
   assert.deepEqual(lm.badges(rows[5]), ["settings unknown", "redacted"]);
   assert.deepEqual(lm.badges(rows[4]), ["article work"]);
-  // A website-folder prompt: badge, flag, and the note instead of commit links.
-  {
-    const web = {
-      ...rows[4],
-      website: true,
-      commitsBasis: "other-repo",
-      commits: [],
-    };
-    assert.deepEqual(lm.badges(web), ["website folder", "article work"]);
-    assert.equal(lm.rowFlags(web) & m.FLAG.website, m.FLAG.website);
-    assert.equal(lm.rowFlags(rows[4]) & m.FLAG.website, 0);
-    assert.match(lm.OTHER_REPO_NOTE, /website repo are not linked/);
-  }
+  // The website-folder prompts are not in the log: no flag, badge or "other repo" note exists for them.
+  assert.equal("website" in m.FLAG, false);
+  assert.equal("OTHER_REPO_NOTE" in lm, false);
 
   // Most repeated: commands ignored; case, whitespace and trailing ".?!" normalized.
   assert.deepEqual(

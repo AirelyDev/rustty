@@ -81,7 +81,7 @@ export function runModelTests(m: typeof Model) {
   );
   assert.equal(m.log2Chars(0), 0);
   // Indexed session fields: a number points into the names, a string (older data) is kept.
-  assert.equal(m.named(1, ["engine", "website"]), "website");
+  assert.equal(m.named(1, ["engine", "tooling"]), "tooling");
   assert.equal(m.named("tooling", ["engine"]), "tooling");
   assert.equal(m.named(7, ["engine"]), "");
   assert.deepEqual(

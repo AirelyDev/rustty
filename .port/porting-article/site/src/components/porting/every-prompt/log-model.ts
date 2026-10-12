@@ -36,8 +36,6 @@ export type LogRow = {
   category?: string;
   /** Key of the prompt's session (absent in logs written before sessions). */
   session?: string;
-  /** Typed in the website folders (absent in logs written before the website folders were included). */
-  website?: boolean;
   text: string;
 };
 
@@ -156,8 +154,7 @@ export function rowFlags(r: LogRow): number {
     (r.settingsSource === "unknown" ? FLAG.settingsUnknown : 0) |
     (r.pasted === "lost" ? FLAG.pastedLost : 0) |
     (r.text.includes(REDACTED_MARK) ? FLAG.redacted : 0) |
-    (r.settingsSource === "commit-trailer" ? FLAG.inferred : 0) |
-    (r.website ? FLAG.website : 0)
+    (r.settingsSource === "commit-trailer" ? FLAG.inferred : 0)
   );
 }
 
@@ -286,9 +283,6 @@ export function splitGlossed(
   return out;
 }
 
-/** OTHER_REPO_NOTE is shown on a website-folder prompt instead of commit links. */
-export const OTHER_REPO_NOTE = "commits in the website repo are not linked";
-
 /** Labels of the commit evidence kinds (commitsBasis). */
 export const BASIS_LABEL: Record<string, string> = {
   "session-window": "made in this prompt's session before its next prompt",
@@ -302,7 +296,6 @@ export function badges(r: LogRow): string[] {
   if (r.kind === "command") out.push("command");
   if (r.settingsSource === "unknown") out.push("settings unknown");
   if (r.pasted === "lost") out.push("pasted text not kept");
-  if (r.website) out.push("website folder");
   if (r.articleWork) out.push("article work");
   if (r.text.includes(REDACTED_MARK)) out.push("redacted");
   return out;

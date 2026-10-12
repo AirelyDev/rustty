@@ -1,4 +1,5 @@
-import type { CSSProperties, ReactNode } from "react";
+import { Fragment, type CSSProperties, type ReactNode } from "react";
+import { sourceSegments } from "../lib/source-links";
 import s from "./ui.module.css";
 
 /** Reserved card heights in px at 1100 px (desktop) and 390 px (phone). */
@@ -12,10 +13,21 @@ export type CardMinHeight = {
 type InstrumentCardProps = {
   /** Uppercase tracked label in the header. */
   label: string;
-  /** Data source, shown in the outlined copper pill. */
+  /** Data sources, shown in the outlined copper pill (parts joined with " · "). */
   source: string;
-  /** Permalink the source pill opens (the research dataset or primary record). */
+  /**
+   * Links for parts of source, keyed by the exact text to link (a project, a
+   * tool, a commit). Each links on its own; unlisted text stays plain.
+   */
+  sourceLinks?: Readonly<Record<string, string>>;
+  /**
+   * Permalink to the research dataset or primary record behind the figure,
+   * shown as its own link after the label unless a part of source already
+   * links to it.
+   */
   sourceHref?: string;
+  /** Text of the record link; defaults to "record" for a Markdown file, else "data". */
+  sourceHrefLabel?: string;
   /** Optional mono headline figure under the header. */
   headline?: ReactNode;
   /** Footer caption: what is plotted and where it comes from. */
@@ -36,11 +48,18 @@ type InstrumentCardProps = {
   children?: ReactNode;
 };
 
-/** Renders the instrument-card chrome: source pill, label, optional headline, body and caption. */
+/** Returns the default text of the record link: "record" for a Markdown file, else "data". */
+function recordLabel(href: string): string {
+  return /\.md(?:#.*)?$/.test(href) ? "record" : "data";
+}
+
+/** Renders the instrument-card chrome: source pill, label, record link, optional headline, body and caption. */
 export default function InstrumentCard({
   label,
   source,
+  sourceLinks,
   sourceHref,
+  sourceHrefLabel,
   headline,
   caption,
   wide = true,
@@ -62,14 +81,31 @@ export default function InstrumentCard({
   return (
     <div className={wide ? `${s.card} porting-wide` : s.card} style={style}>
       <div className={s.header}>
-        {sourceHref ? (
-          <a className={`${s.pill} ${s.pillLink}`} href={sourceHref}>
-            {source}
-          </a>
-        ) : (
-          <span className={s.pill}>{source}</span>
-        )}
+        <span className={s.pill}>
+          {sourceSegments(source, sourceLinks).map((seg, i) =>
+            seg.href ? (
+              <a
+                // biome-ignore lint/suspicious/noArrayIndexKey: segments are static and never reorder
+                key={i}
+                className={s.pillLink}
+                href={seg.href}
+              >
+                {seg.text}
+              </a>
+            ) : (
+              // biome-ignore lint/suspicious/noArrayIndexKey: segments are static and never reorder
+              <Fragment key={i}>{seg.text}</Fragment>
+            ),
+          )}
+        </span>
         <span className={s.label}>{label}</span>
+        {sourceHref &&
+        !Object.values(sourceLinks ?? {}).includes(sourceHref) ? (
+          <a className={s.record} href={sourceHref}>
+            {sourceHrefLabel ?? recordLabel(sourceHref)}
+            <span aria-hidden="true"> ↗</span>
+          </a>
+        ) : null}
       </div>
       {headline ? <div className={s.headline}>{headline}</div> : null}
       <div className={s.body}>{children}</div>

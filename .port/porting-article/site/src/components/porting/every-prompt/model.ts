@@ -116,8 +116,6 @@ export const FLAG = {
   redacted: 32,
   /** The model is inferred from the Co-Authored-By trailers of linked commits. */
   inferred: 64,
-  /** Typed in the website folders (the website repository, not the port's). */
-  website: 128,
 } as const;
 
 /** UNKNOWN is the filter value matching prompts whose model or effort is not recorded. */

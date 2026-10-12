@@ -32,6 +32,7 @@ const CONTENT_PATH = nodePath.join(
  * a newly inserted heading joins the group it falls in.
  */
 const TOC_GROUPS: Readonly<Record<string, string>> = {
+  "try-it-in-your-browser": "Try it",
   "at-a-glance": "Context",
   "cutting-a-345-file-cycle-into-crates": "Building it",
   "zig-pointers-in-rust's-aliasing-model": "Correctness",
@@ -89,8 +90,9 @@ export default async function PortingPage() {
               Zig to Rust with agents.
             </P>
             <P weight="regular" className={s.byline}>
-              By Gael Hatchue · written with{" "}
-              <a href="https://claude.com/claude-code">Claude</a>
+              By{" "}
+              <a href="https://www.linkedin.com/in/gaelhatchue">Gael Hatchue</a>{" "}
+              · written with <a href="https://claude.com/claude-code">Claude</a>
             </P>
           </header>
           <article className={`${customMdxStyles.customMDX} ${s.article}`}>

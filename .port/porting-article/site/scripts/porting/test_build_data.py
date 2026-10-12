@@ -1656,6 +1656,7 @@ EP_TITLES = {
     "c1": ("Old title", "claude-code", "engine"),
     "s3": ("Draft the article", "claude-written", "article"),
     "s9": ("Check the purged window", "claude-written", "engine"),
+    "sw": ("Tidy the site", "claude-written", "website"),
 }
 # EP_REVIEW is the fixture's default session review: (decision, edited_title, edited_area).
 EP_REVIEW = {"s2": ("edit", "Command-only session", "command-only"), "c1": ("edit", "Choose option B", "defects")}
@@ -1946,22 +1947,27 @@ class EveryPromptTest(unittest.TestCase):
             self.build(extra_raw=[tx], pre_purge_tx=0)
         self.assertIn("mac_before_purge_with_transcript", str(cm.exception.code))
 
-    def test_website_folder_prompts(self):
-        """A website-folder prompt: flagged, its commits (in the website repository) never linked."""
-        from widgets import w12_every_prompt as ep
+    def test_website_folder_prompts_are_left_out(self):
+        """A website-folder prompt, and a session made only of them, leave no trace in the summary or the log."""
         web = {"id": "claude-mac-20261010T170000Z-0", "ts": "2026-10-10T17:00:00Z", "tool": "claude",
-               "machine": "mac", "session": "s3", "text": "tidy the page", "chars": 13, "kind": "prompt",
+               "machine": "mac", "session": "sw", "text": "tidy the page", "chars": 13, "kind": "prompt",
                "pasted": "none", "model": "claude-opus-5-5", "effort": "medium", "mode": "bypass",
                "settings_source": "transcript", "article_work": True, "commits": ["c" * 40],
                "commits_basis": "other-repo", "ids": [], "phase": "post-Bun", "decision": False, "branch": None,
                "project": "/x/ghostty-website-journey", "project_marker": "website"}
+        base_data, base_log = self.build()
         data, log = self.build(extra_raw=[web])
-        row = next(r for r in log["rows"] if r["id"] == web["id"])
-        self.assertEqual((row["website"], row["commits"], row["commitsBasis"]), (True, [], "other-repo"))
-        i = log["rows"].index(row)
-        self.assertTrue(data["ticks"][i][ep.T_FLAGS] & ep.FLAG_WEBSITE)
-        self.assertEqual(data["totals"]["website"], 1)
-        self.assertFalse(any(r["website"] for r in log["rows"] if r["id"] != web["id"]))
+        self.assertEqual((data, log), (base_data, base_log))  # as if the prompt and its session did not exist
+        self.assertNotIn("website", json.dumps(data) + json.dumps(log))
+        self.assertNotIn("website", data["areas"])
+        self.assertNotIn(web["id"], {r["id"] for r in log["rows"]})
+        self.assertNotIn("Tidy the site", json.dumps(data) + json.dumps(log))
+        # The article-work count of the extractor does not include it either.
+        self.assertEqual(data["totals"]["articleWorkExtractor"], base_data["totals"]["articleWorkExtractor"])
+        # A session that has website-folder prompts and others is refused: only a whole session is left out.
+        with self.assertRaises(SystemExit) as cm:
+            self.build(extra_raw=[{**web, "session": "s3"}])
+        self.assertIn("only a whole session", str(cm.exception.code))
         with self.assertRaises(SystemExit):  # other-repo outside the website folder
             self.build(extra_raw=[{**web, "project_marker": "rustty"}])
 
@@ -2069,8 +2075,7 @@ class EveryPromptTest(unittest.TestCase):
         self.assertNotIn("command-only", t["sessionsByArea"])
         self.assertEqual(sum(t["sessionsByArea"].values()) + t["sessionsCommandOnly"], t["sessions"])
         self.assertEqual(data["areas"], ["engine", "renderer and fonts", "macOS app", "GTK/Linux", "performance",
-                                         "upstream catch-up", "verification/CI", "defects", "tooling", "website",
-                                         "article"])
+                                         "upstream catch-up", "verification/CI", "defects", "tooling", "article"])
 
     def test_titles_refused_when_they_carry_a_redacted_value(self):
         from widgets import w12_every_prompt as ep
@@ -2309,11 +2314,12 @@ class EveryPromptRealDataTest(unittest.TestCase):
         """Every approved `match` of a redact row is absent from both outputs, raw and JSON-escaped."""
         blobs = [self.ep.dump(self.data), self.ep.dump(self.log), json.dumps(self.data), json.dumps(self.log)]
         n = 0
+        in_log = {r["id"] for r in self.log["rows"]}
         with open(RESEARCH / "data" / self.ep.APPROVED, newline="") as f:
             for r in csv.DictReader(f):
                 if r["decision"] != "redact":
                     continue
-                n += 1
+                n += r["id"] in in_log  # a redaction of a website-folder prompt is moot: the prompt is left out
                 self.assertTrue(r["match"], r["id"])
                 for b in blobs:
                     self.assertNotIn(r["match"], b, r["id"])
@@ -2324,13 +2330,19 @@ class EveryPromptRealDataTest(unittest.TestCase):
     def test_reconciles_with_manifest(self):
         m = json.loads((RESEARCH / "data" / self.ep.MANIFEST).read_text())
         t = self.data["totals"]
-        self.assertEqual(t["prompts"], m["counts"]["prompts"])
-        self.assertEqual(t["prompts"], sum(s["kept"] for s in m["sources"].values() if "kept" in s))
-        self.assertEqual(t["bySource"], m["counts"]["by_source"])
-        self.assertEqual(t["pastedLost"], m["counts"]["pasted"].get("lost", 0))
-        self.assertEqual(t["settingsUnknown"], m["counts"]["settings_source"].get("unknown", 0))
+        # The manifest counts every prompt of the extract; the log leaves the website-folder prompts out.
+        web = [r for r in self.raw.values() if r.get("project_marker") == self.ep.WEBSITE_MARKER]
+        self.assertTrue(web)
+        self.assertEqual(t["prompts"], m["counts"]["prompts"] - len(web))
+        self.assertEqual(t["prompts"] + len(web), sum(s["kept"] for s in m["sources"].values() if "kept" in s))
+        self.assertEqual(t["bySource"], {k: n - sum(1 for r in web if self.ep._lane(r) == k)
+                                         for k, n in m["counts"]["by_source"].items()})
+        self.assertEqual(t["pastedLost"], m["counts"]["pasted"].get("lost", 0) - sum(r["pasted"] == "lost" for r in web))
+        self.assertEqual(t["settingsUnknown"], m["counts"]["settings_source"].get("unknown", 0)
+                         - sum(r["settings_source"] == "unknown" for r in web))
         self.assertEqual(sum(1 for r in self.log["rows"] if r["kind"] == "command"),
-                         m["counts"]["kind"].get("command", 0))
+                         m["counts"]["kind"].get("command", 0) - sum(self.ep.prompt_kind(r["text"]) == "command" for r in web))
+        self.assertEqual({r["id"] for r in self.log["rows"]}, set(self.raw) - {r["id"] for r in web})
         self.assertEqual(self.data["rules"]["decision"], m["rules"]["decision"])
         for r in self.log["rows"]:
             self.assertEqual(r["decision"], self.raw[r["id"]]["decision"], r["id"])
@@ -2367,9 +2379,10 @@ class EveryPromptRealDataTest(unittest.TestCase):
         for k, v in want.items():
             self.assertEqual(float(facts[k]["value"]), float(v), k)
             self.assertEqual(facts[k]["provenance"], "MEASURED", k)
-            counts_file = k in ("prompts_median_chars", "prompts_article_work", "prompts_redactions")
-            want_source = f"research/data/{self.ep.COUNTS}" if counts_file else f"research/data/{self.ep.MANIFEST}"
-            self.assertEqual(facts[k]["source"], want_source, k)
+            # The extractor's manifest still counts the website-folder prompts, so every figure is read
+            # from the counts file, which does not.
+            self.assertEqual(facts[k]["source"], f"research/data/{self.ep.COUNTS}", k)
+        self.assertEqual([k for k in facts if "website" in k], [])  # the article is about the port
         c = self.ep.counts(self.data, self.log, self.manifest)
         for k, key in {"prompts_after_cutoff": "after_cutoff_prompts",
                        "prompts_after_cutoff_port": "after_cutoff_port_work",
@@ -2410,7 +2423,10 @@ class EveryPromptRealDataTest(unittest.TestCase):
         keys = [x["key"] for x in sessions]
         self.assertEqual(len(keys), len(set(keys)))
         self.assertEqual(set(keys), set(log["sessions"]))
-        self.assertEqual(len(sessions), self.manifest["counts"]["sessions"])
+        # The manifest counts the sessions made only of website-folder prompts, which the log leaves out.
+        web_sessions = {(r["tool"], r["machine"], r["session"]) for r in self.raw.values()
+                        if r.get("project_marker") == ep.WEBSITE_MARKER}
+        self.assertEqual(len(sessions) + len(web_sessions), self.manifest["counts"]["sessions"])
         self.assertEqual(sum(x["prompts"] for x in sessions), d["totals"]["prompts"])
         for tick, r in zip(d["ticks"], log["rows"]):
             self.assertEqual(keys[tick[ep_mod().T_SESSION]], r["session"], r["id"])
@@ -2456,9 +2472,8 @@ class EveryPromptRealDataTest(unittest.TestCase):
         with open(HERE / "facts.csv", newline="") as f:
             facts = {r["id"]: r for r in csv.DictReader(f)}
         # The article's other figures count Claude Code prompts typed in the repository: the founding
-        # prompts (before it existed) and the website-folder prompts are on top of them.
-        self.assertEqual(c["before_cutoff_claude"] - c["founding_prompts"] - c["before_cutoff_claude_website"],
-                         float(facts["rustty_prompts"]["value"]))
+        # prompts (before it existed) are on top of them.
+        self.assertEqual(c["before_cutoff_claude"] - c["founding_prompts"], float(facts["rustty_prompts"]["value"]))
         self.assertEqual(c["before_cutoff_claude"] + c["before_cutoff_codex"] + c["after_cutoff_prompts"],
                          c["prompts"])
 

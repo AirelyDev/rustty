@@ -58,10 +58,13 @@ SLUG = "every-prompt"
 
 # DATE_TAG is the extract's file-name tag (the 2026-10-11 refresh with the website folders, "e");
 # the glossary extra and the commits per hour were made for the 2026-10-10 extract and the founding
-# list for the first 2026-10-11 extract; they still apply.
+# list for the first 2026-10-11 extract; they still apply. The website-folder prompts are in the
+# extract but not in the article (see WEBSITE_MARKER): the published log and counts carry the
+# PUBLISH_TAG of the refresh that left them out.
 DATE_TAG = "2026-10-11e"
 PREV_TAG = "2026-10-10"
 FOUNDING_TAG = "2026-10-11"
+PUBLISH_TAG = "2026-10-12"
 RAW = f"prompts-raw-{DATE_TAG}.jsonl"
 MANIFEST = f"prompts-manifest-{DATE_TAG}.json"
 PROPOSED = f"prompts-redactions-proposed-{DATE_TAG}.csv"
@@ -84,8 +87,8 @@ GLOSSARY_EXTRA = f"prompts-glossary-extra-{PREV_TAG}.tsv"
 OVERRIDES = "prompts-article-overrides-2026-10-11f.csv"
 # COUNTS is the post-override counts file committed next to the redacted log on the research
 # branch (one value per line, so facts can link a line); `counts()` makes its content.
-# It carries the 2026-10-11f tag (the extract is 2026-10-11e; the overrides changed after it).
-COUNTS = "prompts-counts-2026-10-11f.json"
+# It carries the PUBLISH_TAG (the extract is 2026-10-11e; the website-folder prompts are left out).
+COUNTS = f"prompts-counts-{PUBLISH_TAG}.json"
 GLOSSARY = "r2-glossary-ids.csv"
 DAY_HOUR = f"r2-human-story-day-hour-commits-prompts-{PREV_TAG}.csv"
 
@@ -96,8 +99,8 @@ LOG_URL = "/porting/every-prompt-log.json"
 
 # SOURCES_HREF is the source link of the section's data: the redacted log as committed on the
 # research branch (byte-identical to LOG_PATH), next to the counts-only manifest.
-SOURCES_HREF = ("https://github.com/AirelyDev/rustty/blob/f153b70146edeaf792db0b65469dedbc792e9816/"
-                ".port/porting-article/research/data/prompts-redacted-2026-10-11f.json")
+SOURCES_HREF = ("https://github.com/AirelyDev/rustty/blob/1b0cf0bdfadf9bfc66370aa99e9aba90a253e8f0/"
+                f".port/porting-article/research/data/prompts-redacted-{PUBLISH_TAG}.json")
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
 # WINDOW is in Pacific days: the founding session started on the evening of 20 June Pacific
@@ -117,10 +120,14 @@ LANES = ["claude-mac", "claude-vm", "codex"]
 # FLAG_* are the tick flag bits.
 FLAG_DECISION, FLAG_COMMAND, FLAG_ARTICLE, FLAG_UNKNOWN, FLAG_PASTED_LOST, FLAG_REDACTED = 1, 2, 4, 8, 16, 32
 FLAG_INFERRED = 64
-# FLAG_WEBSITE marks a prompt typed in the website folder (the extractor's project marker "website").
-FLAG_WEBSITE = 128
-# LINKED_BASES are the commit bases whose commits are linked; "other-repo" (website-folder prompts,
-# whose commits are in the website repository) and the rest carry no links.
+# WEBSITE_MARKER is the extractor's project marker of a prompt typed in a website folder. Those prompts
+# (and the sessions made only of them) are left out of the article's log: it is about the port.
+WEBSITE_MARKER = "website"
+# WEBSITE_AREA is the area the author's session review gave to the website sessions; no session of
+# the log has it (a review may still name it, for a session that is left out).
+WEBSITE_AREA = "website"
+# LINKED_BASES are the commit bases whose commits are linked; the rest carry no links. The "other-repo"
+# basis of the website-folder prompts is never reached (those prompts are left out).
 LINKED_BASES = ("session-window", "time-window-branch")
 COMMIT_BASES = (*LINKED_BASES, "none", "ambiguous", "other-repo")
 # A tick is [day, minute of day, lane, flags, chars, words, model index, effort index, session
@@ -147,7 +154,7 @@ PHASE_KEYS = ["founding", "tightened", "never-port-a-bug"]
 # AREAS are the session areas in their fixed display order (exact labels); AREA_COMMAND_ONLY is the
 # pseudo-area of command-only sessions (not in AREAS, not in the per-area counts).
 AREAS = ["engine", "renderer and fonts", "macOS app", "GTK/Linux", "performance", "upstream catch-up",
-         "verification/CI", "defects", "tooling", "website", "article"]
+         "verification/CI", "defects", "tooling", "article"]
 AREA_COMMAND_ONLY = "command-only"
 # SESSION_AREAS index a summary session row's area (AREAS, then the command-only pseudo-area).
 SESSION_AREAS = [*AREAS, AREA_COMMAND_ONLY]
@@ -461,7 +468,7 @@ def _session_reviews(data: Path) -> tuple[dict, set]:
         else:
             _fail(SESSIONS_APPROVED, f"session {p['key']} has decision {a.get('decision')!r} "
                                      "(expected accept, edit or exclude)")
-        if area not in AREAS and area != AREA_COMMAND_ONLY:
+        if area not in AREAS and area not in (AREA_COMMAND_ONLY, WEBSITE_AREA):
             _fail(SESSIONS_APPROVED, f"session {p['key']}: unknown area {area!r}")
         if source not in TITLE_SOURCES:
             _fail(SESSIONS_APPROVED, f"session {p['key']}: unknown title source {source!r}")
@@ -521,6 +528,14 @@ def build(research: Path, _mockbuild: Path) -> dict:
     raw = {r["id"]: r for r in rows_raw}
     if len(raw) != len(rows_raw):
         _fail(RAW, "duplicate prompt ids")
+    # The website-folder prompts are not part of the article's log; they are set aside here, counted per
+    # lane (the manifest still counts them) and per session (a session is left out only whole).
+    website_rows = [r for r in rows_raw if r.get("project_marker") == WEBSITE_MARKER]
+    rows_raw = [r for r in rows_raw if r.get("project_marker") != WEBSITE_MARKER]
+    left_out = {}
+    for r in website_rows:
+        k = (r["tool"], r["machine"], r["session"])
+        left_out[k] = left_out.get(k, 0) + 1
     manifest = json.loads((data / MANIFEST).read_text())
     spans = _approved(data, raw)
     glossary = _glossary(data)
@@ -533,7 +548,7 @@ def build(research: Path, _mockbuild: Path) -> dict:
     start = date.fromisoformat(WINDOW[0])
     ndays = (date.fromisoformat(WINDOW[1]) - start).days + 1
     rows_raw.sort(key=lambda r: (r["ts"], LANES.index(_lane(r)), r["id"]))
-    sessions, sess_of = _sessions(data, rows_raw, reviews, excluded, founding)
+    sessions, sess_of = _sessions(data, rows_raw, reviews, excluded, founding, left_out)
 
     ticks, rows, weeks, used_ids, pre_purge_tx = [], [], {}, {}, 0
     models = sorted({r["model"] for r in rows_raw if r["model"]})
@@ -541,7 +556,7 @@ def build(research: Path, _mockbuild: Path) -> dict:
     modes = sorted({r["mode"] for r in rows_raw if r["mode"]})
     totals = dict(prompts=0, bySource={k: 0 for k in LANES}, redactions=0, redactedPrompts=0, pastedLost=0,
                   settingsUnknown=0, settingsInferred=0, articleWork=0, decisions=0,
-                  foundingPrompts=0, website=0, byCategory={c: 0 for c in CATEGORIES})
+                  foundingPrompts=0, byCategory={c: 0 for c in CATEGORIES})
     for r in rows_raw:
         lane = _lane(r)
         when = _pacific(r["ts"])
@@ -556,7 +571,6 @@ def build(research: Path, _mockbuild: Path) -> dict:
             pre_purge_tx += source == "transcript"
         text = redact(r["text"], spans.get(r["id"], []))
         kind = prompt_kind(r["text"])
-        website = r.get("project_marker") == "website"
         decision = is_decision(r["text"])
         cat = category(r["text"])
         if decision != (cat == "decision"):
@@ -569,8 +583,7 @@ def build(research: Path, _mockbuild: Path) -> dict:
         flags = ((FLAG_DECISION if decision else 0) | (FLAG_COMMAND if kind == "command" else 0)
                  | (FLAG_ARTICLE if article else 0) | (FLAG_UNKNOWN if unknown else 0)
                  | (FLAG_PASTED_LOST if r["pasted"] == "lost" else 0) | (FLAG_REDACTED if n_red else 0)
-                 | (FLAG_INFERRED if source == "commit-trailer" else 0)
-                 | (FLAG_WEBSITE if website else 0))
+                 | (FLAG_INFERRED if source == "commit-trailer" else 0))
         chars = len(text)
         sess = sess_of[r["id"]]
         sessions[sess]["articleWork"] |= article
@@ -582,15 +595,15 @@ def build(research: Path, _mockbuild: Path) -> dict:
         basis = r["commits_basis"]
         if basis not in COMMIT_BASES:
             _fail(RAW, f"{r['id']}: unknown commits basis {basis!r}")
-        if (basis == "other-repo") != website:
-            _fail(RAW, f"{r['id']}: the 'other-repo' commit basis is for website-folder prompts only")
+        if basis == "other-repo":
+            _fail(RAW, f"{r['id']}: the 'other-repo' commit basis is for website-folder prompts, which are left out")
         rows.append({
             "id": r["id"], "ts": r["ts"], "tool": r["tool"], "machine": r["machine"],
             "model": r["model"], "effort": r["effort"], "mode": r["mode"], "settingsSource": source,
             "chars": chars, "kind": kind, "category": cat, "pasted": r["pasted"], "articleWork": article,
             "decision": decision, "phase": _phase(day.isoformat()),
             "commits": list(r["commits"]) if basis in LINKED_BASES else [],
-            "commitsBasis": basis, "session": sessions[sess]["key"], "website": website, "text": text,
+            "commitsBasis": basis, "session": sessions[sess]["key"], "text": text,
         })
         if basis in LINKED_BASES:
             sessions[sess]["_commits"].update(r["commits"])
@@ -608,7 +621,6 @@ def build(research: Path, _mockbuild: Path) -> dict:
         totals["decisions"] += decision
         totals["byCategory"][cat] += 1
         totals["foundingPrompts"] += bool(r.get("founding"))
-        totals["website"] += website
 
         w = weeks.setdefault(_week(day), {"settings": {}, "inferred": {}, "modes": {}})
         if source == "commit-trailer":
@@ -629,9 +641,14 @@ def build(research: Path, _mockbuild: Path) -> dict:
         _fail(MANIFEST, f"{pre_purge_tx} Mac prompts before {PURGED_BEFORE} claim transcript settings; "
                         f"the manifest allows {allowed} (mac_before_purge_with_transcript)")
     counts = manifest["counts"]
-    if totals["prompts"] != counts["prompts"] or totals["bySource"] != counts["by_source"]:
-        _fail(MANIFEST, f"counts do not reconcile: built {totals['prompts']} {totals['bySource']}, "
-                        f"manifest {counts['prompts']} {counts['by_source']}")
+    # The extractor's own article-work count (before the overrides), without the website prompts.
+    totals["articleWorkExtractor"] = sum(1 for r in rows_raw if r["article_work"])
+    # The manifest counts every prompt of the extract; the log leaves the website prompts out.
+    want_by_source = {k: n - sum(1 for r in website_rows if _lane(r) == k) for k, n in counts["by_source"].items()}
+    want_prompts = counts["prompts"] - len(website_rows)
+    if totals["prompts"] != want_prompts or totals["bySource"] != want_by_source:
+        _fail(MANIFEST, f"counts do not reconcile: built {totals['prompts']} {totals['bySource']}, manifest "
+                        f"{counts['prompts']} {counts['by_source']} less {len(website_rows)} website prompts")
     for name, s in manifest["sources"].items():
         if "kept" in s and s["kept"] + sum(s["dropped"].values()) != s["in_source"]:
             _fail(MANIFEST, f"source {name} does not reconcile")
@@ -680,11 +697,14 @@ def build(research: Path, _mockbuild: Path) -> dict:
 
     log = {"glossary": {i: glossary[i] for i in sorted(used_ids)}, "sessions": log_sessions, "rows": rows}
     rules = manifest["rules"]
-    untag = sum(1 for v in overrides.values() if not v)
+    # Only the corrections of sessions that are in the log count (one was for a website session).
+    in_log = {r["session"] for r in rows_raw}
+    kept = {sid: v for sid, v in overrides.items() if sid in in_log}
+    untag = sum(1 for v in kept.values() if not v)
     article_rule = rules["article_work"]
-    if overrides:
-        article_rule += (f" The author corrected {len(overrides)} session{'s' if len(overrides) != 1 else ''} "
-                         f"by hand: {untag} untagged, {len(overrides) - untag} tagged.")
+    if kept:
+        article_rule += (f" The author corrected {len(kept)} session{'s' if len(kept) != 1 else ''} "
+                         f"by hand: {untag} untagged, {len(kept) - untag} tagged.")
     return {
         "_meta": {"slug": SLUG, "generatedFrom": [f"data/{n}" for n in (RAW, MANIFEST, APPROVED, SESSIONS,
                                                                         SESSIONS_APPROVED, FOUNDING_APPROVED,
@@ -730,10 +750,13 @@ def pack_scale(ndays: int) -> tuple[float, float]:
     return BAR_MIN_UNITS * per_unit, GAP_UNITS * per_unit
 
 
-def _sessions(data: Path, rows_raw: list, reviews: dict, excluded: set, founding: set) -> tuple[list, dict]:
+def _sessions(data: Path, rows_raw: list, reviews: dict, excluded: set, founding: set,
+              left_out: dict | None = None) -> tuple[list, dict]:
     """(summary sessions in start order, {prompt id: session index}) from the session aggregates.
 
-    rows_raw is the extract in time order. Refuses when a prompt belongs to no session, a session's
+    rows_raw is the extract in time order, without the website-folder prompts; left_out counts those per
+    session key. A session made only of them is not in the log (its review is not looked at); one that
+    has them and others too is refused. Refuses when a prompt belongs to no session, a session's
     count, span, command-only flag or founding flag disagrees with its prompts, a session is not
     reviewed (or was excluded but still has prompts), a founding prompt is outside the approved
     founding sessions, or a title carries an approved redacted value.
@@ -758,9 +781,18 @@ def _sessions(data: Path, rows_raw: list, reviews: dict, excluded: set, founding
     start = date.fromisoformat(WINDOW[0])
     redacted = _redacted_values(data)
     out = []
+    left_out = left_out or {}
     for k, x in agg.items():
         rs = members.get(k, [])
         sid = x["session"]
+        if left_out.get(k):
+            if rs:
+                _fail(RAW, f"session {x['key']} has prompts typed in a website folder and others; only a "
+                           "whole session can be left out")
+            if left_out[k] != x["prompts"]:
+                _fail(SESSIONS, f"session {x['key']}: its {x['prompts']} prompts do not reconcile with the "
+                                f"{left_out[k]} website prompts of {RAW}")
+            continue
         if sid in excluded:
             _fail(SESSIONS_APPROVED, f"session {x['key']} is excluded but is in {SESSIONS}"
                                      + (f" and has {len(rs)} prompt{'s' if len(rs) != 1 else ''} in {RAW}" if rs else ""))
@@ -866,7 +898,7 @@ def counts(data: dict, log: dict, manifest: dict) -> dict:
         "claude_vm": t["bySource"]["claude-vm"],
         "codex": t["bySource"]["codex"],
         "article_work": t["articleWork"],
-        "article_work_extractor": manifest["counts"]["article_work"]["True"],
+        "article_work_extractor": t["articleWorkExtractor"],
         "median_chars": t["medianChars"],
         "decisions": t["decisions"],
         "decisions_share_pct": round(100 * t["decisions"] / t["prompts"], 1),
@@ -878,11 +910,6 @@ def counts(data: dict, log: dict, manifest: dict) -> dict:
         "other_figures_cutoff": OTHER_FIGURES_CUTOFF.isoformat(),
         "before_cutoff_claude": sum(1 for r in early if r["tool"] == "claude"),
         "before_cutoff_codex": sum(1 for r in early if r["tool"] == "codex"),
-        "before_cutoff_claude_website": sum(1 for r in early if r["tool"] == "claude" and r["website"]),
-        "website_prompts": t["website"],
-        "website_prompts_in_website_sessions": sum(
-            1 for r in log["rows"] if r["website"] and log["sessions"][r["session"]]["area"] == "website"),
-        "website_prompts_codex": sum(1 for r in log["rows"] if r["website"] and r["tool"] == "codex"),
         "after_cutoff_prompts": len(late),
         "after_cutoff_article_work": sum(1 for r in late if r["articleWork"]),
         "after_cutoff_port_work": sum(1 for r in late if not r["articleWork"]),

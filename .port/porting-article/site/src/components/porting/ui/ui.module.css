@@ -74,20 +74,45 @@
   overflow-wrap: anywhere;
 }
 
-/* A linked source pill: same look, underline on hover, visible focus ring. */
-.pill.pillLink {
+/* A linked part of the source pill: the pill's copper with a faint underline,
+   solid on hover, and a visible focus ring. The selectors are two classes deep
+   so they beat the article's own link colour. */
+.pill a.pillLink {
   color: #d97934;
+  text-decoration: underline;
+  text-decoration-color: rgba(217, 121, 52, 0.45);
+  text-underline-offset: 2px;
+}
+
+.pill a.pillLink:hover {
+  text-decoration-color: currentColor;
+}
+
+.pill a.pillLink:focus-visible {
+  outline: 2px solid #d97934;
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* Link to the research data or record behind the figure, at the end of the header. */
+.header a.record {
+  margin-left: auto;
+  color: #858a84;
+  font: 500 10px/1.4 var(--jetbrains-mono), ui-monospace, monospace;
+  letter-spacing: 0.3px;
   text-decoration: none;
 }
 
-.pillLink:hover {
+.header a.record:hover {
+  color: #d97934;
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 
-.pillLink:focus-visible {
+.header a.record:focus-visible {
   outline: 2px solid #d97934;
   outline-offset: 2px;
+  border-radius: 3px;
 }
 
 /* Uppercase tracked card label. */

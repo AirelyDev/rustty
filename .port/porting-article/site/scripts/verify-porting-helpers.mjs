@@ -25,6 +25,7 @@ import * as costStats from "../src/components/porting/cost/stats.ts";
 import * as sc from "../src/components/porting/static-charts/model.ts";
 import { rovingTarget } from "../src/components/porting/ui/useRovingFocus.ts";
 import { commitUrl, resolveCommit, sourceUrl, splitCommits } from "../src/components/porting/lib/links.ts";
+import { sourceSegments } from "../src/components/porting/lib/source-links.ts";
 
 const x = linear([0, 10], [0, 100]);
 assert.equal(x(5), 50);
@@ -919,14 +920,12 @@ assert.deepEqual(
     const t = epData.totals;
     const logRows = JSON.parse(readFileSync("public/porting/every-prompt-log.json", "utf8")).rows;
     const linked = logRows.filter((r) => r.commits.length > 0).length;
-    const websiteCodex = logRows.filter((r) => r.website && r.tool === "codex").length;
     const days = ep.dayCount(epData);
     const want = {
       caption: [
         `except ${t.redactions} redactions`,
         `for ${t.pastedLost} prompts it no longer exists`,
         `The ${t.articleWork} prompts of the October sessions about this article are included`,
-        `the ${t.website} prompts typed in the website folders (${websiteCodex} of them in the Codex app)`,
         "(typed prompt, slash command or shell escape)",
         `the ${t.sessionsCommandOnly} sessions that hold only Claude Code commands or shell escapes`,
         `the ${t.commandsAndShell} Claude Code commands and shell escapes are one click away`,
@@ -934,13 +933,15 @@ assert.deepEqual(
         `The ${t.foundingPrompts} founding prompts`,
       ],
       summary: [
-        `${fmtInt(t.prompts)} human prompts to the port and its website (${t.articleWork} of them about this article)`,
+        `${fmtInt(t.prompts)} human prompts to the port (${t.articleWork} of them about this article)`,
         `over ${days} days`,
         `${fmtInt(t.bySource["claude-mac"])} in Claude Code on the Mac`,
         `${fmtInt(t.bySource["claude-vm"])} in Claude Code on the Linux VM`,
         `${fmtInt(t.bySource.codex)} in the Codex app`,
         `They came in ${fmtInt(t.sessions)} sessions, ${t.sessionsCommandOnly} of them only Claude Code commands or shell escapes`,
-        `on the busiest days, ${[t.busiestParallelDay.day, ...t.busiestParallelDay.tied].join(" and ")}, ${t.busiestParallelDay.open} sessions each had an instruction or decision`,
+        t.busiestParallelDay.tied.length
+          ? `on the busiest days, ${[t.busiestParallelDay.day, ...t.busiestParallelDay.tied].join(" and ")}, ${t.busiestParallelDay.open} sessions each had an instruction or decision`
+          : `on the busiest day, ${t.busiestParallelDay.day}, ${t.busiestParallelDay.open} sessions had an instruction or decision`,
         `the longest session held ${t.longestSessionPrompts.prompts} prompts over ${t.longestSessionPrompts.spannedDays} days`,
         `${t.medianChars} characters long (all prompts)`,
         `${t.decisions} prompts only answer`,
@@ -951,6 +952,13 @@ assert.deepEqual(
       ],
       deck: [`is ${t.medianChars} characters long`],
     };
+    // The article is about the port: the website-folder prompts are not in the log, and no text claims them.
+    assert.ok(!logRows.some((r) => r.website), "the log has a website-folder prompt");
+    assert.equal(epData.totals.website, undefined, "the totals still count website prompts");
+    assert.ok(!epData.areas.includes("website"), "the areas still include website");
+    for (const field of ["caption", "summary", "deck"]) {
+      assert.ok(!/website folder badge|and its website|typed in the website folders \(/i.test(reg[field]), `every-prompt ${field} still presents website prompts as part of the log`);
+    }
     for (const [field, parts] of Object.entries(want)) {
       const text = reg[field];
       for (const part of parts) assert.ok(text.includes(part), `every-prompt ${field} lacks "${part}"`);
@@ -1099,5 +1107,33 @@ assert.deepEqual(
     assert.ok(n > 0 && n <= x.prompts && f.session === x.key, x.key);
   }
 }
+
+
+// sourceSegments: each linked part is its own segment, in reading order, and plain text keeps the " · " separators.
+assert.deepEqual(sourceSegments("git log · per-module #[test] counts", { "git log": "https://x/log" }), [
+  { text: "git log", href: "https://x/log" },
+  { text: " · per-module #[test] counts" },
+]);
+assert.deepEqual(sourceSegments("a · b · c", {}), [{ text: "a · b · c" }]);
+assert.deepEqual(sourceSegments("Claude Code and Codex transcripts", { Codex: "https://c", "Claude Code": "https://cc" }), [
+  { text: "Claude Code", href: "https://cc" },
+  { text: " and " },
+  { text: "Codex", href: "https://c" },
+  { text: " transcripts" },
+]); // keys are matched by position, not by the order they are listed in
+// A key inside a longer word is not a match ("git" in "digit"); the standalone one is.
+assert.deepEqual(sourceSegments("digit · git", { git: "https://g" }), [{ text: "digit · " }, { text: "git", href: "https://g" }]);
+// A hyphenated name is one word: "wterm" links only the standalone one, not the tail of "rustty-wterm".
+assert.deepEqual(sourceSegments("rustty-wterm · wterm · just-bash", { "rustty-wterm": "https://r", wterm: "https://w", "just-bash": "https://j" }), [
+  { text: "rustty-wterm", href: "https://r" },
+  { text: " · " },
+  { text: "wterm", href: "https://w" },
+  { text: " · " },
+  { text: "just-bash", href: "https://j" },
+]);
+// A key with spaces and punctuation matches whole; a missing or overlapping key throws.
+assert.deepEqual(sourceSegments("git log --all · prompts", { "git log --all": "https://l" })[0], { text: "git log --all", href: "https://l" });
+assert.throws(() => sourceSegments("git log", { tokei: "https://t" }), /not found/);
+assert.throws(() => sourceSegments("git log", { git: "https://a", "git log": "https://b" }), /overlaps/);
 
 console.log("porting helpers OK");

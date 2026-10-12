@@ -694,10 +694,6 @@
 .badge[data-badge="article work"] {
   border-style: dashed;
 }
-.badge[data-badge="website folder"] {
-  border-color: #b4a7f5;
-  color: #b4a7f5;
-}
 .quiet {
   color: #6f746e;
   font-style: italic;

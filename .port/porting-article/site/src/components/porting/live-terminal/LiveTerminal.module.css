@@ -1,0 +1,193 @@
+/* Live terminal widget: two terminal windows side by side, one per engine, each
+   with a title bar and a wterm screen. Colours follow the porting widgets'
+   palette (lib/palette.ts): copper for Rustty, teal for Ghostty (the "upstream"
+   colour). */
+
+/* Failure panel: centred message and retry. */
+.gate {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 22rem;
+  padding: 16px;
+  text-align: center;
+}
+
+/* Retry button: at least a 44 px tap target. */
+.retry {
+  min-height: 44px;
+  padding: 0 20px;
+  background: #171a19;
+  border: 1px solid #d97934;
+  border-radius: 10px;
+  color: #f4f1ed;
+  font: 600 14px var(--jetbrains-mono), ui-monospace, monospace;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.retry:hover {
+  background: #23201c;
+}
+
+/* Explanatory line in the failure panel. */
+.note {
+  max-width: 34rem;
+  margin: 0;
+  color: #9aa09a;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* Link inside the failure panel. */
+.link {
+  color: #d97934;
+  text-underline-offset: 2px;
+}
+
+.retry:focus-visible,
+.link:focus-visible {
+  outline: 2px solid #d97934;
+  outline-offset: 2px;
+}
+
+/* The two panes, side by side; stacked on a narrow screen. */
+.panes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* One engine's terminal window; --c is the engine's identity colour. */
+.pane {
+  --c: #d97934;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  background: #0f1111;
+  border: 1px solid #262927;
+  border-radius: 12px;
+}
+
+.pane[data-engine="ghostty"] {
+  --c: #64d8c6;
+}
+
+/* Title bar: engine dot and name on the left, status on the right. */
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 6px 12px;
+  background: #111413;
+  border-bottom: 1px solid #262927;
+}
+
+/* Engine colour dot; it pulses while the pane starts. */
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  background: var(--c);
+  border-radius: 50%;
+}
+
+.pane[data-phase="loading"] .dot {
+  animation: porting-live-terminal-pulse 1s ease-in-out infinite;
+}
+
+@keyframes porting-live-terminal-pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.name {
+  color: #f4f1ed;
+  font: 600 13px/1.1 var(--jetbrains-mono), ui-monospace, monospace;
+}
+
+.sub {
+  color: #858a84;
+  font: 11px/1.2 var(--jetbrains-mono), ui-monospace, monospace;
+  white-space: nowrap;
+}
+
+/* Status at the end of the bar. */
+.status {
+  margin-left: auto;
+  color: #9aa09a;
+  font: 12px var(--jetbrains-mono), ui-monospace, monospace;
+}
+
+/* Placeholder while the terminal chunk downloads: same height as the screen, so nothing shifts. */
+.loading,
+.paneError {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  box-sizing: border-box;
+  height: 22rem;
+  min-height: 22rem;
+  padding: 16px;
+  background: #1e1e1e;
+  color: #858a84;
+  font: 13px var(--jetbrains-mono), ui-monospace, monospace;
+  text-align: center;
+}
+
+/* The wterm host: fixed height so wterm can fit its grid; scrolls inside the pane. */
+.screen {
+  box-sizing: border-box;
+  height: 22rem;
+  min-height: 22rem;
+  max-width: 100%;
+  overflow: auto;
+  border-radius: 0;
+  font-family: var(--jetbrains-mono), ui-monospace, monospace;
+}
+
+/* Narrow screens: panes stack, each a little shorter. */
+@media (max-width: 860px) {
+  .panes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .loading,
+  .paneError,
+  .screen {
+    height: 16rem;
+    min-height: 16rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .retry {
+    transition: none;
+  }
+
+  .pane[data-phase="loading"] .dot {
+    animation: none;
+    opacity: 0.5;
+  }
+
+  .screen :global(.term-cursor) {
+    animation: none !important;
+  }
+}

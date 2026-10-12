@@ -33,14 +33,7 @@ import { LBL, monthStarts, PW, W } from "./Timeline";
 const PERFORMANCE_PINK = "#f290c4";
 
 /**
- * WEBSITE_LAVENDER marks the website sessions (prompts typed in the website
- * folders): the hue farthest from every other area colour (ΔE ≥ 26), 9.1:1 on
- * the plot background.
- */
-const WEBSITE_LAVENDER = "#b4a7f5";
-
-/**
- * AREA_COLOURS colour the eleven session areas; each is also named in the
+ * AREA_COLOURS colour the ten session areas; each is also named in the
  * legend and the card. All are at least 5.8:1 against the plot background.
  */
 export const AREA_COLOURS: Record<string, string> = {
@@ -53,7 +46,6 @@ export const AREA_COLOURS: Record<string, string> = {
   "verification/CI": PALETTE.gold,
   defects: PALETTE.fail,
   tooling: PALETTE.orange,
-  website: WEBSITE_LAVENDER,
   article: PALETTE.gray7,
 };
 

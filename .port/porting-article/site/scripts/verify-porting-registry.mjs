@@ -1,6 +1,7 @@
 /** Verifies the porting widget registry, generated data and fact references are consistent. */
 import { readFileSync, existsSync } from "node:fs";
 import { WIDGETS } from "../src/components/porting/lib/registry.ts";
+import { sourceSegments } from "../src/components/porting/lib/source-links.ts";
 import { linkFailures } from "./lib/porting-links-guard.mjs";
 
 /** Collected failures; the script exits non-zero if any are recorded. */
@@ -155,6 +156,18 @@ const commits = JSON.parse(readFileSync(`${DATA_DIR}/commits.json`, "utf8"));
 for (const f of linkFailures({ mdx, facts, commits })) failures.push(`content.mdx links: ${f}`);
 for (const w of WIDGETS) {
   check(/^https:\/\/github\.com\//.test(w.sourceHref ?? ""), `${w.slug}: source pill has no GitHub link (sourceHref)`);
+  // Each part of the source line links on its own: every key must name text in
+  // `source`, on word boundaries and without overlap (sourceSegments throws
+  // otherwise), and every target must be an absolute https URL.
+  try {
+    sourceSegments(w.source, w.sourceLinks ?? {});
+  } catch (e) {
+    failures.push(`${w.slug}: ${e.message}`);
+  }
+  for (const [key, href] of Object.entries(w.sourceLinks ?? {})) {
+    check(/^https:\/\/[^\s]+$/.test(href), `${w.slug}: source link "${key}" is not an absolute https URL`);
+  }
+  check(w.sourceHrefLabel === undefined || w.sourceHrefLabel.length > 0, `${w.slug}: sourceHrefLabel is empty`);
 }
 
 if (failures.length) {

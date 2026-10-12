@@ -62,7 +62,9 @@ export default function PortingWidget({
       <InstrumentCard
         label={w.label}
         source={w.source}
+        sourceLinks={w.sourceLinks}
         sourceHref={w.sourceHref}
+        sourceHrefLabel={w.sourceHrefLabel}
         wide={false}
         minHeight={w.minHeight}
         caption={
